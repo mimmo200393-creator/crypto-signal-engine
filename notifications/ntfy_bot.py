@@ -40,24 +40,22 @@ def format_alert(setup: dict, score: int, label: str) -> tuple:
     direction_emoji = "🟢" if setup["direzione"] == "LONG" else "🔴"
     title = f"{label} - {setup['asset']} {setup['direzione']}"
 
-    macro_info = setup.get("macro_event")
-    if macro_info:
-        macro_text = (
-            f"⚠️ {macro_info['type']} in {macro_info['minutes_to_release']} min"
-            if macro_info["minutes_to_release"] >= 0
-            else f"⚠️ {macro_info['type']} {abs(macro_info['minutes_to_release'])} min fa"
-        )
-    else:
-        macro_text = "Nessun evento rilevante"
-
     body = (
         f"{direction_emoji} {setup['asset']} {setup['direzione']} | Score {score}/10\n"
         f"Entry: {setup['entry']:.6f}\n"
         f"SL: {setup['stop_loss']:.6f}\n"
         f"TP: {setup['take_profit']:.6f}\n"
-        f"R/R: {setup['rr']:.2f}\n"
-        f"Macro: {macro_text}"
+        f"R/R: {setup['rr']:.2f}"
     )
+
+    macro_info = setup.get("macro_event")
+    if macro_info:
+        if macro_info["minutes_to_release"] >= 0:
+            macro_text = f"⚠️ {macro_info['type']} in {macro_info['minutes_to_release']} min"
+        else:
+            macro_text = f"⚠️ {macro_info['type']} {abs(macro_info['minutes_to_release'])} min ago"
+        body += f"\nMacro: {macro_text}"
+
     return title, body
 
 
