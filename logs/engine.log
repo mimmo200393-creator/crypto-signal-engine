@@ -218,3 +218,6 @@
 2026-06-13 08:37:37,566 [INFO] signal_engine: Nuova candela H1 per BCH_USDT: 2 nuove candele
 2026-06-13 08:37:39,677 [INFO] signal_engine: Nuova candela H1 per ETC_USDT: 2 nuove candele
 2026-06-13 08:37:39,693 [INFO] main: --- Fine ciclo di scansione ---
+2026-06-13 08:40:37,559 [INFO] main: Avvio Pullback EMA Trend Strategy V1.0 | watchlist=20 asset | scan_interval=15min
+2026-06-13 08:40:37,560 [INFO] main: Modalita' TEST ALERT attiva: invio messaggio di test e termino.
+2026-06-13 08:40:38,143 [INFO] main: Test alert inviato: True
