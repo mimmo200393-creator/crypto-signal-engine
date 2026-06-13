@@ -43,27 +43,16 @@ def send_message(bot_token: str, chat_id: str, text: str) -> bool:
 
 def format_alert(setup: dict, score: int, label: str) -> str:
     """
-    Formatta il messaggio di alert con tutte le informazioni richieste
-    dalla spec.
+    Formatta il messaggio di alert (in inglese).
     """
     direction_emoji = "🟢" if setup["direzione"] == "LONG" else "🔴"
-
-    macro_info = setup.get("macro_event")
-    if macro_info:
-        macro_text = (
-            f"⚠️ {macro_info['type']} in {macro_info['minutes_to_release']} min"
-            if macro_info["minutes_to_release"] >= 0
-            else f"⚠️ {macro_info['type']} {abs(macro_info['minutes_to_release'])} min fa"
-        )
-    else:
-        macro_text = "Nessun evento rilevante"
 
     pullback_type = []
     if setup.get("pullback_ema50"):
         pullback_type.append("EMA50")
     if setup.get("pullback_ema21"):
         pullback_type.append("EMA21")
-    pullback_str = " + ".join(pullback_type) if pullback_type else "N/D"
+    pullback_str = " + ".join(pullback_type) if pullback_type else "N/A"
 
     trend_h4_str = "✅" if setup.get("trend_h4_ok") else "❌"
     trend_h1_str = "✅" if setup.get("trend_h1_ok") else "❌"
@@ -81,9 +70,17 @@ def format_alert(setup: dict, score: int, label: str) -> str:
         f"Pullback: {pullback_str}\n"
         f"Trend H4: {trend_h4_str}\n"
         f"Trend H1: {trend_h1_str}\n"
-        f"S/R confluenza: {sr_str}\n\n"
-        f"Macro: {macro_text}"
+        f"S/R confluence: {sr_str}"
     )
+
+    macro_info = setup.get("macro_event")
+    if macro_info:
+        if macro_info["minutes_to_release"] >= 0:
+            macro_text = f"⚠️ {macro_info['type']} in {macro_info['minutes_to_release']} min"
+        else:
+            macro_text = f"⚠️ {macro_info['type']} {abs(macro_info['minutes_to_release'])} min ago"
+        text += f"\n\nMacro: {macro_text}"
+
     return text
 
 
