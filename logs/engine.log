@@ -84,3 +84,70 @@
 2026-06-13 02:21:10,716 [INFO] main: --- Inizio ciclo di scansione ---
 2026-06-13 02:21:17,078 [WARNING] signal_engine: Update candele fallito per BNB_USDT, asset SKIPPATO: 400 Client Error: Bad Request for url: https://api.crypto.com/exchange/v1/public/get-candlestick?instrument_name=BNB_USDT&timeframe=4h&count=300
 2026-06-13 02:21:50,271 [INFO] main: --- Fine ciclo di scansione ---
+2026-06-13 06:34:34,309 [INFO] main: Avvio Pullback EMA Trend Strategy V1.0 | watchlist=20 asset | scan_interval=15min
+2026-06-13 06:34:34,310 [INFO] main: Verifica bootstrap storico (solo se necessario)...
+2026-06-13 06:34:34,310 [INFO] signal_engine: Bootstrap skip per BTC_USDT 4h (300 candele in cache)
+2026-06-13 06:34:34,310 [INFO] signal_engine: Bootstrap skip per BTC_USDT 1h (300 candele in cache)
+2026-06-13 06:34:34,310 [INFO] signal_engine: Bootstrap skip per ETH_USDT 4h (300 candele in cache)
+2026-06-13 06:34:34,310 [INFO] signal_engine: Bootstrap skip per ETH_USDT 1h (300 candele in cache)
+2026-06-13 06:34:34,310 [INFO] signal_engine: Bootstrap skip per SOL_USDT 4h (300 candele in cache)
+2026-06-13 06:34:34,310 [INFO] signal_engine: Bootstrap skip per SOL_USDT 1h (300 candele in cache)
+2026-06-13 06:34:34,310 [INFO] signal_engine: Bootstrap in corso: BNB_USDT 4h ...
+2026-06-13 06:34:35,180 [WARNING] signal_engine: Bootstrap fallito per BNB_USDT 4h, asset SKIPPATO (probabilmente non listato sull'exchange): 400 Client Error: Bad Request for url: https://api.crypto.com/exchange/v1/public/get-candlestick?instrument_name=BNB_USDT&timeframe=4h&count=300
+2026-06-13 06:34:35,181 [INFO] signal_engine: Bootstrap in corso: BNB_USDT 1h ...
+2026-06-13 06:34:35,440 [WARNING] signal_engine: Bootstrap fallito per BNB_USDT 1h, asset SKIPPATO (probabilmente non listato sull'exchange): 400 Client Error: Bad Request for url: https://api.crypto.com/exchange/v1/public/get-candlestick?instrument_name=BNB_USDT&timeframe=1h&count=300
+2026-06-13 06:34:35,441 [INFO] signal_engine: Bootstrap skip per LINK_USDT 4h (300 candele in cache)
+2026-06-13 06:34:35,441 [INFO] signal_engine: Bootstrap skip per LINK_USDT 1h (300 candele in cache)
+2026-06-13 06:34:35,441 [INFO] signal_engine: Bootstrap skip per AVAX_USDT 4h (300 candele in cache)
+2026-06-13 06:34:35,442 [INFO] signal_engine: Bootstrap skip per AVAX_USDT 1h (300 candele in cache)
+2026-06-13 06:34:35,442 [INFO] signal_engine: Bootstrap skip per ADA_USDT 4h (300 candele in cache)
+2026-06-13 06:34:35,442 [INFO] signal_engine: Bootstrap skip per ADA_USDT 1h (300 candele in cache)
+2026-06-13 06:34:35,442 [INFO] signal_engine: Bootstrap skip per XRP_USDT 4h (300 candele in cache)
+2026-06-13 06:34:35,442 [INFO] signal_engine: Bootstrap skip per XRP_USDT 1h (300 candele in cache)
+2026-06-13 06:34:35,442 [INFO] signal_engine: Bootstrap skip per DOGE_USDT 4h (300 candele in cache)
+2026-06-13 06:34:35,442 [INFO] signal_engine: Bootstrap skip per DOGE_USDT 1h (300 candele in cache)
+2026-06-13 06:34:35,442 [INFO] signal_engine: Bootstrap skip per TON_USDT 4h (300 candele in cache)
+2026-06-13 06:34:35,442 [INFO] signal_engine: Bootstrap skip per TON_USDT 1h (300 candele in cache)
+2026-06-13 06:34:35,442 [INFO] signal_engine: Bootstrap skip per SUI_USDT 4h (300 candele in cache)
+2026-06-13 06:34:35,442 [INFO] signal_engine: Bootstrap skip per SUI_USDT 1h (300 candele in cache)
+2026-06-13 06:34:35,442 [INFO] signal_engine: Bootstrap skip per NEAR_USDT 4h (300 candele in cache)
+2026-06-13 06:34:35,443 [INFO] signal_engine: Bootstrap skip per NEAR_USDT 1h (300 candele in cache)
+2026-06-13 06:34:35,443 [INFO] signal_engine: Bootstrap skip per LTC_USDT 4h (300 candele in cache)
+2026-06-13 06:34:35,443 [INFO] signal_engine: Bootstrap skip per LTC_USDT 1h (300 candele in cache)
+2026-06-13 06:34:35,443 [INFO] signal_engine: Bootstrap skip per DOT_USDT 4h (300 candele in cache)
+2026-06-13 06:34:35,443 [INFO] signal_engine: Bootstrap skip per DOT_USDT 1h (300 candele in cache)
+2026-06-13 06:34:35,443 [INFO] signal_engine: Bootstrap skip per ATOM_USDT 4h (300 candele in cache)
+2026-06-13 06:34:35,443 [INFO] signal_engine: Bootstrap skip per ATOM_USDT 1h (300 candele in cache)
+2026-06-13 06:34:35,443 [INFO] signal_engine: Bootstrap skip per APT_USDT 4h (300 candele in cache)
+2026-06-13 06:34:35,443 [INFO] signal_engine: Bootstrap skip per APT_USDT 1h (300 candele in cache)
+2026-06-13 06:34:35,443 [INFO] signal_engine: Bootstrap skip per ARB_USDT 4h (300 candele in cache)
+2026-06-13 06:34:35,443 [INFO] signal_engine: Bootstrap skip per ARB_USDT 1h (300 candele in cache)
+2026-06-13 06:34:35,443 [INFO] signal_engine: Bootstrap skip per OP_USDT 4h (300 candele in cache)
+2026-06-13 06:34:35,444 [INFO] signal_engine: Bootstrap skip per OP_USDT 1h (300 candele in cache)
+2026-06-13 06:34:35,444 [INFO] signal_engine: Bootstrap skip per BCH_USDT 4h (300 candele in cache)
+2026-06-13 06:34:35,444 [INFO] signal_engine: Bootstrap skip per BCH_USDT 1h (300 candele in cache)
+2026-06-13 06:34:35,444 [INFO] signal_engine: Bootstrap skip per ETC_USDT 4h (300 candele in cache)
+2026-06-13 06:34:35,444 [INFO] signal_engine: Bootstrap skip per ETC_USDT 1h (300 candele in cache)
+2026-06-13 06:34:35,444 [INFO] main: Bootstrap completato.
+2026-06-13 06:34:35,444 [INFO] main: --- Inizio ciclo di scansione ---
+2026-06-13 06:34:37,494 [INFO] signal_engine: Nuova candela H1 per BTC_USDT: 4 nuove candele
+2026-06-13 06:34:39,905 [INFO] signal_engine: Nuova candela H1 per ETH_USDT: 4 nuove candele
+2026-06-13 06:34:42,030 [INFO] signal_engine: Nuova candela H1 per SOL_USDT: 4 nuove candele
+2026-06-13 06:34:42,306 [WARNING] signal_engine: Update candele fallito per BNB_USDT, asset SKIPPATO: 400 Client Error: Bad Request for url: https://api.crypto.com/exchange/v1/public/get-candlestick?instrument_name=BNB_USDT&timeframe=4h&count=300
+2026-06-13 06:34:44,403 [INFO] signal_engine: Nuova candela H1 per LINK_USDT: 4 nuove candele
+2026-06-13 06:34:46,480 [INFO] signal_engine: Nuova candela H1 per AVAX_USDT: 4 nuove candele
+2026-06-13 06:34:48,553 [INFO] signal_engine: Nuova candela H1 per ADA_USDT: 4 nuove candele
+2026-06-13 06:34:50,608 [INFO] signal_engine: Nuova candela H1 per XRP_USDT: 4 nuove candele
+2026-06-13 06:34:52,685 [INFO] signal_engine: Nuova candela H1 per DOGE_USDT: 4 nuove candele
+2026-06-13 06:34:54,747 [INFO] signal_engine: Nuova candela H1 per TON_USDT: 4 nuove candele
+2026-06-13 06:34:56,850 [INFO] signal_engine: Nuova candela H1 per SUI_USDT: 4 nuove candele
+2026-06-13 06:34:58,966 [INFO] signal_engine: Nuova candela H1 per NEAR_USDT: 4 nuove candele
+2026-06-13 06:35:01,047 [INFO] signal_engine: Nuova candela H1 per LTC_USDT: 4 nuove candele
+2026-06-13 06:35:03,165 [INFO] signal_engine: Nuova candela H1 per DOT_USDT: 4 nuove candele
+2026-06-13 06:35:05,274 [INFO] signal_engine: Nuova candela H1 per ATOM_USDT: 4 nuove candele
+2026-06-13 06:35:07,353 [INFO] signal_engine: Nuova candela H1 per APT_USDT: 4 nuove candele
+2026-06-13 06:35:09,648 [INFO] signal_engine: Nuova candela H1 per ARB_USDT: 4 nuove candele
+2026-06-13 06:35:11,724 [INFO] signal_engine: Nuova candela H1 per OP_USDT: 4 nuove candele
+2026-06-13 06:35:13,823 [INFO] signal_engine: Nuova candela H1 per BCH_USDT: 4 nuove candele
+2026-06-13 06:35:16,270 [INFO] signal_engine: Nuova candela H1 per ETC_USDT: 4 nuove candele
+2026-06-13 06:35:16,297 [INFO] main: --- Fine ciclo di scansione ---
