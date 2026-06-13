@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from core import exchange, indicators, strategy, scoring, macro, trade_manager
 from storage import db
-from notifications import telegram_bot
+from notifications import telegram_bot, ntfy_bot
 
 logger = logging.getLogger("signal_engine")
 
@@ -62,6 +62,7 @@ def update_candles(conn, asset: str, config: dict):
     for tf_label, tf_code in config["TIMEFRAMES"].items():
         last_ts = db.get_latest_timestamp(conn, asset, tf_code)
         if last_ts is None:
+            # non dovrebbe succedere dopo bootstrap, ma per sicurezza:
             new_candles = exchange.bootstrap_history(
                 base_url, asset, tf_code, config["BOOTSTRAP_TARGET_CANDLES"],
                 max_per_call, delay
@@ -113,13 +114,15 @@ def run_scan_cycle(conn, config: dict):
         )
 
         if not new_h1_candles:
-            continue
+            continue  # nessuna nuova candela H1 chiusa -> niente da fare per questo asset
 
         logger.info("Nuova candela H1 per %s: %d nuove candele", asset, len(new_h1_candles))
 
         for new_candle in new_h1_candles:
+            # --- 1. Gestione trade aperti (sempre, ad ogni nuova candela H1) ---
             trade_manager.update_open_trades_for_asset(conn, asset, new_candle, expiry_bars)
 
+            # --- 2. Carica dati indicatori aggiornati ---
             df_h1 = db.get_candles_df(conn, asset, config["TIMEFRAMES"]["H1"], limit=config["BOOTSTRAP_TARGET_CANDLES"])
             df_h4 = db.get_candles_df(conn, asset, config["TIMEFRAMES"]["H4"], limit=config["BOOTSTRAP_TARGET_CANDLES"])
 
@@ -135,16 +138,18 @@ def run_scan_cycle(conn, config: dict):
             last_h1 = df_h1.iloc[-1]
             last_h4 = df_h4.iloc[-1]
             logger.info(
-                "%s | timestamp=%d | close=%.4f | H1 EMA21=%.4f EMA50=%.4f | H4 EMA50=%.4f EMA100=%.4f EMA200=%.4f | ATR=%.4f",
-                asset, int(last_h1["timestamp"]), last_h1["close"], last_h1["ema_21"], last_h1["ema_50"],
+                "%s | close=%.4f | H1 EMA21=%.4f EMA50=%.4f | H4 EMA50=%.4f EMA100=%.4f EMA200=%.4f | ATR=%.4f",
+                asset, last_h1["close"], last_h1["ema_21"], last_h1["ema_50"],
                 last_h4["ema_50"], last_h4["ema_100"], last_h4["ema_200"], last_h1["atr"]
             )
 
             current_ts_ms = int(new_candle["timestamp"])
             current_dt = datetime.fromtimestamp(current_ts_ms / 1000, tz=timezone.utc)
 
+            # --- 3. Valutazione setup per entrambe le direzioni ---
             for direction, evaluator in [("LONG", strategy.evaluate_long), ("SHORT", strategy.evaluate_short)]:
 
+                # cooldown check
                 in_cooldown = trade_manager.check_cooldown(
                     conn, asset, direction, "Pullback EMA Trend",
                     current_ts_ms, cooldown_hours
@@ -152,6 +157,7 @@ def run_scan_cycle(conn, config: dict):
                 if in_cooldown:
                     continue
 
+                # un solo ACTIVE per asset+direzione
                 if db.has_active_trade(conn, asset, direction):
                     continue
 
@@ -168,6 +174,7 @@ def run_scan_cycle(conn, config: dict):
                 if not classification["save_to_db"]:
                     continue
 
+                # --- Contesto macro (solo informativo) ---
                 macro_event = macro_provider.get_active_event(current_dt, macro_window)
                 setup["macro_event"] = macro_event
 
@@ -210,3 +217,8 @@ def run_scan_cycle(conn, config: dict):
                         db.update_trade_alert_timestamp(
                             conn, trade_id, datetime.now(timezone.utc).isoformat()
                         )
+
+                    # Canale aggiuntivo ntfy.sh (stessa soglia di Telegram)
+                    ntfy_bot.send_alert(
+                        config.get("NTFY_TOPIC"), setup, score, classification["label"]
+                    )
