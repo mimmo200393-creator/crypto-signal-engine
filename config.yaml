@@ -1,0 +1,65 @@
+STRATEGY_NAME: "Pullback EMA Trend Strategy"
+STRATEGY_VERSION: "V1.0"
+
+# Risk / scoring
+ATR_MULTIPLIER: 1.5
+MIN_RR: 2.0
+DB_SCORE_THRESHOLD: 8
+TELEGRAM_SCORE_THRESHOLD: 9
+
+# Anti-spam / lifecycle
+COOLDOWN_HOURS: 12
+TRADE_EXPIRY_BARS: 72
+
+# Scan
+SCAN_INTERVAL_MINUTES: 15
+
+# Pivot detection
+PIVOT_LOOKBACK: 5
+
+# Exchange / data
+EXCHANGE_BASE_URL: "https://api.crypto.com/exchange/v1"
+MAX_CANDLES_PER_CALL: 300
+REQUEST_DELAY_SECONDS: 0.75
+BOOTSTRAP_TARGET_CANDLES: 300
+
+# Telegram
+TELEGRAM_BOT_TOKEN: ""
+TELEGRAM_CHAT_ID: ""
+
+# Macro
+MACRO_EVENTS_FILE: "macro_events.yaml"
+MACRO_WINDOW_MINUTES: 60
+
+# Database
+DB_PATH: "data/signals.db"
+LOG_FILE: "logs/engine.log"
+
+WATCHLIST:
+  - BTC_USDT
+  - ETH_USDT
+  - SOL_USDT
+  - BNB_USDT
+  - LINK_USDT
+  - AVAX_USDT
+  - ADA_USDT
+  - XRP_USDT
+  - DOGE_USDT
+  - TON_USDT
+  - SUI_USDT
+  - NEAR_USDT
+  - LTC_USDT
+  - DOT_USDT
+  - ATOM_USDT
+  - APT_USDT
+  - ARB_USDT
+  - OP_USDT
+  - BCH_USDT
+  - ETC_USDT
+
+TIMEFRAMES:
+  H4: "4h"
+  H1: "1h"
+
+EMA_PERIODS: [21, 50, 100, 200]
+ATR_PERIOD: 14
