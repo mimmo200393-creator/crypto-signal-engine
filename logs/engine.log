@@ -502,3 +502,7 @@
 2026-06-13 10:05:44,697 [INFO] main: Modalita' TEST ALERT attiva: invio messaggio di test e termino.
 2026-06-13 10:05:45,192 [INFO] main: Test alert Telegram inviato: True
 2026-06-13 10:05:45,451 [INFO] main: Test alert ntfy inviato: True
+2026-06-13 10:10:55,563 [INFO] main: Avvio Pullback EMA Trend Strategy V1.0 | watchlist=20 asset | scan_interval=15min
+2026-06-13 10:10:55,564 [INFO] main: Modalita' TEST ALERT attiva: invio messaggio di test e termino.
+2026-06-13 10:10:56,131 [INFO] main: Test alert Telegram inviato: True
+2026-06-13 10:10:56,631 [INFO] main: Test alert ntfy inviato: True
