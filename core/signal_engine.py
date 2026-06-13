@@ -5,6 +5,7 @@ valutazione setup, gestione trade aperti, alert Telegram.
 """
 
 import logging
+import requests
 from datetime import datetime, timezone
 
 from core import exchange, indicators, strategy, scoring, macro, trade_manager
@@ -37,7 +38,7 @@ def bootstrap_all(conn, config: dict):
                     base_url, asset, tf_code, target, max_per_call, delay
                 )
                 db.upsert_candles(conn, asset, tf_code, candles)
-            except exchange.ExchangeError as e:
+            except (exchange.ExchangeError, requests.exceptions.HTTPError) as e:
                 logger.warning(
                     "Bootstrap fallito per %s %s, asset SKIPPATO (probabilmente non listato "
                     "sull'exchange): %s", asset, tf_code, e
@@ -100,7 +101,7 @@ def run_scan_cycle(conn, config: dict):
     for asset in config["WATCHLIST"]:
         try:
             updates = update_candles(conn, asset, config)
-        except exchange.ExchangeError as e:
+        except (exchange.ExchangeError, requests.exceptions.HTTPError) as e:
             logger.warning("Update candele fallito per %s, asset SKIPPATO: %s", asset, e)
             continue
 
