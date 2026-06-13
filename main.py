@@ -13,6 +13,7 @@ Variabili d'ambiente (override su config.yaml, per evitare di committare
 secrets nel repo):
     TELEGRAM_BOT_TOKEN
     TELEGRAM_CHAT_ID
+    NTFY_TOPIC
 """
 
 import os
@@ -36,6 +37,10 @@ def load_config(path="config.yaml") -> dict:
         config["TELEGRAM_BOT_TOKEN"] = env_token
     if env_chat_id:
         config["TELEGRAM_CHAT_ID"] = env_chat_id
+
+    env_ntfy = os.environ.get("NTFY_TOPIC")
+    if env_ntfy:
+        config["NTFY_TOPIC"] = env_ntfy
 
     # Override TEMPORANEO soglia Telegram per test end-to-end con dati reali
     # (non modifica config.yaml, vale solo per questa esecuzione)
@@ -68,10 +73,11 @@ def run_single_cycle(conn, config: dict, logger):
 
 def run_test_alert(config: dict, logger):
     """
-    Invia un alert Telegram di TEST con dati finti, per verificare che
-    formato/invio funzionino end-to-end. Non scrive nulla nel database.
+    Invia un alert di TEST con dati finti (Telegram + ntfy), per
+    verificare che formato/invio funzionino end-to-end. Non scrive
+    nulla nel database.
     """
-    from notifications import telegram_bot
+    from notifications import telegram_bot, ntfy_bot
 
     fake_setup = {
         "asset": "BTC_USDT",
@@ -95,7 +101,13 @@ def run_test_alert(config: dict, logger):
         config["TELEGRAM_BOT_TOKEN"], config["TELEGRAM_CHAT_ID"],
         fake_setup, score, label
     )
-    logger.info("Test alert inviato: %s", sent)
+    logger.info("Test alert Telegram inviato: %s", sent)
+
+    sent_ntfy = ntfy_bot.send_alert(
+        config.get("NTFY_TOPIC"), fake_setup, score, label
+    )
+    logger.info("Test alert ntfy inviato: %s", sent_ntfy)
+
     if not sent:
         sys.exit(1)
 
