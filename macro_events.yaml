@@ -1,0 +1,14 @@
+# macro_events.yaml
+# Eventi macroeconomici monitorati (solo a scopo statistico in V1.0).
+# Formato datetime: ISO 8601 UTC (suffisso Z).
+#
+# Esempio:
+# events:
+#   - type: "FOMC"
+#     datetime: "2026-07-30T18:00:00Z"
+#   - type: "CPI_USA"
+#     datetime: "2026-07-11T12:30:00Z"
+#   - type: "NFP"
+#     datetime: "2026-07-04T12:30:00Z"
+
+events: []
