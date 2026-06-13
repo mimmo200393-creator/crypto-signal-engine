@@ -19,13 +19,18 @@ PIVOT_LOOKBACK: 5
 
 # Exchange / data
 EXCHANGE_BASE_URL: "https://api.crypto.com/exchange/v1"
-MAX_CANDLES_PER_CALL: 300
+MAX_CANDLES_PER_CALL: 300          # confermato: count=300 restituisce >126 candele in una chiamata, non limitato a 50
 REQUEST_DELAY_SECONDS: 0.75
 BOOTSTRAP_TARGET_CANDLES: 300
 
 # Telegram
+# NON inserire qui token/chat_id se questo file viene committato su GitHub.
+# Vengono letti da variabili d'ambiente TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
+# (impostate come GitHub Secrets). Vedi main.py -> load_config().
 TELEGRAM_BOT_TOKEN: ""
 TELEGRAM_CHAT_ID: ""
+DISCORD_WEBHOOK_URL: ""
+NTFY_TOPIC: ""
 
 # Macro
 MACRO_EVENTS_FILE: "macro_events.yaml"
