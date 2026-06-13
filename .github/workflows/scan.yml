@@ -3,7 +3,16 @@ name: Crypto Signal Engine - Scan
 on:
   schedule:
     - cron: "*/15 * * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      send_test_alert:
+        description: "Invia un alert Telegram di TEST con dati finti (non fa scan)"
+        type: boolean
+        default: false
+      test_low_threshold:
+        description: "Esegui scan reale ma con soglia Telegram abbassata a 5 (test pipeline con dati veri)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -41,6 +50,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_TEST_ALERT: ${{ github.event.inputs.send_test_alert }}
+          TELEGRAM_SCORE_THRESHOLD_OVERRIDE: ${{ github.event.inputs.test_low_threshold == 'true' && '5' || '' }}
         run: python3 main.py
 
       - name: Commit updated database and logs
