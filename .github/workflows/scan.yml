@@ -2,6 +2,8 @@ name: Crypto Signal Engine - Scan
 
 on:
   schedule:
+    # Ogni 15 minuti (GitHub puo' avere ritardi di qualche minuto in
+    # orari di alto carico, irrilevante per analisi su candele H1)
     - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
@@ -15,11 +17,11 @@ on:
         default: false
 
 permissions:
-  contents: write
+  contents: write  # necessario per committare data/signals.db aggiornato
 
 concurrency:
   group: signal-engine-scan
-  cancel-in-progress: false
+  cancel-in-progress: false  # non cancellare run in corso, accoda
 
 jobs:
   scan:
@@ -50,6 +52,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           SEND_TEST_ALERT: ${{ github.event.inputs.send_test_alert }}
           TELEGRAM_SCORE_THRESHOLD_OVERRIDE: ${{ github.event.inputs.test_low_threshold == 'true' && '5' || '' }}
         run: python3 main.py
