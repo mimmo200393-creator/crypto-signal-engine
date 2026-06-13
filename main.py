@@ -37,6 +37,13 @@ def load_config(path="config.yaml") -> dict:
     if env_chat_id:
         config["TELEGRAM_CHAT_ID"] = env_chat_id
 
+    # Override TEMPORANEO soglia Telegram per test end-to-end con dati reali
+    # (non modifica config.yaml, vale solo per questa esecuzione)
+    env_threshold = os.environ.get("TELEGRAM_SCORE_THRESHOLD_OVERRIDE")
+    if env_threshold:
+        config["TELEGRAM_SCORE_THRESHOLD"] = int(env_threshold)
+        config["DB_SCORE_THRESHOLD"] = min(config["DB_SCORE_THRESHOLD"], int(env_threshold))
+
     return config
 
 
@@ -59,6 +66,40 @@ def run_single_cycle(conn, config: dict, logger):
     logger.info("--- Fine ciclo di scansione ---")
 
 
+def run_test_alert(config: dict, logger):
+    """
+    Invia un alert Telegram di TEST con dati finti, per verificare che
+    formato/invio funzionino end-to-end. Non scrive nulla nel database.
+    """
+    from notifications import telegram_bot
+
+    fake_setup = {
+        "asset": "BTC_USDT",
+        "setup": "Pullback EMA Trend",
+        "direzione": "LONG",
+        "entry": 67450.23,
+        "stop_loss": 66280.15,
+        "take_profit": 69890.50,
+        "rr": 2.08,
+        "pullback_ema50": True,
+        "pullback_ema21": False,
+        "trend_h4_ok": True,
+        "trend_h1_ok": True,
+        "sr_level_present": True,
+        "macro_event": None,
+    }
+    score = 9
+    label = "🔥 High Quality Setup (TEST)"
+
+    sent = telegram_bot.send_alert(
+        config["TELEGRAM_BOT_TOKEN"], config["TELEGRAM_CHAT_ID"],
+        fake_setup, score, label
+    )
+    logger.info("Test alert inviato: %s", sent)
+    if not sent:
+        sys.exit(1)
+
+
 def main():
     config = load_config()
     setup_logging(config)
@@ -72,6 +113,11 @@ def main():
 
     conn = db.get_connection(config["DB_PATH"])
     db.init_db(conn)
+
+    if os.environ.get("SEND_TEST_ALERT") == "true":
+        logger.info("Modalita' TEST ALERT attiva: invio messaggio di test e termino.")
+        run_test_alert(config, logger)
+        return
 
     logger.info("Verifica bootstrap storico (solo se necessario)...")
     signal_engine.bootstrap_all(conn, config)
@@ -100,4 +146,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
