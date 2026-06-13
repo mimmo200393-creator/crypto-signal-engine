@@ -1,0 +1,52 @@
+name: Crypto Signal Engine - Scan
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: signal-engine-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt --break-system-packages || pip install -r requirements.txt
+
+      - name: Run scan cycle
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 main.py
+
+      - name: Commit updated database and logs
+        run: |
+          git config user.name "signal-engine-bot"
+          git config user.email "actions@github.com"
+          git add data/signals.db logs/engine.log
+          git diff --staged --quiet || git commit -m "Scan automatico $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          git push
