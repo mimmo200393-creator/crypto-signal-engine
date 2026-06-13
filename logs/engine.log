@@ -288,3 +288,146 @@
 2026-06-13 08:52:03,351 [INFO] signal_engine: Check BCH_USDT: +0 candele H1, +0 candele H4
 2026-06-13 08:52:05,318 [INFO] signal_engine: Check ETC_USDT: +0 candele H1, +0 candele H4
 2026-06-13 08:52:05,319 [INFO] main: --- Fine ciclo di scansione ---
+2026-06-13 09:26:47,821 [INFO] main: Avvio Pullback EMA Trend Strategy V1.0 | watchlist=20 asset | scan_interval=15min
+2026-06-13 09:26:47,822 [INFO] main: Verifica bootstrap storico (solo se necessario)...
+2026-06-13 09:26:47,822 [INFO] signal_engine: Bootstrap skip per BTC_USDT 4h (302 candele in cache)
+2026-06-13 09:26:47,822 [INFO] signal_engine: Bootstrap skip per BTC_USDT 1h (306 candele in cache)
+2026-06-13 09:26:47,822 [INFO] signal_engine: Bootstrap skip per ETH_USDT 4h (302 candele in cache)
+2026-06-13 09:26:47,823 [INFO] signal_engine: Bootstrap skip per ETH_USDT 1h (306 candele in cache)
+2026-06-13 09:26:47,823 [INFO] signal_engine: Bootstrap skip per SOL_USDT 4h (302 candele in cache)
+2026-06-13 09:26:47,823 [INFO] signal_engine: Bootstrap skip per SOL_USDT 1h (306 candele in cache)
+2026-06-13 09:26:47,823 [INFO] signal_engine: Bootstrap in corso: BNB_USDT 4h ...
+2026-06-13 09:26:48,106 [WARNING] signal_engine: Bootstrap fallito per BNB_USDT 4h, asset SKIPPATO (probabilmente non listato sull'exchange): 400 Client Error: Bad Request for url: https://api.crypto.com/exchange/v1/public/get-candlestick?instrument_name=BNB_USDT&timeframe=4h&count=300
+2026-06-13 09:26:48,107 [INFO] signal_engine: Bootstrap in corso: BNB_USDT 1h ...
+2026-06-13 09:26:48,330 [WARNING] signal_engine: Bootstrap fallito per BNB_USDT 1h, asset SKIPPATO (probabilmente non listato sull'exchange): 400 Client Error: Bad Request for url: https://api.crypto.com/exchange/v1/public/get-candlestick?instrument_name=BNB_USDT&timeframe=1h&count=300
+2026-06-13 09:26:48,331 [INFO] signal_engine: Bootstrap skip per LINK_USDT 4h (302 candele in cache)
+2026-06-13 09:26:48,331 [INFO] signal_engine: Bootstrap skip per LINK_USDT 1h (306 candele in cache)
+2026-06-13 09:26:48,331 [INFO] signal_engine: Bootstrap skip per AVAX_USDT 4h (302 candele in cache)
+2026-06-13 09:26:48,331 [INFO] signal_engine: Bootstrap skip per AVAX_USDT 1h (306 candele in cache)
+2026-06-13 09:26:48,331 [INFO] signal_engine: Bootstrap skip per ADA_USDT 4h (302 candele in cache)
+2026-06-13 09:26:48,331 [INFO] signal_engine: Bootstrap skip per ADA_USDT 1h (306 candele in cache)
+2026-06-13 09:26:48,332 [INFO] signal_engine: Bootstrap skip per XRP_USDT 4h (302 candele in cache)
+2026-06-13 09:26:48,332 [INFO] signal_engine: Bootstrap skip per XRP_USDT 1h (306 candele in cache)
+2026-06-13 09:26:48,332 [INFO] signal_engine: Bootstrap skip per DOGE_USDT 4h (302 candele in cache)
+2026-06-13 09:26:48,332 [INFO] signal_engine: Bootstrap skip per DOGE_USDT 1h (306 candele in cache)
+2026-06-13 09:26:48,332 [INFO] signal_engine: Bootstrap skip per TON_USDT 4h (302 candele in cache)
+2026-06-13 09:26:48,332 [INFO] signal_engine: Bootstrap skip per TON_USDT 1h (306 candele in cache)
+2026-06-13 09:26:48,332 [INFO] signal_engine: Bootstrap skip per SUI_USDT 4h (302 candele in cache)
+2026-06-13 09:26:48,332 [INFO] signal_engine: Bootstrap skip per SUI_USDT 1h (306 candele in cache)
+2026-06-13 09:26:48,332 [INFO] signal_engine: Bootstrap skip per NEAR_USDT 4h (302 candele in cache)
+2026-06-13 09:26:48,333 [INFO] signal_engine: Bootstrap skip per NEAR_USDT 1h (306 candele in cache)
+2026-06-13 09:26:48,333 [INFO] signal_engine: Bootstrap skip per LTC_USDT 4h (302 candele in cache)
+2026-06-13 09:26:48,333 [INFO] signal_engine: Bootstrap skip per LTC_USDT 1h (306 candele in cache)
+2026-06-13 09:26:48,333 [INFO] signal_engine: Bootstrap skip per DOT_USDT 4h (302 candele in cache)
+2026-06-13 09:26:48,333 [INFO] signal_engine: Bootstrap skip per DOT_USDT 1h (306 candele in cache)
+2026-06-13 09:26:48,333 [INFO] signal_engine: Bootstrap skip per ATOM_USDT 4h (302 candele in cache)
+2026-06-13 09:26:48,333 [INFO] signal_engine: Bootstrap skip per ATOM_USDT 1h (306 candele in cache)
+2026-06-13 09:26:48,334 [INFO] signal_engine: Bootstrap skip per APT_USDT 4h (302 candele in cache)
+2026-06-13 09:26:48,334 [INFO] signal_engine: Bootstrap skip per APT_USDT 1h (306 candele in cache)
+2026-06-13 09:26:48,334 [INFO] signal_engine: Bootstrap skip per ARB_USDT 4h (302 candele in cache)
+2026-06-13 09:26:48,334 [INFO] signal_engine: Bootstrap skip per ARB_USDT 1h (306 candele in cache)
+2026-06-13 09:26:48,334 [INFO] signal_engine: Bootstrap skip per OP_USDT 4h (302 candele in cache)
+2026-06-13 09:26:48,334 [INFO] signal_engine: Bootstrap skip per OP_USDT 1h (306 candele in cache)
+2026-06-13 09:26:48,334 [INFO] signal_engine: Bootstrap skip per BCH_USDT 4h (302 candele in cache)
+2026-06-13 09:26:48,334 [INFO] signal_engine: Bootstrap skip per BCH_USDT 1h (306 candele in cache)
+2026-06-13 09:26:48,334 [INFO] signal_engine: Bootstrap skip per ETC_USDT 4h (302 candele in cache)
+2026-06-13 09:26:48,334 [INFO] signal_engine: Bootstrap skip per ETC_USDT 1h (306 candele in cache)
+2026-06-13 09:26:48,334 [INFO] main: Bootstrap completato.
+2026-06-13 09:26:48,334 [INFO] main: --- Inizio ciclo di scansione ---
+2026-06-13 09:26:50,326 [INFO] signal_engine: Check BTC_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:26:50,326 [INFO] signal_engine: Nuova candela H1 per BTC_USDT: 1 nuove candele
+2026-06-13 09:26:50,338 [INFO] signal_engine: BTC_USDT | timestamp=1781341200000 | close=63803.1400 | H1 EMA21=63651.4323 EMA50=63384.8941 | H4 EMA50=63711.8296 EMA100=66226.6730 EMA200=70014.3999 | ATR=272.6241
+2026-06-13 09:26:50,338 [INFO] signal_engine: BTC_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:26:50,339 [INFO] signal_engine: BTC_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:26:52,319 [INFO] signal_engine: Check ETH_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:26:52,320 [INFO] signal_engine: Nuova candela H1 per ETH_USDT: 1 nuove candele
+2026-06-13 09:26:52,327 [INFO] signal_engine: ETH_USDT | timestamp=1781341200000 | close=1673.8400 | H1 EMA21=1669.3312 EMA50=1665.4448 | H4 EMA50=1690.3836 EMA100=1780.8198 EMA200=1922.7011 | ATR=9.0634
+2026-06-13 09:26:52,328 [INFO] signal_engine: ETH_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:26:52,328 [INFO] signal_engine: ETH_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:26:54,290 [INFO] signal_engine: Check SOL_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:26:54,290 [INFO] signal_engine: Nuova candela H1 per SOL_USDT: 1 nuove candele
+2026-06-13 09:26:54,298 [INFO] signal_engine: SOL_USDT | timestamp=1781341200000 | close=67.4200 | H1 EMA21=67.0323 EMA50=66.6151 | H4 EMA50=67.3504 EMA100=71.1099 EMA200=76.3312 | ATR=0.4849
+2026-06-13 09:26:54,298 [INFO] signal_engine: SOL_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:26:54,299 [INFO] signal_engine: SOL_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:26:54,515 [WARNING] signal_engine: Update candele fallito per BNB_USDT, asset SKIPPATO: 400 Client Error: Bad Request for url: https://api.crypto.com/exchange/v1/public/get-candlestick?instrument_name=BNB_USDT&timeframe=4h&count=300
+2026-06-13 09:26:56,503 [INFO] signal_engine: Check LINK_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:26:56,503 [INFO] signal_engine: Nuova candela H1 per LINK_USDT: 1 nuove candele
+2026-06-13 09:26:56,510 [INFO] signal_engine: LINK_USDT | timestamp=1781341200000 | close=7.9700 | H1 EMA21=7.8998 EMA50=7.8673 | H4 EMA50=7.9250 EMA100=8.2396 EMA200=8.6901 | ATR=0.0509
+2026-06-13 09:26:56,510 [INFO] signal_engine: LINK_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:26:56,511 [INFO] signal_engine: LINK_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:26:58,618 [INFO] signal_engine: Check AVAX_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:26:58,618 [INFO] signal_engine: Nuova candela H1 per AVAX_USDT: 1 nuove candele
+2026-06-13 09:26:58,625 [INFO] signal_engine: AVAX_USDT | timestamp=1781341200000 | close=6.6630 | H1 EMA21=6.6156 EMA50=6.6063 | H4 EMA50=6.8855 EMA100=7.4462 EMA200=8.1253 | ATR=0.0491
+2026-06-13 09:26:58,626 [INFO] signal_engine: AVAX_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:26:58,626 [INFO] signal_engine: AVAX_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:00,594 [INFO] signal_engine: Check ADA_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:27:00,594 [INFO] signal_engine: Nuova candela H1 per ADA_USDT: 1 nuove candele
+2026-06-13 09:27:00,602 [INFO] signal_engine: ADA_USDT | timestamp=1781341200000 | close=0.1730 | H1 EMA21=0.1712 EMA50=0.1698 | H4 EMA50=0.1737 EMA100=0.1895 EMA200=0.2108 | ATR=0.0020
+2026-06-13 09:27:00,602 [INFO] signal_engine: ADA_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:00,602 [INFO] signal_engine: ADA_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:02,553 [INFO] signal_engine: Check XRP_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:27:02,553 [INFO] signal_engine: Nuova candela H1 per XRP_USDT: 1 nuove candele
+2026-06-13 09:27:02,560 [INFO] signal_engine: XRP_USDT | timestamp=1781341200000 | close=1.1436 | H1 EMA21=1.1368 EMA50=1.1340 | H4 EMA50=1.1488 EMA100=1.1941 EMA200=1.2610 | ATR=0.0073
+2026-06-13 09:27:02,560 [INFO] signal_engine: XRP_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:02,561 [INFO] signal_engine: XRP_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:04,543 [INFO] signal_engine: Check DOGE_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:27:04,543 [INFO] signal_engine: Nuova candela H1 per DOGE_USDT: 1 nuove candele
+2026-06-13 09:27:04,550 [INFO] signal_engine: DOGE_USDT | timestamp=1781341200000 | close=0.0873 | H1 EMA21=0.0868 EMA50=0.0864 | H4 EMA50=0.0868 EMA100=0.0903 EMA200=0.0951 | ATR=0.0008
+2026-06-13 09:27:04,551 [INFO] signal_engine: DOGE_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:04,551 [INFO] signal_engine: DOGE_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:06,654 [INFO] signal_engine: Check TON_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:27:06,654 [INFO] signal_engine: Nuova candela H1 per TON_USDT: 1 nuove candele
+2026-06-13 09:27:06,662 [INFO] signal_engine: TON_USDT | timestamp=1781341200000 | close=1.6889 | H1 EMA21=1.6889 EMA50=1.6887 | H4 EMA50=1.7060 EMA100=1.7554 EMA200=1.7863 | ATR=0.0202
+2026-06-13 09:27:06,662 [INFO] signal_engine: TON_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:06,662 [INFO] signal_engine: TON_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:08,779 [INFO] signal_engine: Check SUI_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:27:08,779 [INFO] signal_engine: Nuova candela H1 per SUI_USDT: 1 nuove candele
+2026-06-13 09:27:08,787 [INFO] signal_engine: SUI_USDT | timestamp=1781341200000 | close=0.7681 | H1 EMA21=0.7555 EMA50=0.7535 | H4 EMA50=0.7641 EMA100=0.8128 EMA200=0.8819 | ATR=0.0060
+2026-06-13 09:27:08,787 [INFO] signal_engine: SUI_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:08,787 [INFO] signal_engine: SUI_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:10,744 [INFO] signal_engine: Check NEAR_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:27:10,744 [INFO] signal_engine: Nuova candela H1 per NEAR_USDT: 1 nuove candele
+2026-06-13 09:27:10,751 [INFO] signal_engine: NEAR_USDT | timestamp=1781341200000 | close=2.0299 | H1 EMA21=2.0273 EMA50=2.0412 | H4 EMA50=2.1055 EMA100=2.1445 EMA200=2.0511 | ATR=0.0282
+2026-06-13 09:27:10,752 [INFO] signal_engine: NEAR_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:10,752 [INFO] signal_engine: NEAR_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:12,711 [INFO] signal_engine: Check LTC_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:27:12,711 [INFO] signal_engine: Nuova candela H1 per LTC_USDT: 1 nuove candele
+2026-06-13 09:27:12,718 [INFO] signal_engine: LTC_USDT | timestamp=1781341200000 | close=43.7120 | H1 EMA21=43.2360 EMA50=42.9688 | H4 EMA50=43.6440 EMA100=45.8459 EMA200=48.9858 | ATR=0.2709
+2026-06-13 09:27:12,719 [INFO] signal_engine: LTC_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:12,719 [INFO] signal_engine: LTC_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:14,759 [INFO] signal_engine: Check DOT_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:27:14,759 [INFO] signal_engine: Nuova candela H1 per DOT_USDT: 1 nuove candele
+2026-06-13 09:27:14,766 [INFO] signal_engine: DOT_USDT | timestamp=1781341200000 | close=0.9852 | H1 EMA21=0.9685 EMA50=0.9609 | H4 EMA50=0.9819 EMA100=1.0415 EMA200=1.1187 | ATR=0.0081
+2026-06-13 09:27:14,766 [INFO] signal_engine: DOT_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:14,767 [INFO] signal_engine: DOT_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:16,737 [INFO] signal_engine: Check ATOM_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:27:16,737 [INFO] signal_engine: Nuova candela H1 per ATOM_USDT: 1 nuove candele
+2026-06-13 09:27:16,744 [INFO] signal_engine: ATOM_USDT | timestamp=1781341200000 | close=1.9880 | H1 EMA21=1.9840 EMA50=1.9557 | H4 EMA50=1.8677 EMA100=1.8810 EMA200=1.9208 | ATR=0.0133
+2026-06-13 09:27:16,745 [INFO] signal_engine: ATOM_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:16,745 [INFO] signal_engine: ATOM_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:18,854 [INFO] signal_engine: Check APT_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:27:18,854 [INFO] signal_engine: Nuova candela H1 per APT_USDT: 1 nuove candele
+2026-06-13 09:27:18,864 [INFO] signal_engine: APT_USDT | timestamp=1781341200000 | close=0.6533 | H1 EMA21=0.6530 EMA50=0.6510 | H4 EMA50=0.6834 EMA100=0.7507 EMA200=0.8321 | ATR=0.0026
+2026-06-13 09:27:18,864 [INFO] signal_engine: APT_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:18,864 [INFO] signal_engine: APT_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:21,143 [INFO] signal_engine: Check ARB_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:27:21,143 [INFO] signal_engine: Nuova candela H1 per ARB_USDT: 1 nuove candele
+2026-06-13 09:27:21,151 [INFO] signal_engine: ARB_USDT | timestamp=1781341200000 | close=0.0858 | H1 EMA21=0.0844 EMA50=0.0834 | H4 EMA50=0.0843 EMA100=0.0902 EMA200=0.1002 | ATR=0.0008
+2026-06-13 09:27:21,151 [INFO] signal_engine: ARB_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:21,151 [INFO] signal_engine: ARB_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:23,112 [INFO] signal_engine: Check OP_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:27:23,112 [INFO] signal_engine: Nuova candela H1 per OP_USDT: 1 nuove candele
+2026-06-13 09:27:23,120 [INFO] signal_engine: OP_USDT | timestamp=1781341200000 | close=0.1074 | H1 EMA21=0.1021 EMA50=0.0993 | H4 EMA50=0.1004 EMA100=0.1068 EMA200=0.1152 | ATR=0.0016
+2026-06-13 09:27:23,120 [INFO] signal_engine: OP_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:23,120 [INFO] signal_engine: OP_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:25,257 [INFO] signal_engine: Check BCH_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:27:25,257 [INFO] signal_engine: Nuova candela H1 per BCH_USDT: 1 nuove candele
+2026-06-13 09:27:25,264 [INFO] signal_engine: BCH_USDT | timestamp=1781341200000 | close=208.0500 | H1 EMA21=204.6239 EMA50=203.9103 | H4 EMA50=216.8788 EMA100=248.1287 EMA200=299.6933 | ATR=1.8563
+2026-06-13 09:27:25,265 [INFO] signal_engine: BCH_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:25,265 [INFO] signal_engine: BCH_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:27,386 [INFO] signal_engine: Check ETC_USDT: +1 candele H1, +0 candele H4
+2026-06-13 09:27:27,387 [INFO] signal_engine: Nuova candela H1 per ETC_USDT: 1 nuove candele
+2026-06-13 09:27:27,394 [INFO] signal_engine: ETC_USDT | timestamp=1781341200000 | close=7.1830 | H1 EMA21=7.1754 EMA50=7.1704 | H4 EMA50=7.2038 EMA100=7.5121 EMA200=7.9532 | ATR=0.0249
+2026-06-13 09:27:27,394 [INFO] signal_engine: ETC_USDT LONG: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:27,394 [INFO] signal_engine: ETC_USDT SHORT: setup non valido (condizioni non soddisfatte)
+2026-06-13 09:27:27,395 [INFO] main: --- Fine ciclo di scansione ---
