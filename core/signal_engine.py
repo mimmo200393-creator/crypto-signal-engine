@@ -136,3 +136,113 @@ def run_scan_cycle(conn, config: dict, registry: StrategyRegistry):
 
             market_snapshot = {
                 "close": float(last_h1["close"]),
+                "ema_21_h1": float(last_h1["ema_21"]),
+                "ema_50_h1": float(last_h1["ema_50"]),
+                "ema_50_h4": float(last_h4["ema_50"]),
+                "ema_100_h4": float(last_h4["ema_100"]),
+                "ema_200_h4": float(last_h4["ema_200"]),
+                "atr_h1": float(last_h1["atr"]),
+                "market_regime": regime,
+            }
+
+            # Scanner
+            candidate_signals: List[Signal] = []
+
+            for strategy in registry.active_strategies:
+                for direction in ["LONG", "SHORT"]:
+                    # Cooldown check
+                    last_ts_str = db.get_last_signal_timestamp(
+                        conn, asset, direction, strategy.name
+                    )
+                    if last_ts_str:
+                        try:
+                            last_ts_ms = int(
+                                datetime.fromisoformat(last_ts_str).timestamp() * 1000
+                            )
+                            elapsed_h = (current_ts_ms - last_ts_ms) / (1000 * 3600)
+                            if elapsed_h < cooldown_hours:
+                                continue
+                        except Exception:
+                            pass
+
+                    if db.has_open_signal(conn, asset, direction, strategy.name):
+                        continue
+
+                    market_data = {
+                        "asset": asset,
+                        "direction": direction,
+                        "df_h1": df_h1.copy(),
+                        "df_h4": df_h4.copy(),
+                        "config": config,
+                    }
+
+                    signal = strategy.generate_signal(market_data)
+                    if signal is None:
+                        logger.info("%s %s %s: no signal", strategy.name, asset, direction)
+                        continue
+
+                    # Regime bonus
+                    regime_bonus = market_regime.get_regime_bonus(strategy.name, regime)
+                    signal.final_score = signal.raw_score + regime_bonus
+                    signal.market_regime = regime
+                    signal.additional_context["macro_event"] = macro_event
+
+                    candidate_signals.append(signal)
+                    logger.info(
+                        "Candidato: %s %s %s | raw=%.0f final=%.0f regime=%s",
+                        strategy.name, asset, direction,
+                        signal.raw_score, signal.final_score, regime
+                    )
+
+            if not candidate_signals:
+                continue
+
+            candles_cache = {
+                asset: db.get_candles_df(conn, asset, config["TIMEFRAMES"]["H1"],
+                                         limit=corr_lookback + 5)
+            }
+
+            # Correlation Engine
+            filtered_signals = apply_correlation_filter(
+                candidate_signals, candles_cache,
+                threshold=corr_threshold,
+                lookback=corr_lookback,
+            )
+
+            # Salva e notifica
+            for signal in filtered_signals:
+                if signal.trade_status == "REJECTED":
+                    db.insert_signal(conn, signal, market_snapshot)
+                    logger.info("REJECTED: %s %s %s (%s)",
+                                signal.strategy_name, signal.asset,
+                                signal.direction, signal.rejection_reason)
+                    continue
+
+                signal.trade_status = "APPROVED"
+                signal_id = db.insert_signal(conn, signal, market_snapshot)
+
+                send_telegram = signal.additional_context.get("send_telegram", False)
+                final_ok = signal.final_score >= notify_threshold
+
+                if send_telegram and final_ok:
+                    db.update_signal_status(conn, signal_id, "OPEN")
+
+                    sent_tg = telegram_bot.send_signal_alert(
+                        config["TELEGRAM_BOT_TOKEN"],
+                        config["TELEGRAM_CHAT_ID"],
+                        signal
+                    )
+                    ntfy_bot.send_signal_alert(config.get("NTFY_TOPIC"), signal)
+
+                    logger.info(
+                        "NOTIFIED: %s %s %s | raw=%.0f final=%.0f | tg=%s",
+                        signal.strategy_name, signal.asset, signal.direction,
+                        signal.raw_score, signal.final_score, sent_tg
+                    )
+                else:
+                    db.update_signal_status(conn, signal_id, "OPEN")
+                    logger.info(
+                        "OPEN (no notify): %s %s %s | raw=%.0f final=%.0f",
+                        signal.strategy_name, signal.asset, signal.direction,
+                        signal.raw_score, signal.final_score
+                    )
