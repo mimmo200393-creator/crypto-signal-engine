@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import List, Dict
 
 from core import exchange, indicators, macro, trade_manager, market_regime
+from core.trade_manager_v2 import update_open_signals_for_asset
 from core.correlation_engine import apply_correlation_filter
 from core.strategy_registry import StrategyRegistry
 from strategies.base import Signal
@@ -103,9 +104,13 @@ def run_scan_cycle(conn, config: dict, registry: StrategyRegistry):
             continue
 
         for new_candle in new_h1_candles:
-            # Trade management V1 (invariato)
+            # 1. Trade management V1 (invariato) per Pullback EMA
             trade_manager.update_open_trades_for_asset(conn, asset, new_candle, expiry_bars)
 
+            # 2. Trade management V2 per tabella signals (tutte le strategie)
+            update_open_signals_for_asset(conn, asset, new_candle, expiry_bars)
+
+            # 3. Carica dati aggiornati
             df_h1 = db.get_candles_df(conn, asset, config["TIMEFRAMES"]["H1"], limit=limit)
             df_h4 = db.get_candles_df(conn, asset, config["TIMEFRAMES"]["H4"], limit=limit)
 
@@ -131,7 +136,7 @@ def run_scan_cycle(conn, config: dict, registry: StrategyRegistry):
                 last_h1["atr"]
             )
 
-            # Market Regime
+            # 4. Market Regime
             regime = market_regime.detect_regime(df_h1, df_h4)
 
             market_snapshot = {
@@ -145,12 +150,11 @@ def run_scan_cycle(conn, config: dict, registry: StrategyRegistry):
                 "market_regime": regime,
             }
 
-            # Scanner
+            # 5. Scanner
             candidate_signals: List[Signal] = []
 
             for strategy in registry.active_strategies:
                 for direction in ["LONG", "SHORT"]:
-                    # Cooldown check
                     last_ts_str = db.get_last_signal_timestamp(
                         conn, asset, direction, strategy.name
                     )
@@ -181,7 +185,7 @@ def run_scan_cycle(conn, config: dict, registry: StrategyRegistry):
                         logger.info("%s %s %s: no signal", strategy.name, asset, direction)
                         continue
 
-                    # Regime bonus
+                    # 6. Regime bonus
                     regime_bonus = market_regime.get_regime_bonus(strategy.name, regime)
                     signal.final_score = signal.raw_score + regime_bonus
                     signal.market_regime = regime
@@ -198,18 +202,20 @@ def run_scan_cycle(conn, config: dict, registry: StrategyRegistry):
                 continue
 
             candles_cache = {
-                asset: db.get_candles_df(conn, asset, config["TIMEFRAMES"]["H1"],
-                                         limit=corr_lookback + 5)
+                asset: db.get_candles_df(
+                    conn, asset, config["TIMEFRAMES"]["H1"],
+                    limit=corr_lookback + 5
+                )
             }
 
-            # Correlation Engine
+            # 7. Correlation Engine
             filtered_signals = apply_correlation_filter(
                 candidate_signals, candles_cache,
                 threshold=corr_threshold,
                 lookback=corr_lookback,
             )
 
-            # Salva e notifica
+            # 8. Salva e notifica
             for signal in filtered_signals:
                 if signal.trade_status == "REJECTED":
                     db.insert_signal(conn, signal, market_snapshot)
