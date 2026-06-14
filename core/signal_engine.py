@@ -18,8 +18,8 @@ import logging
 import requests
 from datetime import datetime, timezone
 from typing import List, Dict
-
 from core import exchange, indicators, macro, trade_manager, market_regime
+from core.trade_manager_v2 import update_open_signals_for_asset
 from core.correlation_engine import apply_correlation_filter
 from core.strategy_registry import StrategyRegistry
 from strategies.base import Signal
