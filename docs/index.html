@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Signal Engine V2.1</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<style>
+:root{
+  --bg:#eeece6;--surface:#fff;--surface2:#f5f5f4;
+  --border:rgba(0,0,0,0.12);--tx:#1a1a18;--tx2:#5f5e5a;
+  --bg-success:#eaf3de;--tx-success:#3b6d11;
+  --bg-danger:#fcebeb;--tx-danger:#a32d2d;
+  --bg-info:#e6f1fb;--tx-info:#185fa5;
+  --bg-warning:#faeeda;--tx-warning:#854f0b;
+  --bg-muted:#f5f5f4;--tx-muted:#5f5e5a;
+}
+@media(prefers-color-scheme:dark){
+  :root{
+    --bg:#111110;--surface:#1e1e1c;--surface2:#282825;
+    --border:rgba(255,255,255,0.1);--tx:#f0ede6;--tx2:#b4b2a9;
+    --bg-success:#173404;--tx-success:#c0dd97;
+    --bg-danger:#501313;--tx-danger:#f7c1c1;
+    --bg-info:#042c53;--tx-info:#b5d4f4;
+    --bg-warning:#412402;--tx-warning:#fac775;
+    --bg-muted:#282825;--tx-muted:#b4b2a9;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--tx);min-height:100vh;padding-bottom:3rem;}
+.header{background:var(--surface);border-bottom:0.5px solid var(--border);padding:1rem 1.25rem;position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;}
+.header-title{font-size:17px;font-weight:500;}
+.header-sub{font-size:12px;color:var(--tx2);margin-top:2px;}
+.live{font-size:11px;padding:4px 12px;border-radius:6px;background:var(--bg-success);color:var(--tx-success);font-weight:500;}
+.container{max-width:600px;margin:0 auto;padding:1rem;}
+.section{font-size:11px;font-weight:500;letter-spacing:0.06em;color:var(--tx2);text-transform:uppercase;margin:1.5rem 0 0.75rem;}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}
+.grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;}
+.metric{background:var(--surface2);border-radius:8px;padding:12px 14px;}
+.metric-label{font-size:12px;color:var(--tx2);margin-bottom:4px;}
+.metric-value{font-size:24px;font-weight:500;}
+.metric-sm{background:var(--surface2);border-radius:8px;padding:8px 10px;}
+.card{background:var(--surface);border:0.5px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:8px;}
+.card-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;}
+.card-title{font-size:14px;font-weight:500;}
+.badge{font-size:11px;padding:2px 8px;border-radius:6px;font-weight:500;}
+.divider{border-top:0.5px solid var(--border);margin:8px 0;}
+.muted{color:var(--tx2);}
+.small{font-size:12px;}
+.fw500{font-weight:500;}
+.empty{text-align:center;padding:2rem;color:var(--tx2);font-size:14px;}
+</style>
+</head>
+<body>
+<div class="header">
+  <div>
+    <div class="header-title">Signal Engine V2.1</div>
+    <div class="header-sub"><i class="ti ti-refresh" aria-hidden="true"></i> 14 Jun 2026 22:00 UTC</div>
+  </div>
+  <span class="live">LIVE</span>
+</div>
+<div class="container">
+  <div class="section">Overview</div>
+  <div class="grid2">
+    <div class="metric"><div class="metric-label">Total signals</div><div class="metric-value">0</div></div>
+    <div class="metric"><div class="metric-label">Open</div><div class="metric-value" style="color:var(--tx-info);">0</div></div>
+    <div class="metric"><div class="metric-label">Win rate</div><div class="metric-value" style="color:var(--tx-success);">—</div></div>
+    <div class="metric"><div class="metric-label">Profit factor</div><div class="metric-value">—</div></div>
+  </div>
+  <div class="section">Per strategy</div>
+  <div class="empty">Nessuna strategia con segnali ancora.</div>
+  <div class="section">Recent signals</div>
+  <div class="empty">Nessun segnale ancora. Il sistema scansiona ogni 15 minuti.</div>
+</div>
+</body>
+</html>
