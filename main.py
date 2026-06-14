@@ -1,16 +1,12 @@
 """
-main.py
-Entry point del Crypto Signal Engine V1.0 (FROZEN).
+main.py  (V2.1)
+Entry point del Crypto Signal Engine Institutional Adaptive Framework V2.1.
 
-Modalita' di esecuzione:
-- Default: ESEGUE UN SINGOLO CICLO DI SCANSIONE e termina.
-  Pensato per essere richiamato periodicamente da uno scheduler esterno
-  (es. GitHub Actions cron, ogni SCAN_INTERVAL_MINUTES).
-- Con --loop: esegue un loop continuo locale (utile per test/debug locali,
-  NON usato in produzione su GitHub Actions).
+Modalita':
+- Default:  one-shot (GitHub Actions cron)
+- --loop:   loop continuo (debug locale)
 
-Variabili d'ambiente (override su config.yaml, per evitare di committare
-secrets nel repo):
+Secrets da env (GitHub Actions Secrets):
     TELEGRAM_BOT_TOKEN
     TELEGRAM_CHAT_ID
     NTFY_TOPIC
@@ -24,30 +20,27 @@ import yaml
 
 from storage import db
 from core import signal_engine
+from core.strategy_registry import build_registry
 
 
 def load_config(path="config.yaml") -> dict:
     with open(path, "r") as f:
         config = yaml.safe_load(f)
 
-    # Override da variabili d'ambiente (per GitHub Actions Secrets)
-    env_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    env_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    if env_token:
-        config["TELEGRAM_BOT_TOKEN"] = env_token
-    if env_chat_id:
-        config["TELEGRAM_CHAT_ID"] = env_chat_id
+    for env_key, cfg_key in [
+        ("TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN"),
+        ("TELEGRAM_CHAT_ID",   "TELEGRAM_CHAT_ID"),
+        ("NTFY_TOPIC",         "NTFY_TOPIC"),
+    ]:
+        val = os.environ.get(env_key)
+        if val:
+            config[cfg_key] = val
 
-    env_ntfy = os.environ.get("NTFY_TOPIC")
-    if env_ntfy:
-        config["NTFY_TOPIC"] = env_ntfy
-
-    # Override TEMPORANEO soglia Telegram per test end-to-end con dati reali
-    # (non modifica config.yaml, vale solo per questa esecuzione)
     env_threshold = os.environ.get("TELEGRAM_SCORE_THRESHOLD_OVERRIDE")
     if env_threshold:
+        config["NOTIFY_FINAL_SCORE_THRESHOLD"] = int(env_threshold)
         config["TELEGRAM_SCORE_THRESHOLD"] = int(env_threshold)
-        config["DB_SCORE_THRESHOLD"] = min(config["DB_SCORE_THRESHOLD"], int(env_threshold))
+        config["DB_SCORE_THRESHOLD"] = min(config.get("DB_SCORE_THRESHOLD", 8), int(env_threshold))
 
     return config
 
@@ -65,18 +58,7 @@ def setup_logging(config: dict):
     )
 
 
-def run_single_cycle(conn, config: dict, logger):
-    logger.info("--- Inizio ciclo di scansione ---")
-    signal_engine.run_scan_cycle(conn, config)
-    logger.info("--- Fine ciclo di scansione ---")
-
-
 def run_test_alert(config: dict, logger):
-    """
-    Invia un alert di TEST con dati finti (Telegram + ntfy), per
-    verificare che formato/invio funzionino end-to-end. Non scrive
-    nulla nel database.
-    """
     from notifications import telegram_bot, ntfy_bot
 
     fake_setup = {
@@ -95,20 +77,20 @@ def run_test_alert(config: dict, logger):
         "macro_event": None,
     }
     score = 9
-    label = "🔥 High Quality Setup (TEST)"
+    label = "🔥 High Quality Setup (TEST V2.1)"
 
-    sent = telegram_bot.send_alert(
+    sent_tg = telegram_bot.send_alert(
         config["TELEGRAM_BOT_TOKEN"], config["TELEGRAM_CHAT_ID"],
         fake_setup, score, label
     )
-    logger.info("Test alert Telegram inviato: %s", sent)
+    logger.info("Test alert Telegram: %s", sent_tg)
 
     sent_ntfy = ntfy_bot.send_alert(
         config.get("NTFY_TOPIC"), fake_setup, score, label
     )
-    logger.info("Test alert ntfy inviato: %s", sent_ntfy)
+    logger.info("Test alert ntfy: %s", sent_ntfy)
 
-    if not sent:
+    if not sent_tg:
         sys.exit(1)
 
 
@@ -118,42 +100,48 @@ def main():
     logger = logging.getLogger("main")
 
     logger.info(
-        "Avvio %s %s | watchlist=%d asset | scan_interval=%dmin",
-        config["STRATEGY_NAME"], config["STRATEGY_VERSION"],
-        len(config["WATCHLIST"]), config["SCAN_INTERVAL_MINUTES"]
+        "Avvio %s %s | strategie=%s | watchlist=%d asset",
+        config.get("FRAMEWORK_NAME", "CryptoSignalEngine"),
+        config.get("FRAMEWORK_VERSION", "V2.1"),
+        [k for k, v in config.get("STRATEGIES", {}).items() if v.get("enabled")],
+        len(config["WATCHLIST"]),
     )
 
     conn = db.get_connection(config["DB_PATH"])
     db.init_db(conn)
 
     if os.environ.get("SEND_TEST_ALERT") == "true":
-        logger.info("Modalita' TEST ALERT attiva: invio messaggio di test e termino.")
+        logger.info("TEST ALERT MODE")
         run_test_alert(config, logger)
         return
 
-    logger.info("Verifica bootstrap storico (solo se necessario)...")
+    registry = build_registry(config)
+
+    logger.info("Bootstrap storico...")
     signal_engine.bootstrap_all(conn, config)
     logger.info("Bootstrap completato.")
 
     loop_mode = "--loop" in sys.argv
 
     if not loop_mode:
-        # Modalita' one-shot: un ciclo e termina (GitHub Actions cron)
         try:
-            run_single_cycle(conn, config, logger)
+            logger.info("--- Inizio ciclo di scansione ---")
+            signal_engine.run_scan_cycle(conn, config, registry)
+            logger.info("--- Fine ciclo di scansione ---")
         except Exception:
-            logger.exception("Errore durante il ciclo di scansione")
+            logger.exception("Errore nel ciclo di scansione")
             sys.exit(1)
         return
 
-    # Modalita' loop continuo (solo per test/debug locali)
-    interval_seconds = config["SCAN_INTERVAL_MINUTES"] * 60
+    interval = config["SCAN_INTERVAL_MINUTES"] * 60
     while True:
         try:
-            run_single_cycle(conn, config, logger)
+            logger.info("--- Inizio ciclo di scansione ---")
+            signal_engine.run_scan_cycle(conn, config, registry)
+            logger.info("--- Fine ciclo di scansione ---")
         except Exception:
-            logger.exception("Errore durante il ciclo di scansione")
-        time.sleep(interval_seconds)
+            logger.exception("Errore nel ciclo di scansione")
+        time.sleep(interval)
 
 
 if __name__ == "__main__":
