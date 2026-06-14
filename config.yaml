@@ -43,24 +43,19 @@ LOG_FILE: "logs/engine.log"
 WATCHLIST:
   - BTC_USDT
   - ETH_USDT
-  - SOL_USDT
-  - BNB_USDT
-  - LINK_USDT
-  - AVAX_USDT
   - ADA_USDT
+  - SOL_USDT
+  - LINK_USDT
   - XRP_USDT
   - DOGE_USDT
-  - TON_USDT
-  - SUI_USDT
-  - NEAR_USDT
   - LTC_USDT
   - DOT_USDT
-  - ATOM_USDT
-  - APT_USDT
-  - ARB_USDT
-  - OP_USDT
+  - ZEC_USDT
+  - FIL_USDT
+  - SHIB_USDT
   - BCH_USDT
-  - ETC_USDT
+  - WIF_USDT
+  - XLM_USDT
 
 TIMEFRAMES:
   H4: "4h"
