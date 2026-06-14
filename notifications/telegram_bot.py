@@ -1,23 +1,18 @@
 """
-telegram_bot.py
-Invio notifiche Telegram per setup ad alta probabilita' (score >= TELEGRAM_SCORE_THRESHOLD).
+notifications/telegram_bot.py  (V2.1)
+Notifiche Telegram multi-strategia.
 """
 
 import logging
 import requests
 
 logger = logging.getLogger("telegram_bot")
-
 TELEGRAM_API_BASE = "https://api.telegram.org"
 
 
 def send_message(bot_token: str, chat_id: str, text: str) -> bool:
-    """
-    Invia un messaggio di testo (parse_mode Markdown) alla chat configurata.
-    Ritorna True se l'invio ha avuto successo, False altrimenti.
-    """
     if not bot_token or not chat_id:
-        logger.warning("TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID non configurati, alert non inviato.")
+        logger.warning("TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID non configurati.")
         return False
 
     url = f"{TELEGRAM_API_BASE}/bot{bot_token}/sendMessage"
@@ -27,24 +22,66 @@ def send_message(bot_token: str, chat_id: str, text: str) -> bool:
         "parse_mode": "Markdown",
         "disable_web_page_preview": True,
     }
-
     try:
         resp = requests.post(url, json=payload, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         if not data.get("ok"):
-            logger.error("Telegram API ha risposto ok=False: %s", data)
+            logger.error("Telegram API ok=False: %s", data)
             return False
         return True
     except requests.RequestException as e:
-        logger.error("Errore invio messaggio Telegram: %s", e)
+        logger.error("Errore invio Telegram: %s", e)
         return False
 
 
+def format_signal_alert(signal, label: str) -> str:
+    """Formato V2 multi-strategia."""
+    direction_emoji = "🟢" if signal.direction == "LONG" else "🔴"
+    ctx = signal.additional_context or {}
+
+    text = (
+        f"{label}\n\n"
+        f"Strategy: *{signal.strategy_name} {signal.strategy_version}*\n"
+        f"{direction_emoji} Asset: *{signal.asset}*\n"
+        f"Direction: *{signal.direction}*\n\n"
+        f"Entry:       `{signal.entry:.6f}`\n"
+        f"Stop Loss:   `{signal.stop_loss:.6f}`\n"
+        f"Take Profit: `{signal.take_profit:.6f}`\n"
+        f"R/R: *{signal.rr:.2f}*\n\n"
+        f"Raw Score:   *{signal.raw_score:.0f}/10*\n"
+        f"Final Score: *{signal.final_score:.0f}/10*\n"
+        f"Market Regime: {signal.market_regime or 'N/A'}"
+    )
+
+    macro_event = ctx.get("macro_event")
+    if macro_event:
+        mtr = macro_event.get("minutes_to_release", 0)
+        if mtr >= 0:
+            text += f"\n\n⚠️ Macro: {macro_event['type']} in {mtr} min"
+        else:
+            text += f"\n\n⚠️ Macro: {macro_event['type']} {abs(mtr)} min ago"
+
+    return text
+
+
+def _label_from_score(final_score: float) -> str:
+    if final_score >= 10:
+        return "⭐ ELITE SETUP"
+    return "🔥 HIGH QUALITY SETUP"
+
+
+def send_signal_alert(bot_token: str, chat_id: str, signal) -> bool:
+    label = _label_from_score(signal.final_score)
+    text = format_signal_alert(signal, label)
+    return send_message(bot_token, chat_id, text)
+
+
+# ============================================================
+# Backward compatibility V1 (usato da test_alert)
+# ============================================================
+
 def format_alert(setup: dict, score: int, label: str) -> str:
-    """
-    Formatta il messaggio di alert (in inglese).
-    """
     direction_emoji = "🟢" if setup["direzione"] == "LONG" else "🔴"
 
     pullback_type = []
@@ -63,8 +100,8 @@ def format_alert(setup: dict, score: int, label: str) -> str:
         f"{direction_emoji} *{setup['asset']}* — *{setup['direzione']}*\n"
         f"Setup: {setup['setup']}\n"
         f"Score: *{score}/10*\n\n"
-        f"Entry: `{setup['entry']:.6f}`\n"
-        f"Stop Loss: `{setup['stop_loss']:.6f}`\n"
+        f"Entry:       `{setup['entry']:.6f}`\n"
+        f"Stop Loss:   `{setup['stop_loss']:.6f}`\n"
         f"Take Profit: `{setup['take_profit']:.6f}`\n"
         f"R/R: *{setup['rr']:.2f}*\n\n"
         f"Pullback: {pullback_str}\n"
@@ -75,11 +112,11 @@ def format_alert(setup: dict, score: int, label: str) -> str:
 
     macro_info = setup.get("macro_event")
     if macro_info:
-        if macro_info["minutes_to_release"] >= 0:
-            macro_text = f"⚠️ {macro_info['type']} in {macro_info['minutes_to_release']} min"
+        mtr = macro_info.get("minutes_to_release", 0)
+        if mtr >= 0:
+            text += f"\n\n⚠️ Macro: {macro_info['type']} in {mtr} min"
         else:
-            macro_text = f"⚠️ {macro_info['type']} {abs(macro_info['minutes_to_release'])} min ago"
-        text += f"\n\nMacro: {macro_text}"
+            text += f"\n\n⚠️ Macro: {macro_info['type']} {abs(mtr)} min ago"
 
     return text
 
