@@ -13,16 +13,16 @@ STRATEGIES:
     enabled: true     # V1.0 Frozen - sempre attiva, benchmark
 
   breakout_retest:
-    enabled: false
+    enabled: true
 
   liquidity_sweep:
-    enabled: false
+    enabled: true
 
   compression_breakout:
-    enabled: false
+    enabled: true
 
   pivot_reversal:
-    enabled: false
+    enabled: true
 
 # ============================================================
 # Correlation Engine
