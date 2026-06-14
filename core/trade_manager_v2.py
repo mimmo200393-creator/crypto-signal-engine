@@ -9,8 +9,8 @@ Per ogni segnale OPEN, ad ogni nuova candela H1 chiusa:
     - Incrementa bars_open
     - Marca TP / SL / EXPIRED (dopo TRADE_EXPIRY_BARS candele H1)
 
-In caso TP e SL vengano toccati nella stessa candela (gap/volatilita'
-estrema), si assume SL colpito per primo (worst-case prudente).
+In caso TP e SL vengano toccati nella stessa candela,
+si assume SL colpito per primo (worst-case prudente).
 """
 
 import logging
@@ -58,7 +58,7 @@ def update_open_signals_for_asset(conn, asset: str, new_h1_candle: dict,
         if direction == "LONG":
             adverse_excursion   = max(entry - low,  0.0)
             favorable_excursion = max(high - entry, 0.0)
-        else:  # SHORT
+        else:
             adverse_excursion   = max(high - entry, 0.0)
             favorable_excursion = max(entry - low,  0.0)
 
@@ -69,22 +69,21 @@ def update_open_signals_for_asset(conn, asset: str, new_h1_candle: dict,
         if direction == "LONG":
             hit_sl = low  <= stop_loss
             hit_tp = high >= take_profit
-        else:  # SHORT
+        else:
             hit_sl = high >= stop_loss
             hit_tp = low  <= take_profit
 
-        # Calcola minuti dal segnale
+        # Minuti dal segnale
         candle_ts = int(new_h1_candle["timestamp"])
-        signal_ts_str = sig["timestamp_setup"]
         try:
             signal_ts_ms = int(
-                datetime.fromisoformat(signal_ts_str).timestamp() * 1000
+                datetime.fromisoformat(sig["timestamp_setup"]).timestamp() * 1000
             )
             minutes_elapsed = int((candle_ts - signal_ts_ms) / 60000)
         except Exception:
             minutes_elapsed = None
 
-        # Stato finale (SL ha priorità su TP se entrambi toccati)
+        # Stato finale (SL ha priorità su TP)
         final_status = None
         time_to_tp = None
         time_to_sl = None
@@ -110,11 +109,9 @@ def update_open_signals_for_asset(conn, asset: str, new_h1_candle: dict,
                 time_to_sl=time_to_sl,
             )
             logger.info(
-                "Signal %s (%s %s %s) -> %s | "
-                "entry=%.6f sl=%.6f tp=%.6f | bars=%d mae=%.6f mfe=%.6f",
+                "Signal %s (%s %s %s) -> %s | bars=%d mae=%.6f mfe=%.6f",
                 signal_id[:8], sig["strategy_name"], asset, direction,
-                final_status, entry, stop_loss, take_profit,
-                bars_open, new_mae, new_mfe
+                final_status, bars_open, new_mae, new_mfe
             )
         else:
             db.update_signal_status(
