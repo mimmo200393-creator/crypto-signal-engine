@@ -1,27 +1,25 @@
-name: Crypto Signal Engine - Scan
+name: Crypto Signal Engine V2.1 - Scan
 
 on:
   schedule:
-    # Ogni 15 minuti (GitHub puo' avere ritardi di qualche minuto in
-    # orari di alto carico, irrilevante per analisi su candele H1)
     - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       send_test_alert:
-        description: "Invia un alert Telegram di TEST con dati finti (non fa scan)"
+        description: "Invia alert di TEST con dati finti (non fa scan)"
         type: boolean
         default: false
       test_low_threshold:
-        description: "Esegui scan reale ma con soglia Telegram abbassata a 5 (test pipeline con dati veri)"
+        description: "Scan reale con soglia Final Score abbassata a 5 (test pipeline)"
         type: boolean
         default: false
 
 permissions:
-  contents: write  # necessario per committare data/signals.db aggiornato
+  contents: write
 
 concurrency:
   group: signal-engine-scan
-  cancel-in-progress: false  # non cancellare run in corso, accoda
+  cancel-in-progress: false
 
 jobs:
   scan:
@@ -39,7 +37,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Cache pip dependencies
+      - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
@@ -52,16 +50,15 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           SEND_TEST_ALERT: ${{ github.event.inputs.send_test_alert }}
           TELEGRAM_SCORE_THRESHOLD_OVERRIDE: ${{ github.event.inputs.test_low_threshold == 'true' && '5' || '' }}
         run: python3 main.py
 
-      - name: Commit updated database and logs
+      - name: Commit database e log
         run: |
           git config user.name "signal-engine-bot"
           git config user.email "actions@github.com"
           git add data/signals.db logs/engine.log
-          git diff --staged --quiet || git commit -m "Scan automatico $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          git diff --staged --quiet || git commit -m "Scan V2.1 $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           git push
