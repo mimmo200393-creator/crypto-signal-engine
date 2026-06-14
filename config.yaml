@@ -34,7 +34,7 @@ CORRELATION_TIMEFRAME: H1
 # ============================================================
 # Scoring e notifiche
 # ============================================================
-NOTIFY_FINAL_SCORE_THRESHOLD: 9
+NOTIFY_FINAL_SCORE_THRESHOLD: 8
 
 # ============================================================
 # Parametri operativi V1 (invariati, usati da PullbackEMAFrozen)
@@ -45,7 +45,7 @@ STRATEGY_VERSION: "V1.0"
 ATR_MULTIPLIER: 1.5
 MIN_RR: 2.0
 DB_SCORE_THRESHOLD: 8
-TELEGRAM_SCORE_THRESHOLD: 9
+TELEGRAM_SCORE_THRESHOLD: 8
 
 COOLDOWN_HOURS: 12
 TRADE_EXPIRY_BARS: 72
