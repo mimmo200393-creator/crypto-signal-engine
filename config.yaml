@@ -1,45 +1,89 @@
+# ============================================================
+# Crypto Signal Engine - Institutional Adaptive Framework V2.1
+# ============================================================
+
+FRAMEWORK_NAME: "Crypto Signal Engine"
+FRAMEWORK_VERSION: "V2.1"
+
+# ============================================================
+# Strategie abilitate
+# ============================================================
+STRATEGIES:
+  pullback_ema:
+    enabled: true     # V1.0 Frozen - sempre attiva, benchmark
+
+  breakout_retest:
+    enabled: false
+
+  liquidity_sweep:
+    enabled: false
+
+  compression_breakout:
+    enabled: false
+
+  pivot_reversal:
+    enabled: false
+
+# ============================================================
+# Correlation Engine
+# ============================================================
+CORRELATION_THRESHOLD: 0.80
+CORRELATION_LOOKBACK: 100
+CORRELATION_TIMEFRAME: H1
+
+# ============================================================
+# Scoring e notifiche
+# ============================================================
+NOTIFY_FINAL_SCORE_THRESHOLD: 9
+
+# ============================================================
+# Parametri operativi V1 (invariati, usati da PullbackEMAFrozen)
+# ============================================================
 STRATEGY_NAME: "Pullback EMA Trend Strategy"
 STRATEGY_VERSION: "V1.0"
 
-# Risk / scoring
 ATR_MULTIPLIER: 1.5
 MIN_RR: 2.0
 DB_SCORE_THRESHOLD: 8
 TELEGRAM_SCORE_THRESHOLD: 9
 
-# Anti-spam / lifecycle
 COOLDOWN_HOURS: 12
 TRADE_EXPIRY_BARS: 72
 
-# Scan
 SCAN_INTERVAL_MINUTES: 15
-
-# Pivot detection
 PIVOT_LOOKBACK: 5
 
-# Exchange / data
+# ============================================================
+# Exchange / dati
+# ============================================================
 EXCHANGE_BASE_URL: "https://api.crypto.com/exchange/v1"
-MAX_CANDLES_PER_CALL: 300          # confermato: count=300 restituisce >126 candele in una chiamata, non limitato a 50
+MAX_CANDLES_PER_CALL: 300
 REQUEST_DELAY_SECONDS: 0.75
 BOOTSTRAP_TARGET_CANDLES: 300
 
-# Telegram
-# NON inserire qui token/chat_id se questo file viene committato su GitHub.
-# Vengono letti da variabili d'ambiente TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
-# (impostate come GitHub Secrets). Vedi main.py -> load_config().
+# ============================================================
+# Notifiche (da GitHub Secrets, NON committare i valori reali)
+# ============================================================
 TELEGRAM_BOT_TOKEN: ""
 TELEGRAM_CHAT_ID: ""
 DISCORD_WEBHOOK_URL: ""
 NTFY_TOPIC: ""
 
+# ============================================================
 # Macro
+# ============================================================
 MACRO_EVENTS_FILE: "macro_events.yaml"
 MACRO_WINDOW_MINUTES: 60
 
-# Database
+# ============================================================
+# Database e logging
+# ============================================================
 DB_PATH: "data/signals.db"
 LOG_FILE: "logs/engine.log"
 
+# ============================================================
+# Watchlist
+# ============================================================
 WATCHLIST:
   - BTC_USDT
   - ETH_USDT
@@ -57,6 +101,9 @@ WATCHLIST:
   - WIF_USDT
   - XLM_USDT
 
+# ============================================================
+# Timeframe
+# ============================================================
 TIMEFRAMES:
   H4: "4h"
   H1: "1h"
