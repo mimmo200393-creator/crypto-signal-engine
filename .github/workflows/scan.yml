@@ -62,3 +62,14 @@ jobs:
           git add data/signals.db logs/engine.log
           git diff --staged --quiet || git commit -m "Scan V2.1 $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           git push
+
+      - name: Generate dashboard
+        run: python3 generate_dashboard.py
+
+      - name: Commit dashboard
+        run: |
+          git config user.name "signal-engine-bot"
+          git config user.email "actions@github.com"
+          git add docs/index.html
+          git diff --staged --quiet || git commit -m "Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          git push
