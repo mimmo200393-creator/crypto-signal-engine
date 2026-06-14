@@ -103,33 +103,32 @@ def run_scan_cycle(conn, config: dict, registry: StrategyRegistry):
             continue
 
         for new_candle in new_h1_candles:
-            # Trade management V1 (invariato)
-            trade_manager.update_open_trades_for_asset(conn, asset, new_candle, expiry_bars)
+                # Trade management V1 (invariato)
+                trade_manager.update_open_trades_for_asset(conn, asset, new_candle, expiry_bars)
 
-            df_h1 = db.get_candles_df(conn, asset, config["TIMEFRAMES"]["H1"], limit=limit)
-            df_h4 = db.get_candles_df(conn, asset, config["TIMEFRAMES"]["H4"], limit=limit)
+                # Trade management V2 per tabella signals (tutte le strategie)
+                update_open_signals_for_asset(conn, asset, new_candle, expiry_bars)
 
-            min_rows = max(config["EMA_PERIODS"]) + config["PIVOT_LOOKBACK"] * 2 + 60
-            if len(df_h1) < min_rows or len(df_h4) < max(config["EMA_PERIODS"]):
-                logger.info("Dati insufficienti per %s", asset)
-                continue
-
-            indicators.compute_all_indicators(df_h1, df_h4, config)
-
-            current_ts_ms = int(new_candle["timestamp"])
-            current_dt = datetime.fromtimestamp(current_ts_ms / 1000, tz=timezone.utc)
-            macro_event = macro_provider.get_active_event(current_dt, macro_window)
-
-            last_h1 = df_h1.iloc[-1]
-            last_h4 = df_h4.iloc[-1]
-            logger.info(
-                "%s | close=%.4f | H1 EMA21=%.4f EMA50=%.4f | "
-                "H4 EMA50=%.4f EMA100=%.4f EMA200=%.4f | ATR=%.4f",
-                asset, last_h1["close"],
-                last_h1["ema_21"], last_h1["ema_50"],
-                last_h4["ema_50"], last_h4["ema_100"], last_h4["ema_200"],
-                last_h1["atr"]
-            )
+                df_h1 = db.get_candles_df(conn, asset, config["TIMEFRAMES"]["H1"], limit=limit)
+                df_h4 = db.get_candles_df(conn, asset, config["TIMEFRAMES"]["H4"], limit=limit)
+                min_rows = max(config["EMA_PERIODS"]) + config["PIVOT_LOOKBACK"] * 2 + 60
+                if len(df_h1) < min_rows or len(df_h4) < max(config["EMA_PERIODS"]):
+                    logger.info("Dati insufficienti per %s", asset)
+                    continue
+                indicators.compute_all_indicators(df_h1, df_h4, config)
+                current_ts_ms = int(new_candle["timestamp"])
+                current_dt = datetime.fromtimestamp(current_ts_ms / 1000, tz=timezone.utc)
+                macro_event = macro_provider.get_active_event(current_dt, macro_window)
+                last_h1 = df_h1.iloc[-1]
+                last_h4 = df_h4.iloc[-1]
+                logger.info(
+                    "%s | close=%.4f | H1 EMA21=%.4f EMA50=%.4f | "
+                    "H4 EMA50=%.4f EMA100=%.4f EMA200=%.4f | ATR=%.4f",
+                    asset, last_h1["close"],
+                    last_h1["ema_21"], last_h1["ema_50"],
+                    last_h4["ema_50"], last_h4["ema_100"], last_h4["ema_200"],
+                    last_h1["atr"]
+                )
 
             # Market Regime
             regime = market_regime.detect_regime(df_h1, df_h4)
