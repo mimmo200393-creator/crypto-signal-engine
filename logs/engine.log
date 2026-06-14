@@ -3243,3 +3243,99 @@
 2026-06-14 14:56:02,817 [INFO] signal_engine: XLM_USDT LONG: setup non valido (condizioni non soddisfatte)
 2026-06-14 14:56:02,817 [INFO] signal_engine: XLM_USDT SHORT: setup non valido (condizioni non soddisfatte)
 2026-06-14 14:56:02,817 [INFO] main: --- Fine ciclo di scansione ---
+2026-06-14 15:58:49,293 [INFO] main: Avvio Crypto Signal Engine V2.1 | strategie=['pullback_ema'] | watchlist=15 asset
+2026-06-14 15:58:49,301 [INFO] strategy_registry: Strategia registrata: Pullback EMA Trend V1.0
+2026-06-14 15:58:49,301 [INFO] strategy_registry: Registry caricato: 1 strategie attive
+2026-06-14 15:58:49,301 [INFO] main: Bootstrap storico...
+2026-06-14 15:58:49,301 [INFO] signal_engine: Bootstrap skip: BTC_USDT 4h (309 candele)
+2026-06-14 15:58:49,301 [INFO] signal_engine: Bootstrap skip: BTC_USDT 1h (336 candele)
+2026-06-14 15:58:49,301 [INFO] signal_engine: Bootstrap skip: ETH_USDT 4h (309 candele)
+2026-06-14 15:58:49,302 [INFO] signal_engine: Bootstrap skip: ETH_USDT 1h (336 candele)
+2026-06-14 15:58:49,303 [INFO] signal_engine: Bootstrap skip: ADA_USDT 4h (309 candele)
+2026-06-14 15:58:49,303 [INFO] signal_engine: Bootstrap skip: ADA_USDT 1h (336 candele)
+2026-06-14 15:58:49,303 [INFO] signal_engine: Bootstrap skip: SOL_USDT 4h (309 candele)
+2026-06-14 15:58:49,303 [INFO] signal_engine: Bootstrap skip: SOL_USDT 1h (336 candele)
+2026-06-14 15:58:49,303 [INFO] signal_engine: Bootstrap skip: LINK_USDT 4h (309 candele)
+2026-06-14 15:58:49,303 [INFO] signal_engine: Bootstrap skip: LINK_USDT 1h (336 candele)
+2026-06-14 15:58:49,303 [INFO] signal_engine: Bootstrap skip: XRP_USDT 4h (309 candele)
+2026-06-14 15:58:49,303 [INFO] signal_engine: Bootstrap skip: XRP_USDT 1h (336 candele)
+2026-06-14 15:58:49,303 [INFO] signal_engine: Bootstrap skip: DOGE_USDT 4h (309 candele)
+2026-06-14 15:58:49,303 [INFO] signal_engine: Bootstrap skip: DOGE_USDT 1h (336 candele)
+2026-06-14 15:58:49,303 [INFO] signal_engine: Bootstrap skip: LTC_USDT 4h (309 candele)
+2026-06-14 15:58:49,303 [INFO] signal_engine: Bootstrap skip: LTC_USDT 1h (336 candele)
+2026-06-14 15:58:49,304 [INFO] signal_engine: Bootstrap skip: DOT_USDT 4h (309 candele)
+2026-06-14 15:58:49,304 [INFO] signal_engine: Bootstrap skip: DOT_USDT 1h (336 candele)
+2026-06-14 15:58:49,304 [INFO] signal_engine: Bootstrap: ZEC_USDT 4h ...
+2026-06-14 15:58:49,728 [WARNING] signal_engine: Bootstrap fallito ZEC_USDT 4h: 400 Client Error: Bad Request for url: https://api.crypto.com/exchange/v1/public/get-candlestick?instrument_name=ZEC_USDT&timeframe=4h&count=300
+2026-06-14 15:58:49,729 [INFO] signal_engine: Bootstrap: ZEC_USDT 1h ...
+2026-06-14 15:58:49,997 [WARNING] signal_engine: Bootstrap fallito ZEC_USDT 1h: 400 Client Error: Bad Request for url: https://api.crypto.com/exchange/v1/public/get-candlestick?instrument_name=ZEC_USDT&timeframe=1h&count=300
+2026-06-14 15:58:49,998 [INFO] signal_engine: Bootstrap skip: FIL_USDT 4h (300 candele)
+2026-06-14 15:58:49,999 [INFO] signal_engine: Bootstrap skip: FIL_USDT 1h (302 candele)
+2026-06-14 15:58:49,999 [INFO] signal_engine: Bootstrap skip: SHIB_USDT 4h (300 candele)
+2026-06-14 15:58:49,999 [INFO] signal_engine: Bootstrap skip: SHIB_USDT 1h (302 candele)
+2026-06-14 15:58:49,999 [INFO] signal_engine: Bootstrap skip: BCH_USDT 4h (309 candele)
+2026-06-14 15:58:49,999 [INFO] signal_engine: Bootstrap skip: BCH_USDT 1h (336 candele)
+2026-06-14 15:58:49,999 [INFO] signal_engine: Bootstrap skip: WIF_USDT 4h (300 candele)
+2026-06-14 15:58:49,999 [INFO] signal_engine: Bootstrap skip: WIF_USDT 1h (302 candele)
+2026-06-14 15:58:49,999 [INFO] signal_engine: Bootstrap skip: XLM_USDT 4h (300 candele)
+2026-06-14 15:58:49,999 [INFO] signal_engine: Bootstrap skip: XLM_USDT 1h (302 candele)
+2026-06-14 15:58:49,999 [INFO] main: Bootstrap completato.
+2026-06-14 15:58:49,999 [INFO] main: --- Inizio ciclo di scansione ---
+2026-06-14 15:58:52,078 [INFO] signal_engine: Check BTC_USDT: +1 H1, +0 H4
+2026-06-14 15:58:52,088 [INFO] signal_engine: BTC_USDT | close=64034.1400 | H1 EMA21=64311.2232 EMA50=64056.8705 | H4 EMA50=63881.4869 EMA100=65986.6395 EMA200=69601.0908 | ATR=214.2579
+2026-06-14 15:58:52,090 [INFO] signal_engine: Pullback EMA Trend BTC_USDT LONG: no signal
+2026-06-14 15:58:52,091 [INFO] signal_engine: Pullback EMA Trend BTC_USDT SHORT: no signal
+2026-06-14 15:58:54,162 [INFO] signal_engine: Check ETH_USDT: +1 H1, +0 H4
+2026-06-14 15:58:54,170 [INFO] signal_engine: ETH_USDT | close=1663.4500 | H1 EMA21=1673.7689 EMA50=1672.9616 | H4 EMA50=1687.5829 EMA100=1767.4844 EMA200=1905.5473 | ATR=6.8011
+2026-06-14 15:58:54,172 [INFO] signal_engine: Pullback EMA Trend ETH_USDT LONG: no signal
+2026-06-14 15:58:54,173 [INFO] signal_engine: Pullback EMA Trend ETH_USDT SHORT: no signal
+2026-06-14 15:58:56,226 [INFO] signal_engine: Check ADA_USDT: +1 H1, +0 H4
+2026-06-14 15:58:56,233 [INFO] signal_engine: ADA_USDT | close=0.1669 | H1 EMA21=0.1704 EMA50=0.1708 | H4 EMA50=0.1733 EMA100=0.1872 EMA200=0.2080 | ATR=0.0014
+2026-06-14 15:58:56,236 [INFO] signal_engine: Pullback EMA Trend ADA_USDT LONG: no signal
+2026-06-14 15:58:56,236 [INFO] signal_engine: Pullback EMA Trend ADA_USDT SHORT: no signal
+2026-06-14 15:58:58,264 [INFO] signal_engine: Check SOL_USDT: +1 H1, +0 H4
+2026-06-14 15:58:58,272 [INFO] signal_engine: SOL_USDT | close=67.4600 | H1 EMA21=68.0977 EMA50=67.7721 | H4 EMA50=67.6059 EMA100=70.7537 EMA200=75.7543 | ATR=0.4211
+2026-06-14 15:58:58,274 [INFO] signal_engine: Pullback EMA Trend SOL_USDT LONG: no signal
+2026-06-14 15:58:58,274 [INFO] signal_engine: Pullback EMA Trend SOL_USDT SHORT: no signal
+2026-06-14 15:59:00,316 [INFO] signal_engine: Check LINK_USDT: +1 H1, +0 H4
+2026-06-14 15:59:00,324 [INFO] signal_engine: LINK_USDT | close=7.8420 | H1 EMA21=7.9240 EMA50=7.9223 | H4 EMA50=7.9370 EMA100=8.2049 EMA200=8.6390 | ATR=0.0393
+2026-06-14 15:59:00,326 [INFO] signal_engine: Pullback EMA Trend LINK_USDT LONG: no signal
+2026-06-14 15:59:00,326 [INFO] signal_engine: Pullback EMA Trend LINK_USDT SHORT: no signal
+2026-06-14 15:59:02,374 [INFO] signal_engine: Check XRP_USDT: +1 H1, +0 H4
+2026-06-14 15:59:02,382 [INFO] signal_engine: XRP_USDT | close=1.1345 | H1 EMA21=1.1440 EMA50=1.1428 | H4 EMA50=1.1491 EMA100=1.1883 EMA200=1.2521 | ATR=0.0060
+2026-06-14 15:59:02,384 [INFO] signal_engine: Pullback EMA Trend XRP_USDT LONG: no signal
+2026-06-14 15:59:02,384 [INFO] signal_engine: Pullback EMA Trend XRP_USDT SHORT: no signal
+2026-06-14 15:59:04,464 [INFO] signal_engine: Check DOGE_USDT: +1 H1, +0 H4
+2026-06-14 15:59:04,472 [INFO] signal_engine: DOGE_USDT | close=0.0863 | H1 EMA21=0.0872 EMA50=0.0871 | H4 EMA50=0.0870 EMA100=0.0900 EMA200=0.0946 | ATR=0.0005
+2026-06-14 15:59:04,474 [INFO] signal_engine: Pullback EMA Trend DOGE_USDT LONG: no signal
+2026-06-14 15:59:04,474 [INFO] signal_engine: Pullback EMA Trend DOGE_USDT SHORT: no signal
+2026-06-14 15:59:06,491 [INFO] signal_engine: Check LTC_USDT: +1 H1, +0 H4
+2026-06-14 15:59:06,499 [INFO] signal_engine: LTC_USDT | close=44.0430 | H1 EMA21=44.0592 EMA50=43.7618 | H4 EMA50=43.7622 EMA100=45.6198 EMA200=48.6305 | ATR=0.2274
+2026-06-14 15:59:06,501 [INFO] signal_engine: Pullback EMA Trend LTC_USDT LONG: no signal
+2026-06-14 15:59:06,502 [INFO] signal_engine: Pullback EMA Trend LTC_USDT SHORT: no signal
+2026-06-14 15:59:08,512 [INFO] signal_engine: Check DOT_USDT: +1 H1, +0 H4
+2026-06-14 15:59:08,520 [INFO] signal_engine: DOT_USDT | close=0.9594 | H1 EMA21=0.9702 EMA50=0.9702 | H4 EMA50=0.9812 EMA100=1.0334 EMA200=1.1085 | ATR=0.0052
+2026-06-14 15:59:08,522 [INFO] signal_engine: Pullback EMA Trend DOT_USDT LONG: no signal
+2026-06-14 15:59:08,523 [INFO] signal_engine: Pullback EMA Trend DOT_USDT SHORT: no signal
+2026-06-14 15:59:08,775 [WARNING] signal_engine: Update fallito ZEC_USDT: 400 Client Error: Bad Request for url: https://api.crypto.com/exchange/v1/public/get-candlestick?instrument_name=ZEC_USDT&timeframe=4h&count=300
+2026-06-14 15:59:11,037 [INFO] signal_engine: Check FIL_USDT: +1 H1, +0 H4
+2026-06-14 15:59:11,045 [INFO] signal_engine: FIL_USDT | close=0.7591 | H1 EMA21=0.7713 EMA50=0.7702 | H4 EMA50=0.7802 EMA100=0.8228 EMA200=0.8789 | ATR=0.0044
+2026-06-14 15:59:11,047 [INFO] signal_engine: Pullback EMA Trend FIL_USDT LONG: no signal
+2026-06-14 15:59:11,047 [INFO] signal_engine: Pullback EMA Trend FIL_USDT SHORT: no signal
+2026-06-14 15:59:13,229 [INFO] signal_engine: Check SHIB_USDT: +1 H1, +0 H4
+2026-06-14 15:59:13,237 [INFO] signal_engine: SHIB_USDT | close=0.0000 | H1 EMA21=0.0000 EMA50=0.0000 | H4 EMA50=0.0000 EMA100=0.0000 EMA200=0.0000 | ATR=0.0000
+2026-06-14 15:59:13,239 [INFO] signal_engine: Pullback EMA Trend SHIB_USDT LONG: no signal
+2026-06-14 15:59:13,240 [INFO] signal_engine: Pullback EMA Trend SHIB_USDT SHORT: no signal
+2026-06-14 15:59:15,330 [INFO] signal_engine: Check BCH_USDT: +1 H1, +0 H4
+2026-06-14 15:59:15,338 [INFO] signal_engine: BCH_USDT | close=201.3300 | H1 EMA21=204.6237 EMA50=205.1168 | H4 EMA50=214.3294 EMA100=242.6755 EMA200=293.0281 | ATR=1.2759
+2026-06-14 15:59:15,341 [INFO] signal_engine: Pullback EMA Trend BCH_USDT LONG: no signal
+2026-06-14 15:59:15,341 [INFO] signal_engine: Pullback EMA Trend BCH_USDT SHORT: no signal
+2026-06-14 15:59:17,422 [INFO] signal_engine: Check WIF_USDT: +1 H1, +0 H4
+2026-06-14 15:59:17,430 [INFO] signal_engine: WIF_USDT | close=0.1579 | H1 EMA21=0.1596 EMA50=0.1594 | H4 EMA50=0.1601 EMA100=0.1669 EMA200=0.1762 | ATR=0.0005
+2026-06-14 15:59:17,432 [INFO] signal_engine: Pullback EMA Trend WIF_USDT LONG: no signal
+2026-06-14 15:59:17,433 [INFO] signal_engine: Pullback EMA Trend WIF_USDT SHORT: no signal
+2026-06-14 15:59:19,423 [INFO] signal_engine: Check XLM_USDT: +1 H1, +0 H4
+2026-06-14 15:59:19,431 [INFO] signal_engine: XLM_USDT | close=0.1815 | H1 EMA21=0.1854 EMA50=0.1872 | H4 EMA50=0.1937 EMA100=0.1946 EMA200=0.1879 | ATR=0.0014
+2026-06-14 15:59:19,434 [INFO] signal_engine: Pullback EMA Trend XLM_USDT LONG: no signal
+2026-06-14 15:59:19,434 [INFO] signal_engine: Pullback EMA Trend XLM_USDT SHORT: no signal
+2026-06-14 15:59:19,434 [INFO] main: --- Fine ciclo di scansione ---
