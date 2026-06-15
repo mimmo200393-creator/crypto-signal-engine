@@ -3,16 +3,14 @@ name: Crypto Signal Engine V2.1 - Scan
 on:
   schedule:
     - cron: "*/15 * * * *"
-
   workflow_dispatch:
     inputs:
       send_test_alert:
         description: "Invia alert di TEST con dati finti (non fa scan)"
         type: boolean
         default: false
-
       test_low_threshold:
-        description: "Scan reale con soglia Telegram abbassata a 5"
+        description: "Scan reale con soglia Final Score abbassata a 5 (test pipeline)"
         type: boolean
         default: false
 
@@ -46,8 +44,7 @@ jobs:
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt --break-system-packages || pip install -r requirements.txt
+        run: pip install -r requirements.txt --break-system-packages || pip install -r requirements.txt
 
       - name: Run scan cycle
         env:
@@ -62,11 +59,8 @@ jobs:
         run: |
           git config user.name "signal-engine-bot"
           git config user.email "actions@github.com"
-
           git add data/signals.db logs/engine.log
-
           git diff --staged --quiet || git commit -m "Scan V2.1 $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-
           git push
 
       - name: Daily Brief (08:00 UTC)
@@ -78,38 +72,19 @@ jobs:
         run: |
           HOUR=$(date -u +%H)
           MINUTE=$(date -u +%M)
-
           if [ "$HOUR" = "08" ] && [ "$MINUTE" -lt "20" ]; then
-
-            python3 << 'EOF'
-import os
-import yaml
-
+            python3 -c "
+import os, yaml
 from storage import db
 from core import daily_brief
-
-config = yaml.safe_load(open("config.yaml"))
-
-config["TELEGRAM_BOT_TOKEN"] = os.environ.get(
-    "TELEGRAM_BOT_TOKEN", ""
-)
-
-config["TELEGRAM_CHAT_ID"] = os.environ.get(
-    "TELEGRAM_CHAT_ID", ""
-)
-
-config["NTFY_TOPIC"] = os.environ.get(
-    "NTFY_TOPIC", ""
-)
-
-conn = db.get_connection(config["DB_PATH"])
-
+config = yaml.safe_load(open('config.yaml'))
+config['TELEGRAM_BOT_TOKEN'] = os.environ.get('TELEGRAM_BOT_TOKEN','')
+config['TELEGRAM_CHAT_ID'] = os.environ.get('TELEGRAM_CHAT_ID','')
+config['NTFY_TOPIC'] = os.environ.get('NTFY_TOPIC','')
+conn = db.get_connection(config['DB_PATH'])
 db.init_db(conn)
-
 daily_brief.send_daily_brief(conn, config)
-
-EOF
-
+"
           fi
 
       - name: Generate dashboard
@@ -119,9 +94,6 @@ EOF
         run: |
           git config user.name "signal-engine-bot"
           git config user.email "actions@github.com"
-
           git add docs/index.html
-
           git diff --staged --quiet || git commit -m "Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-
           git push
