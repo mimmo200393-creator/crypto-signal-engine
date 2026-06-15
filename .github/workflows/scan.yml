@@ -1,99 +1,240 @@
-name: Crypto Signal Engine V2.1 - Scan
+# ============================================================
+# Crypto Signal Engine - Institutional Adaptive Framework V2.1
+# ============================================================
 
-on:
-  schedule:
-    - cron: "*/15 * * * *"
-  workflow_dispatch:
-    inputs:
-      send_test_alert:
-        description: "Invia alert di TEST con dati finti (non fa scan)"
-        type: boolean
-        default: false
-      test_low_threshold:
-        description: "Scan reale con soglia Final Score abbassata a 5 (test pipeline)"
-        type: boolean
-        default: false
+FRAMEWORK_NAME: "Crypto Signal Engine"
+FRAMEWORK_VERSION: "V2.1"
 
-permissions:
-  contents: write
+# ============================================================
+# Strategie abilitate
+# ============================================================
+STRATEGIES:
+  pullback_ema:
+    enabled: true
 
-concurrency:
-  group: signal-engine-scan
-  cancel-in-progress: false
+  breakout_retest:
+    enabled: true
 
-jobs:
-  scan:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  liquidity_sweep:
+    enabled: true
 
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+  compression_breakout:
+    enabled: true
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+  pivot_reversal:
+    enabled: true
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+  zone_confirmation:
+    enabled: true
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt --break-system-packages || pip install -r requirements.txt
+# ============================================================
+# Correlation Engine
+# ============================================================
+CORRELATION_THRESHOLD: 0.80
+CORRELATION_LOOKBACK: 100
+CORRELATION_TIMEFRAME: "H1"
 
-      - name: Run scan cycle
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          SEND_TEST_ALERT: ${{ github.event.inputs.send_test_alert }}
-          TELEGRAM_SCORE_THRESHOLD_OVERRIDE: ${{ github.event.inputs.test_low_threshold == 'true' && '5' || '' }}
-        run: python3 main.py
+# ============================================================
+# Scoring e notifiche
+# ============================================================
+NOTIFY_FINAL_SCORE_THRESHOLD: 8
 
-      - name: Commit database e log
-        run: |
-          git config user.name "signal-engine-bot"
-          git config user.email "actions@github.com"
-          git add data/signals.db logs/engine.log
-          git diff --staged --quiet || git commit -m "Scan V2.1 $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          git push
+# ============================================================
+# Parametri operativi Pullback EMA V1.0 Frozen
+# ============================================================
+STRATEGY_NAME: "Pullback EMA Trend Strategy"
+STRATEGY_VERSION: "V1.0"
 
-      - name: Daily Brief (08:00 UTC)
-        if: ${{ github.event_name == 'schedule' }}
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: |
-          HOUR=$(date -u +%H)
-          MINUTE=$(date -u +%M)
-          if [ "$HOUR" = "08" ] && [ "$MINUTE" -lt "20" ]; then
-            python3 -c "
-import os, yaml
-from storage import db
-from core import daily_brief
-config = yaml.safe_load(open('config.yaml'))
-config['TELEGRAM_BOT_TOKEN'] = os.environ.get('TELEGRAM_BOT_TOKEN','')
-config['TELEGRAM_CHAT_ID'] = os.environ.get('TELEGRAM_CHAT_ID','')
-config['NTFY_TOPIC'] = os.environ.get('NTFY_TOPIC','')
-conn = db.get_connection(config['DB_PATH'])
-db.init_db(conn)
-daily_brief.send_daily_brief(conn, config)
-"
-          fi
+ATR_MULTIPLIER: 1.5
+MIN_RR: 2.0
 
-      - name: Generate dashboard
-        run: python3 generate_dashboard.py
+DB_SCORE_THRESHOLD: 8
+TELEGRAM_SCORE_THRESHOLD: 8
 
-      - name: Commit dashboard
-        run: |
-          git config user.name "signal-engine-bot"
-          git config user.email "actions@github.com"
-          git add docs/index.html
-          git diff --staged --quiet || git commit -m "Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          git push
+COOLDOWN_HOURS: 12
+TRADE_EXPIRY_BARS: 72
+
+SCAN_INTERVAL_MINUTES: 15
+PIVOT_LOOKBACK: 5
+
+# ============================================================
+# Exchange / Dati
+# ============================================================
+EXCHANGE_BASE_URL: "https://api.crypto.com/exchange/v1"
+
+MAX_CANDLES_PER_CALL: 300
+BOOTSTRAP_TARGET_CANDLES: 300
+
+REQUEST_DELAY_SECONDS: 0.75
+
+# ============================================================
+# Notifiche
+# (valori reali gestiti tramite GitHub Secrets)
+# ============================================================
+TELEGRAM_BOT_TOKEN: ""
+TELEGRAM_CHAT_ID: ""
+
+DISCORD_WEBHOOK_URL: ""
+
+NTFY_TOPIC: ""
+
+# ============================================================
+# Macro
+# ============================================================
+MACRO_EVENTS_FILE: "macro_events.yaml"
+
+MACRO_WINDOW_MINUTES: 60
+
+# ============================================================
+# Database e logging
+# ============================================================
+DB_PATH: "data/signals.db"
+
+LOG_FILE: "logs/engine.log"
+
+# ============================================================
+# Watchlist
+# ============================================================
+WATCHLIST:
+  - BTC_USDT
+  - ETH_USDT
+  - ADA_USDT
+  - SOL_USDT
+  - LINK_USDT
+  - XRP_USDT
+  - DOGE_USDT
+  - LTC_USDT
+  - DOT_USDT
+  - FIL_USDT
+  - BCH_USDT
+  - WIF_USDT
+  - XLM_USDT
+  - PAXG_USDT
+
+# ============================================================
+# Timeframe
+# ============================================================
+TIMEFRAMES:
+  H4: "4h"
+  H1: "1h"
+
+# ============================================================
+# Indicatori
+# ============================================================
+EMA_PERIODS:
+  - 21
+  - 50
+  - 100
+  - 200
+
+ATR_PERIOD: 14
+
+# ============================================================
+# Zone + Confirmation Strategy V1.0 Frozen
+# ============================================================
+ZONE_CONFIRMATION:
+  DAILY_BRIEF_HOUR_UTC: 8
+
+  PROXIMITY_ALERT_PERCENT: 0.5
+
+  PIVOT_LOOKBACK_H4: 20
+
+  MIN_ZONE_TOUCHES: 2
+
+  ZONE_CLUSTER_ATR_MULTIPLIER: 0.5
+
+  REJECTION_WICK_BODY_RATIO: 2.0
+
+  SWEEP_WICK_BODY_RATIO: 2.0
+
+  EMA_PULLBACK_ATR_DISTANCE: 0.3
+
+  MIN_RR: 2.0
+
+  DATABASE_SCORE_THRESHOLD: 6
+
+  TELEGRAM_SCORE_THRESHOLD: 7
+
+  ELITE_SCORE_THRESHOLD: 9
+
+  MAX_OPEN_TRADES_TOTAL: 2
+
+  MAX_OPEN_TRADES_PER_ASSET: 1
+
+  MACRO_EVENTS_ENABLED: true
+
+  MACRO_BLOCK_SIGNALS: false
+
+  ALLOWED_PATTERNS:
+    - rejection
+    - liquidity_sweep
+    - pullback_ema
+
+# ============================================================
+# Sessioni operative
+# ============================================================
+SESSIONS:
+  LONDON:
+    START_UTC: "08:00"
+    END_UTC: "10:00"
+
+  NEW_YORK:
+    START_UTC: "13:00"
+    END_UTC: "15:00"
+
+  AVOID:
+    START_UTC: "04:00"
+    END_UTC: "07:00"
+
+# ============================================================
+# Daily Brief
+# ============================================================
+DAILY_BRIEF:
+  ENABLED: true
+
+  SEND_TO_TELEGRAM: true
+
+  SEND_TO_NTFY: true
+
+  INCLUDE_ATR_DAILY: true
+
+  INCLUDE_BIAS: true
+
+  INCLUDE_OPERATIONAL_HINT: true
+
+# ============================================================
+# Zone Alerts
+# ============================================================
+ZONE_ALERTS:
+  ENABLED: true
+
+  INCLUDE_VOLUME: true
+
+  INCLUDE_H1_MOMENTUM: true
+
+  INCLUDE_H4_BIAS: true
+
+# ============================================================
+# Dashboard
+# ============================================================
+DASHBOARD:
+  ENABLED: true
+
+  OUTPUT_FILE: "docs/index.html"
+
+# ============================================================
+# Diagnostics
+# ============================================================
+SIGNAL_DIAGNOSTICS:
+  ENABLED: true
+
+  SAVE_REJECTED_SIGNALS: true
+
+  LOG_CONDITIONS:
+    - trend_h4
+    - trend_h1
+    - zone_valid
+    - pattern_valid
+    - rr_valid
+    - macro_check
+    - trade_limit_check
