@@ -24,6 +24,9 @@ STRATEGIES:
   pivot_reversal:
     enabled: true
 
+  zone_confirmation:
+    enabled: true     # Zone + Confirmation V1.0
+
 # ============================================================
 # Correlation Engine
 # ============================================================
