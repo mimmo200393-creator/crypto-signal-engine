@@ -124,3 +124,71 @@ def format_alert(setup: dict, score: int, label: str) -> str:
 def send_alert(bot_token: str, chat_id: str, setup: dict, score: int, label: str) -> bool:
     text = format_alert(setup, score, label)
     return send_message(bot_token, chat_id, text)
+
+
+# ============================================================
+# Zone + Confirmation — formato specifico
+# ============================================================
+
+def format_zone_signal_alert(signal, label: str) -> str:
+    """Formato specifico per Zone + Confirmation V1.0."""
+    direction_emoji = "🟢" if signal.direction == "LONG" else "🔴"
+    ctx = signal.additional_context or {}
+
+    zone_level  = ctx.get("zone_level", 0)
+    zone_touches = ctx.get("zone_touches", 0)
+    bias_h4     = ctx.get("bias_h4", "N/A")
+    pattern     = ctx.get("pattern_name", "N/A")
+    macro_risk  = ctx.get("macro_risk", "LOW")
+    session     = ctx.get("session", "N/A")
+    momentum    = ctx.get("momentum", "N/A")
+    atr_daily   = ctx.get("atr_daily", 0)
+
+    def fp(v):
+        if v > 1000: return f"{v:,.2f}"
+        elif v > 1:  return f"{v:.4f}"
+        elif v > 0.001: return f"{v:.5f}"
+        return f"{v:.8f}"
+
+    momentum_arrow = "↓" if momentum == "DOWN" else "↑"
+
+    text = (
+        f"{label}\n\n"
+        f"Strategia: *Zone + Confirmation V1.0*\n"
+        f"{direction_emoji} Asset: *{signal.asset}*\n"
+        f"Direzione: *{signal.direction}*\n\n"
+        f"Entry:       `{fp(signal.entry)}`\n"
+        f"Stop Loss:   `{fp(signal.stop_loss)}`\n"
+        f"Take Profit: `{fp(signal.take_profit)}`\n"
+        f"R/R: *{signal.rr:.2f}*\n\n"
+        f"Raw Score:   *{signal.raw_score:.0f}/11*\n"
+        f"Final Score: *{signal.final_score:.0f}/11*\n\n"
+        f"Bias H4: {bias_h4}\n"
+        f"Zona: `{fp(zone_level)}` ({zone_touches} tocchi)\n"
+        f"ATR Daily: `{fp(atr_daily)}`\n"
+        f"Macro Risk: {macro_risk}\n"
+        f"Sessione: {session}\n"
+        f"Momentum: {momentum_arrow} {momentum}\n"
+        f"Pattern: {pattern}"
+    )
+
+    macro_event = ctx.get("macro_event")
+    if macro_event and macro_risk in ("MEDIUM", "HIGH"):
+        mtr = macro_event.get("minutes_to_release", 0)
+        if mtr >= 0:
+            text += f"\n\n⚠️ Macro: {macro_event['type']} in {mtr} min"
+        else:
+            text += f"\n\n⚠️ Macro: {macro_event['type']} {abs(mtr)} min ago"
+
+    return text
+
+
+def send_zone_signal_alert(bot_token: str, chat_id: str, signal) -> bool:
+    """Invia notifica Zone + Confirmation con formato dedicato."""
+    score = signal.final_score
+    if score >= 9:
+        label = "⭐ ELITE SETUP"
+    else:
+        label = "🔥 HIGH QUALITY SETUP"
+    text = format_zone_signal_alert(signal, label)
+    return send_message(bot_token, chat_id, text)
