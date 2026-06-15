@@ -1,9 +1,6 @@
 """
 core/strategy_registry.py
-Registry centralizzato delle strategie V2.1.
-
-Carica automaticamente tutte le strategie abilitate dal config YAML.
-Il Signal Engine itera su registry.active_strategies.
+Registry centralizzato delle strategie V2.2.
 """
 
 import logging
@@ -52,6 +49,10 @@ def build_registry(config: dict) -> StrategyRegistry:
     if strategies_cfg.get("pivot_reversal", {}).get("enabled", False):
         from strategies.pivot_reversal import PivotReversal
         registry.register(PivotReversal())
+
+    if strategies_cfg.get("zone_confirmation", {}).get("enabled", False):
+        from strategies.zone_confirmation import ZoneConfirmation
+        registry.register(ZoneConfirmation())
 
     logger.info("Registry caricato: %d strategie attive", len(registry))
     return registry
