@@ -9481,3 +9481,7 @@
   ✗ Pattern Pullback EMA
   Rejected: NO_PATTERN_CONFIRMED
 2026-06-15 21:44:02,582 [INFO] main: --- Fine ciclo di scansione ---
+2026-06-15 22:13:14,633 [INFO] main: Avvio Crypto Signal Engine V2.1 | strategie=['pullback_ema', 'breakout_retest', 'liquidity_sweep', 'compression_breakout', 'pivot_reversal', 'zone_confirmation'] | watchlist=14 asset
+2026-06-15 22:13:14,634 [INFO] main: TEST ALERT MODE
+2026-06-15 22:13:15,098 [INFO] main: Test alert Telegram: True
+2026-06-15 22:13:15,239 [INFO] main: Test alert ntfy: True
