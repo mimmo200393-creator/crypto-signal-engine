@@ -46,13 +46,22 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt --break-system-packages || pip install -r requirements.txt
 
+      - name: Set threshold override
+        id: threshold
+        run: |
+          if [ "${{ github.event.inputs.test_low_threshold }}" = "true" ]; then
+            echo "value=5" >> $GITHUB_OUTPUT
+          else
+            echo "value=" >> $GITHUB_OUTPUT
+          fi
+
       - name: Run scan cycle
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           SEND_TEST_ALERT: ${{ github.event.inputs.send_test_alert }}
-          TEST_LOW_THRESHOLD: ${{ github.event.inputs.test_low_threshold }}
+          TELEGRAM_SCORE_THRESHOLD_OVERRIDE: ${{ steps.threshold.outputs.value }}
         run: python3 main.py
 
       - name: Commit database e log
@@ -73,18 +82,7 @@ jobs:
           HOUR=$(date -u +%H)
           MINUTE=$(date -u +%M)
           if [ "$HOUR" = "08" ] && [ "$MINUTE" -lt "20" ]; then
-            python3 -c "
-import os, yaml
-from storage import db
-from core import daily_brief
-config = yaml.safe_load(open('config.yaml'))
-config['TELEGRAM_BOT_TOKEN'] = os.environ.get('TELEGRAM_BOT_TOKEN','')
-config['TELEGRAM_CHAT_ID'] = os.environ.get('TELEGRAM_CHAT_ID','')
-config['NTFY_TOPIC'] = os.environ.get('NTFY_TOPIC','')
-conn = db.get_connection(config['DB_PATH'])
-db.init_db(conn)
-daily_brief.send_daily_brief(conn, config)
-"
+            python3 daily_brief_runner.py
           fi
 
       - name: Generate dashboard
