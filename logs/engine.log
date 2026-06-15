@@ -5181,3 +5181,980 @@
 2026-06-14 23:56:28,406 [INFO] signal_engine: Pivot Reversal PAXG_USDT LONG: no signal
 2026-06-14 23:56:28,406 [INFO] signal_engine: Pivot Reversal PAXG_USDT SHORT: no signal
 2026-06-14 23:56:28,406 [INFO] main: --- Fine ciclo di scansione ---
+2026-06-15 05:16:40,312 [INFO] main: Avvio Crypto Signal Engine V2.1 | strategie=['pullback_ema', 'breakout_retest', 'liquidity_sweep', 'compression_breakout', 'pivot_reversal'] | watchlist=14 asset
+2026-06-15 05:16:40,315 [INFO] strategy_registry: Strategia registrata: Pullback EMA Trend V1.0
+2026-06-15 05:16:40,317 [INFO] strategy_registry: Strategia registrata: Breakout Retest V1.0
+2026-06-15 05:16:40,319 [INFO] strategy_registry: Strategia registrata: Liquidity Sweep V1.0
+2026-06-15 05:16:40,320 [INFO] strategy_registry: Strategia registrata: Compression Breakout V1.0
+2026-06-15 05:16:40,322 [INFO] strategy_registry: Strategia registrata: Pivot Reversal V1.0
+2026-06-15 05:16:40,322 [INFO] strategy_registry: Registry caricato: 5 strategie attive
+2026-06-15 05:16:40,322 [INFO] main: Bootstrap storico...
+2026-06-15 05:16:40,322 [INFO] signal_engine: Bootstrap skip: BTC_USDT 4h (311 candele)
+2026-06-15 05:16:40,322 [INFO] signal_engine: Bootstrap skip: BTC_USDT 1h (345 candele)
+2026-06-15 05:16:40,322 [INFO] signal_engine: Bootstrap skip: ETH_USDT 4h (311 candele)
+2026-06-15 05:16:40,323 [INFO] signal_engine: Bootstrap skip: ETH_USDT 1h (345 candele)
+2026-06-15 05:16:40,323 [INFO] signal_engine: Bootstrap skip: ADA_USDT 4h (311 candele)
+2026-06-15 05:16:40,323 [INFO] signal_engine: Bootstrap skip: ADA_USDT 1h (345 candele)
+2026-06-15 05:16:40,323 [INFO] signal_engine: Bootstrap skip: SOL_USDT 4h (311 candele)
+2026-06-15 05:16:40,323 [INFO] signal_engine: Bootstrap skip: SOL_USDT 1h (345 candele)
+2026-06-15 05:16:40,323 [INFO] signal_engine: Bootstrap skip: LINK_USDT 4h (311 candele)
+2026-06-15 05:16:40,323 [INFO] signal_engine: Bootstrap skip: LINK_USDT 1h (345 candele)
+2026-06-15 05:16:40,323 [INFO] signal_engine: Bootstrap skip: XRP_USDT 4h (311 candele)
+2026-06-15 05:16:40,323 [INFO] signal_engine: Bootstrap skip: XRP_USDT 1h (345 candele)
+2026-06-15 05:16:40,324 [INFO] signal_engine: Bootstrap skip: DOGE_USDT 4h (311 candele)
+2026-06-15 05:16:40,324 [INFO] signal_engine: Bootstrap skip: DOGE_USDT 1h (345 candele)
+2026-06-15 05:16:40,324 [INFO] signal_engine: Bootstrap skip: LTC_USDT 4h (311 candele)
+2026-06-15 05:16:40,324 [INFO] signal_engine: Bootstrap skip: LTC_USDT 1h (345 candele)
+2026-06-15 05:16:40,324 [INFO] signal_engine: Bootstrap skip: DOT_USDT 4h (311 candele)
+2026-06-15 05:16:40,324 [INFO] signal_engine: Bootstrap skip: DOT_USDT 1h (345 candele)
+2026-06-15 05:16:40,324 [INFO] signal_engine: Bootstrap skip: FIL_USDT 4h (302 candele)
+2026-06-15 05:16:40,324 [INFO] signal_engine: Bootstrap skip: FIL_USDT 1h (311 candele)
+2026-06-15 05:16:40,324 [INFO] signal_engine: Bootstrap skip: BCH_USDT 4h (311 candele)
+2026-06-15 05:16:40,325 [INFO] signal_engine: Bootstrap skip: BCH_USDT 1h (345 candele)
+2026-06-15 05:16:40,325 [INFO] signal_engine: Bootstrap skip: WIF_USDT 4h (302 candele)
+2026-06-15 05:16:40,325 [INFO] signal_engine: Bootstrap skip: WIF_USDT 1h (311 candele)
+2026-06-15 05:16:40,325 [INFO] signal_engine: Bootstrap skip: XLM_USDT 4h (302 candele)
+2026-06-15 05:16:40,325 [INFO] signal_engine: Bootstrap skip: XLM_USDT 1h (311 candele)
+2026-06-15 05:16:40,325 [INFO] signal_engine: Bootstrap skip: PAXG_USDT 4h (300 candele)
+2026-06-15 05:16:40,325 [INFO] signal_engine: Bootstrap skip: PAXG_USDT 1h (301 candele)
+2026-06-15 05:16:40,325 [INFO] main: Bootstrap completato.
+2026-06-15 05:16:40,325 [INFO] main: --- Inizio ciclo di scansione ---
+2026-06-15 05:16:42,334 [INFO] signal_engine: Check BTC_USDT: +6 H1, +2 H4
+2026-06-15 05:16:42,345 [INFO] signal_engine: BTC_USDT | close=65712.5700 | H1 EMA21=64976.2298 EMA50=64489.5131 | H4 EMA50=64069.6907 EMA100=65923.3052 EMA200=69463.0215 | ATR=325.1455
+2026-06-15 05:16:42,347 [INFO] signal_engine: Pullback EMA Trend BTC_USDT LONG: no signal
+2026-06-15 05:16:42,348 [INFO] signal_engine: Pullback EMA Trend BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,348 [INFO] signal_engine: Breakout Retest BTC_USDT LONG: no signal
+2026-06-15 05:16:42,349 [INFO] signal_engine: Breakout Retest BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,350 [INFO] signal_engine: Liquidity Sweep BTC_USDT LONG: no signal
+2026-06-15 05:16:42,351 [INFO] signal_engine: Liquidity Sweep BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,352 [INFO] signal_engine: Compression Breakout BTC_USDT LONG: no signal
+2026-06-15 05:16:42,352 [INFO] signal_engine: Compression Breakout BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,353 [INFO] signal_engine: Pivot Reversal BTC_USDT LONG: no signal
+2026-06-15 05:16:42,353 [INFO] signal_engine: Pivot Reversal BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,362 [INFO] signal_engine: BTC_USDT | close=65712.5700 | H1 EMA21=64976.2298 EMA50=64489.5131 | H4 EMA50=64069.6907 EMA100=65923.3052 EMA200=69463.0215 | ATR=325.1455
+2026-06-15 05:16:42,364 [INFO] signal_engine: Pullback EMA Trend BTC_USDT LONG: no signal
+2026-06-15 05:16:42,365 [INFO] signal_engine: Pullback EMA Trend BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,365 [INFO] signal_engine: Breakout Retest BTC_USDT LONG: no signal
+2026-06-15 05:16:42,366 [INFO] signal_engine: Breakout Retest BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,367 [INFO] signal_engine: Liquidity Sweep BTC_USDT LONG: no signal
+2026-06-15 05:16:42,368 [INFO] signal_engine: Liquidity Sweep BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,368 [INFO] signal_engine: Compression Breakout BTC_USDT LONG: no signal
+2026-06-15 05:16:42,369 [INFO] signal_engine: Compression Breakout BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,370 [INFO] signal_engine: Pivot Reversal BTC_USDT LONG: no signal
+2026-06-15 05:16:42,370 [INFO] signal_engine: Pivot Reversal BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,379 [INFO] signal_engine: BTC_USDT | close=65712.5700 | H1 EMA21=64976.2298 EMA50=64489.5131 | H4 EMA50=64069.6907 EMA100=65923.3052 EMA200=69463.0215 | ATR=325.1455
+2026-06-15 05:16:42,381 [INFO] signal_engine: Pullback EMA Trend BTC_USDT LONG: no signal
+2026-06-15 05:16:42,382 [INFO] signal_engine: Pullback EMA Trend BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,382 [INFO] signal_engine: Breakout Retest BTC_USDT LONG: no signal
+2026-06-15 05:16:42,383 [INFO] signal_engine: Breakout Retest BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,384 [INFO] signal_engine: Liquidity Sweep BTC_USDT LONG: no signal
+2026-06-15 05:16:42,385 [INFO] signal_engine: Liquidity Sweep BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,385 [INFO] signal_engine: Compression Breakout BTC_USDT LONG: no signal
+2026-06-15 05:16:42,386 [INFO] signal_engine: Compression Breakout BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,386 [INFO] signal_engine: Pivot Reversal BTC_USDT LONG: no signal
+2026-06-15 05:16:42,387 [INFO] signal_engine: Pivot Reversal BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,396 [INFO] signal_engine: BTC_USDT | close=65712.5700 | H1 EMA21=64976.2298 EMA50=64489.5131 | H4 EMA50=64069.6907 EMA100=65923.3052 EMA200=69463.0215 | ATR=325.1455
+2026-06-15 05:16:42,397 [INFO] signal_engine: Pullback EMA Trend BTC_USDT LONG: no signal
+2026-06-15 05:16:42,398 [INFO] signal_engine: Pullback EMA Trend BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,399 [INFO] signal_engine: Breakout Retest BTC_USDT LONG: no signal
+2026-06-15 05:16:42,399 [INFO] signal_engine: Breakout Retest BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,400 [INFO] signal_engine: Liquidity Sweep BTC_USDT LONG: no signal
+2026-06-15 05:16:42,401 [INFO] signal_engine: Liquidity Sweep BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,402 [INFO] signal_engine: Compression Breakout BTC_USDT LONG: no signal
+2026-06-15 05:16:42,402 [INFO] signal_engine: Compression Breakout BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,403 [INFO] signal_engine: Pivot Reversal BTC_USDT LONG: no signal
+2026-06-15 05:16:42,403 [INFO] signal_engine: Pivot Reversal BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,412 [INFO] signal_engine: BTC_USDT | close=65712.5700 | H1 EMA21=64976.2298 EMA50=64489.5131 | H4 EMA50=64069.6907 EMA100=65923.3052 EMA200=69463.0215 | ATR=325.1455
+2026-06-15 05:16:42,414 [INFO] signal_engine: Pullback EMA Trend BTC_USDT LONG: no signal
+2026-06-15 05:16:42,415 [INFO] signal_engine: Pullback EMA Trend BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,415 [INFO] signal_engine: Breakout Retest BTC_USDT LONG: no signal
+2026-06-15 05:16:42,416 [INFO] signal_engine: Breakout Retest BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,417 [INFO] signal_engine: Liquidity Sweep BTC_USDT LONG: no signal
+2026-06-15 05:16:42,418 [INFO] signal_engine: Liquidity Sweep BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,418 [INFO] signal_engine: Compression Breakout BTC_USDT LONG: no signal
+2026-06-15 05:16:42,419 [INFO] signal_engine: Compression Breakout BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,420 [INFO] signal_engine: Pivot Reversal BTC_USDT LONG: no signal
+2026-06-15 05:16:42,420 [INFO] signal_engine: Pivot Reversal BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,430 [INFO] signal_engine: BTC_USDT | close=65712.5700 | H1 EMA21=64976.2298 EMA50=64489.5131 | H4 EMA50=64069.6907 EMA100=65923.3052 EMA200=69463.0215 | ATR=325.1455
+2026-06-15 05:16:42,432 [INFO] signal_engine: Pullback EMA Trend BTC_USDT LONG: no signal
+2026-06-15 05:16:42,432 [INFO] signal_engine: Pullback EMA Trend BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,433 [INFO] signal_engine: Breakout Retest BTC_USDT LONG: no signal
+2026-06-15 05:16:42,434 [INFO] signal_engine: Breakout Retest BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,435 [INFO] signal_engine: Liquidity Sweep BTC_USDT LONG: no signal
+2026-06-15 05:16:42,436 [INFO] signal_engine: Liquidity Sweep BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,436 [INFO] signal_engine: Compression Breakout BTC_USDT LONG: no signal
+2026-06-15 05:16:42,437 [INFO] signal_engine: Compression Breakout BTC_USDT SHORT: no signal
+2026-06-15 05:16:42,437 [INFO] signal_engine: Pivot Reversal BTC_USDT LONG: no signal
+2026-06-15 05:16:42,438 [INFO] signal_engine: Pivot Reversal BTC_USDT SHORT: no signal
+2026-06-15 05:16:44,441 [INFO] signal_engine: Check ETH_USDT: +6 H1, +2 H4
+2026-06-15 05:16:44,451 [INFO] signal_engine: ETH_USDT | close=1718.2000 | H1 EMA21=1697.6449 EMA50=1685.3680 | H4 EMA50=1689.5320 EMA100=1762.3823 EMA200=1898.7794 | ATR=9.2932
+2026-06-15 05:16:44,453 [INFO] signal_engine: Pullback EMA Trend ETH_USDT LONG: no signal
+2026-06-15 05:16:44,453 [INFO] signal_engine: Pullback EMA Trend ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,454 [INFO] signal_engine: Breakout Retest ETH_USDT LONG: no signal
+2026-06-15 05:16:44,454 [INFO] signal_engine: Breakout Retest ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,455 [INFO] signal_engine: Liquidity Sweep ETH_USDT LONG: no signal
+2026-06-15 05:16:44,456 [INFO] signal_engine: Liquidity Sweep ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,457 [INFO] signal_engine: Compression Breakout ETH_USDT LONG: no signal
+2026-06-15 05:16:44,457 [INFO] signal_engine: Compression Breakout ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,458 [INFO] signal_engine: Pivot Reversal ETH_USDT LONG: no signal
+2026-06-15 05:16:44,458 [INFO] signal_engine: Pivot Reversal ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,467 [INFO] signal_engine: ETH_USDT | close=1718.2000 | H1 EMA21=1697.6449 EMA50=1685.3680 | H4 EMA50=1689.5320 EMA100=1762.3823 EMA200=1898.7794 | ATR=9.2932
+2026-06-15 05:16:44,469 [INFO] signal_engine: Pullback EMA Trend ETH_USDT LONG: no signal
+2026-06-15 05:16:44,469 [INFO] signal_engine: Pullback EMA Trend ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,470 [INFO] signal_engine: Breakout Retest ETH_USDT LONG: no signal
+2026-06-15 05:16:44,470 [INFO] signal_engine: Breakout Retest ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,471 [INFO] signal_engine: Liquidity Sweep ETH_USDT LONG: no signal
+2026-06-15 05:16:44,472 [INFO] signal_engine: Liquidity Sweep ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,472 [INFO] signal_engine: Compression Breakout ETH_USDT LONG: no signal
+2026-06-15 05:16:44,473 [INFO] signal_engine: Compression Breakout ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,473 [INFO] signal_engine: Pivot Reversal ETH_USDT LONG: no signal
+2026-06-15 05:16:44,474 [INFO] signal_engine: Pivot Reversal ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,483 [INFO] signal_engine: ETH_USDT | close=1718.2000 | H1 EMA21=1697.6449 EMA50=1685.3680 | H4 EMA50=1689.5320 EMA100=1762.3823 EMA200=1898.7794 | ATR=9.2932
+2026-06-15 05:16:44,484 [INFO] signal_engine: Pullback EMA Trend ETH_USDT LONG: no signal
+2026-06-15 05:16:44,485 [INFO] signal_engine: Pullback EMA Trend ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,486 [INFO] signal_engine: Breakout Retest ETH_USDT LONG: no signal
+2026-06-15 05:16:44,486 [INFO] signal_engine: Breakout Retest ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,487 [INFO] signal_engine: Liquidity Sweep ETH_USDT LONG: no signal
+2026-06-15 05:16:44,488 [INFO] signal_engine: Liquidity Sweep ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,488 [INFO] signal_engine: Compression Breakout ETH_USDT LONG: no signal
+2026-06-15 05:16:44,489 [INFO] signal_engine: Compression Breakout ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,489 [INFO] signal_engine: Pivot Reversal ETH_USDT LONG: no signal
+2026-06-15 05:16:44,490 [INFO] signal_engine: Pivot Reversal ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,499 [INFO] signal_engine: ETH_USDT | close=1718.2000 | H1 EMA21=1697.6449 EMA50=1685.3680 | H4 EMA50=1689.5320 EMA100=1762.3823 EMA200=1898.7794 | ATR=9.2932
+2026-06-15 05:16:44,500 [INFO] signal_engine: Pullback EMA Trend ETH_USDT LONG: no signal
+2026-06-15 05:16:44,501 [INFO] signal_engine: Pullback EMA Trend ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,501 [INFO] signal_engine: Breakout Retest ETH_USDT LONG: no signal
+2026-06-15 05:16:44,502 [INFO] signal_engine: Breakout Retest ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,503 [INFO] signal_engine: Liquidity Sweep ETH_USDT LONG: no signal
+2026-06-15 05:16:44,504 [INFO] signal_engine: Liquidity Sweep ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,504 [INFO] signal_engine: Compression Breakout ETH_USDT LONG: no signal
+2026-06-15 05:16:44,505 [INFO] signal_engine: Compression Breakout ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,505 [INFO] signal_engine: Pivot Reversal ETH_USDT LONG: no signal
+2026-06-15 05:16:44,506 [INFO] signal_engine: Pivot Reversal ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,515 [INFO] signal_engine: ETH_USDT | close=1718.2000 | H1 EMA21=1697.6449 EMA50=1685.3680 | H4 EMA50=1689.5320 EMA100=1762.3823 EMA200=1898.7794 | ATR=9.2932
+2026-06-15 05:16:44,517 [INFO] signal_engine: Pullback EMA Trend ETH_USDT LONG: no signal
+2026-06-15 05:16:44,517 [INFO] signal_engine: Pullback EMA Trend ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,518 [INFO] signal_engine: Breakout Retest ETH_USDT LONG: no signal
+2026-06-15 05:16:44,518 [INFO] signal_engine: Breakout Retest ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,519 [INFO] signal_engine: Liquidity Sweep ETH_USDT LONG: no signal
+2026-06-15 05:16:44,520 [INFO] signal_engine: Liquidity Sweep ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,521 [INFO] signal_engine: Compression Breakout ETH_USDT LONG: no signal
+2026-06-15 05:16:44,521 [INFO] signal_engine: Compression Breakout ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,522 [INFO] signal_engine: Pivot Reversal ETH_USDT LONG: no signal
+2026-06-15 05:16:44,522 [INFO] signal_engine: Pivot Reversal ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,531 [INFO] signal_engine: ETH_USDT | close=1718.2000 | H1 EMA21=1697.6449 EMA50=1685.3680 | H4 EMA50=1689.5320 EMA100=1762.3823 EMA200=1898.7794 | ATR=9.2932
+2026-06-15 05:16:44,533 [INFO] signal_engine: Pullback EMA Trend ETH_USDT LONG: no signal
+2026-06-15 05:16:44,534 [INFO] signal_engine: Pullback EMA Trend ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,534 [INFO] signal_engine: Breakout Retest ETH_USDT LONG: no signal
+2026-06-15 05:16:44,535 [INFO] signal_engine: Breakout Retest ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,536 [INFO] signal_engine: Liquidity Sweep ETH_USDT LONG: no signal
+2026-06-15 05:16:44,537 [INFO] signal_engine: Liquidity Sweep ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,537 [INFO] signal_engine: Compression Breakout ETH_USDT LONG: no signal
+2026-06-15 05:16:44,538 [INFO] signal_engine: Compression Breakout ETH_USDT SHORT: no signal
+2026-06-15 05:16:44,538 [INFO] signal_engine: Pivot Reversal ETH_USDT LONG: no signal
+2026-06-15 05:16:44,539 [INFO] signal_engine: Pivot Reversal ETH_USDT SHORT: no signal
+2026-06-15 05:16:46,486 [INFO] signal_engine: Check ADA_USDT: +6 H1, +2 H4
+2026-06-15 05:16:46,496 [INFO] signal_engine: ADA_USDT | close=0.1804 | H1 EMA21=0.1751 EMA50=0.1728 | H4 EMA50=0.1736 EMA100=0.1863 EMA200=0.2070 | ATR=0.0023
+2026-06-15 05:16:46,498 [INFO] signal_engine: Pullback EMA Trend ADA_USDT LONG: no signal
+2026-06-15 05:16:46,498 [INFO] signal_engine: Pullback EMA Trend ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,499 [INFO] signal_engine: Breakout Retest ADA_USDT LONG: no signal
+2026-06-15 05:16:46,500 [INFO] signal_engine: Breakout Retest ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,500 [INFO] signal_engine: Liquidity Sweep ADA_USDT LONG: no signal
+2026-06-15 05:16:46,501 [INFO] signal_engine: Liquidity Sweep ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,502 [INFO] signal_engine: Compression Breakout ADA_USDT LONG: no signal
+2026-06-15 05:16:46,502 [INFO] signal_engine: Compression Breakout ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,503 [INFO] signal_engine: Pivot Reversal ADA_USDT LONG: no signal
+2026-06-15 05:16:46,504 [INFO] signal_engine: Pivot Reversal ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,512 [INFO] signal_engine: ADA_USDT | close=0.1804 | H1 EMA21=0.1751 EMA50=0.1728 | H4 EMA50=0.1736 EMA100=0.1863 EMA200=0.2070 | ATR=0.0023
+2026-06-15 05:16:46,514 [INFO] signal_engine: Pullback EMA Trend ADA_USDT LONG: no signal
+2026-06-15 05:16:46,515 [INFO] signal_engine: Pullback EMA Trend ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,515 [INFO] signal_engine: Breakout Retest ADA_USDT LONG: no signal
+2026-06-15 05:16:46,516 [INFO] signal_engine: Breakout Retest ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,517 [INFO] signal_engine: Liquidity Sweep ADA_USDT LONG: no signal
+2026-06-15 05:16:46,518 [INFO] signal_engine: Liquidity Sweep ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,518 [INFO] signal_engine: Compression Breakout ADA_USDT LONG: no signal
+2026-06-15 05:16:46,519 [INFO] signal_engine: Compression Breakout ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,520 [INFO] signal_engine: Pivot Reversal ADA_USDT LONG: no signal
+2026-06-15 05:16:46,520 [INFO] signal_engine: Pivot Reversal ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,529 [INFO] signal_engine: ADA_USDT | close=0.1804 | H1 EMA21=0.1751 EMA50=0.1728 | H4 EMA50=0.1736 EMA100=0.1863 EMA200=0.2070 | ATR=0.0023
+2026-06-15 05:16:46,531 [INFO] signal_engine: Pullback EMA Trend ADA_USDT LONG: no signal
+2026-06-15 05:16:46,531 [INFO] signal_engine: Pullback EMA Trend ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,532 [INFO] signal_engine: Breakout Retest ADA_USDT LONG: no signal
+2026-06-15 05:16:46,533 [INFO] signal_engine: Breakout Retest ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,533 [INFO] signal_engine: Liquidity Sweep ADA_USDT LONG: no signal
+2026-06-15 05:16:46,534 [INFO] signal_engine: Liquidity Sweep ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,535 [INFO] signal_engine: Compression Breakout ADA_USDT LONG: no signal
+2026-06-15 05:16:46,535 [INFO] signal_engine: Compression Breakout ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,536 [INFO] signal_engine: Pivot Reversal ADA_USDT LONG: no signal
+2026-06-15 05:16:46,537 [INFO] signal_engine: Pivot Reversal ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,545 [INFO] signal_engine: ADA_USDT | close=0.1804 | H1 EMA21=0.1751 EMA50=0.1728 | H4 EMA50=0.1736 EMA100=0.1863 EMA200=0.2070 | ATR=0.0023
+2026-06-15 05:16:46,547 [INFO] signal_engine: Pullback EMA Trend ADA_USDT LONG: no signal
+2026-06-15 05:16:46,548 [INFO] signal_engine: Pullback EMA Trend ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,549 [INFO] signal_engine: Breakout Retest ADA_USDT LONG: no signal
+2026-06-15 05:16:46,549 [INFO] signal_engine: Breakout Retest ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,550 [INFO] signal_engine: Liquidity Sweep ADA_USDT LONG: no signal
+2026-06-15 05:16:46,551 [INFO] signal_engine: Liquidity Sweep ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,551 [INFO] signal_engine: Compression Breakout ADA_USDT LONG: no signal
+2026-06-15 05:16:46,552 [INFO] signal_engine: Compression Breakout ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,552 [INFO] signal_engine: Pivot Reversal ADA_USDT LONG: no signal
+2026-06-15 05:16:46,553 [INFO] signal_engine: Pivot Reversal ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,561 [INFO] signal_engine: ADA_USDT | close=0.1804 | H1 EMA21=0.1751 EMA50=0.1728 | H4 EMA50=0.1736 EMA100=0.1863 EMA200=0.2070 | ATR=0.0023
+2026-06-15 05:16:46,563 [INFO] signal_engine: Pullback EMA Trend ADA_USDT LONG: no signal
+2026-06-15 05:16:46,564 [INFO] signal_engine: Pullback EMA Trend ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,564 [INFO] signal_engine: Breakout Retest ADA_USDT LONG: no signal
+2026-06-15 05:16:46,565 [INFO] signal_engine: Breakout Retest ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,566 [INFO] signal_engine: Liquidity Sweep ADA_USDT LONG: no signal
+2026-06-15 05:16:46,567 [INFO] signal_engine: Liquidity Sweep ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,567 [INFO] signal_engine: Compression Breakout ADA_USDT LONG: no signal
+2026-06-15 05:16:46,568 [INFO] signal_engine: Compression Breakout ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,568 [INFO] signal_engine: Pivot Reversal ADA_USDT LONG: no signal
+2026-06-15 05:16:46,569 [INFO] signal_engine: Pivot Reversal ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,577 [INFO] signal_engine: ADA_USDT | close=0.1804 | H1 EMA21=0.1751 EMA50=0.1728 | H4 EMA50=0.1736 EMA100=0.1863 EMA200=0.2070 | ATR=0.0023
+2026-06-15 05:16:46,579 [INFO] signal_engine: Pullback EMA Trend ADA_USDT LONG: no signal
+2026-06-15 05:16:46,580 [INFO] signal_engine: Pullback EMA Trend ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,580 [INFO] signal_engine: Breakout Retest ADA_USDT LONG: no signal
+2026-06-15 05:16:46,581 [INFO] signal_engine: Breakout Retest ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,582 [INFO] signal_engine: Liquidity Sweep ADA_USDT LONG: no signal
+2026-06-15 05:16:46,583 [INFO] signal_engine: Liquidity Sweep ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,583 [INFO] signal_engine: Compression Breakout ADA_USDT LONG: no signal
+2026-06-15 05:16:46,584 [INFO] signal_engine: Compression Breakout ADA_USDT SHORT: no signal
+2026-06-15 05:16:46,584 [INFO] signal_engine: Pivot Reversal ADA_USDT LONG: no signal
+2026-06-15 05:16:46,584 [INFO] signal_engine: Pivot Reversal ADA_USDT SHORT: no signal
+2026-06-15 05:16:48,528 [INFO] signal_engine: Check SOL_USDT: +6 H1, +2 H4
+2026-06-15 05:16:48,538 [INFO] signal_engine: SOL_USDT | close=70.9700 | H1 EMA21=69.5789 EMA50=68.6480 | H4 EMA50=67.8719 EMA100=70.6492 EMA200=75.5427 | ATR=0.5289
+2026-06-15 05:16:48,539 [INFO] signal_engine: Pullback EMA Trend SOL_USDT LONG: no signal
+2026-06-15 05:16:48,540 [INFO] signal_engine: Pullback EMA Trend SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,541 [INFO] signal_engine: Breakout Retest SOL_USDT LONG: no signal
+2026-06-15 05:16:48,541 [INFO] signal_engine: Breakout Retest SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,542 [INFO] signal_engine: Liquidity Sweep SOL_USDT LONG: no signal
+2026-06-15 05:16:48,543 [INFO] signal_engine: Liquidity Sweep SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,544 [INFO] signal_engine: Compression Breakout SOL_USDT LONG: no signal
+2026-06-15 05:16:48,544 [INFO] signal_engine: Compression Breakout SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,545 [INFO] signal_engine: Pivot Reversal SOL_USDT LONG: no signal
+2026-06-15 05:16:48,545 [INFO] signal_engine: Pivot Reversal SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,555 [INFO] signal_engine: SOL_USDT | close=70.9700 | H1 EMA21=69.5789 EMA50=68.6480 | H4 EMA50=67.8719 EMA100=70.6492 EMA200=75.5427 | ATR=0.5289
+2026-06-15 05:16:48,557 [INFO] signal_engine: Pullback EMA Trend SOL_USDT LONG: no signal
+2026-06-15 05:16:48,557 [INFO] signal_engine: Pullback EMA Trend SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,558 [INFO] signal_engine: Breakout Retest SOL_USDT LONG: no signal
+2026-06-15 05:16:48,558 [INFO] signal_engine: Breakout Retest SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,559 [INFO] signal_engine: Liquidity Sweep SOL_USDT LONG: no signal
+2026-06-15 05:16:48,560 [INFO] signal_engine: Liquidity Sweep SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,561 [INFO] signal_engine: Compression Breakout SOL_USDT LONG: no signal
+2026-06-15 05:16:48,561 [INFO] signal_engine: Compression Breakout SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,562 [INFO] signal_engine: Pivot Reversal SOL_USDT LONG: no signal
+2026-06-15 05:16:48,563 [INFO] signal_engine: Pivot Reversal SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,572 [INFO] signal_engine: SOL_USDT | close=70.9700 | H1 EMA21=69.5789 EMA50=68.6480 | H4 EMA50=67.8719 EMA100=70.6492 EMA200=75.5427 | ATR=0.5289
+2026-06-15 05:16:48,574 [INFO] signal_engine: Pullback EMA Trend SOL_USDT LONG: no signal
+2026-06-15 05:16:48,575 [INFO] signal_engine: Pullback EMA Trend SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,576 [INFO] signal_engine: Breakout Retest SOL_USDT LONG: no signal
+2026-06-15 05:16:48,576 [INFO] signal_engine: Breakout Retest SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,577 [INFO] signal_engine: Liquidity Sweep SOL_USDT LONG: no signal
+2026-06-15 05:16:48,578 [INFO] signal_engine: Liquidity Sweep SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,579 [INFO] signal_engine: Compression Breakout SOL_USDT LONG: no signal
+2026-06-15 05:16:48,579 [INFO] signal_engine: Compression Breakout SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,580 [INFO] signal_engine: Pivot Reversal SOL_USDT LONG: no signal
+2026-06-15 05:16:48,581 [INFO] signal_engine: Pivot Reversal SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,590 [INFO] signal_engine: SOL_USDT | close=70.9700 | H1 EMA21=69.5789 EMA50=68.6480 | H4 EMA50=67.8719 EMA100=70.6492 EMA200=75.5427 | ATR=0.5289
+2026-06-15 05:16:48,592 [INFO] signal_engine: Pullback EMA Trend SOL_USDT LONG: no signal
+2026-06-15 05:16:48,593 [INFO] signal_engine: Pullback EMA Trend SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,593 [INFO] signal_engine: Breakout Retest SOL_USDT LONG: no signal
+2026-06-15 05:16:48,594 [INFO] signal_engine: Breakout Retest SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,594 [INFO] signal_engine: Liquidity Sweep SOL_USDT LONG: no signal
+2026-06-15 05:16:48,595 [INFO] signal_engine: Liquidity Sweep SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,596 [INFO] signal_engine: Compression Breakout SOL_USDT LONG: no signal
+2026-06-15 05:16:48,596 [INFO] signal_engine: Compression Breakout SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,597 [INFO] signal_engine: Pivot Reversal SOL_USDT LONG: no signal
+2026-06-15 05:16:48,597 [INFO] signal_engine: Pivot Reversal SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,606 [INFO] signal_engine: SOL_USDT | close=70.9700 | H1 EMA21=69.5789 EMA50=68.6480 | H4 EMA50=67.8719 EMA100=70.6492 EMA200=75.5427 | ATR=0.5289
+2026-06-15 05:16:48,608 [INFO] signal_engine: Pullback EMA Trend SOL_USDT LONG: no signal
+2026-06-15 05:16:48,609 [INFO] signal_engine: Pullback EMA Trend SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,609 [INFO] signal_engine: Breakout Retest SOL_USDT LONG: no signal
+2026-06-15 05:16:48,610 [INFO] signal_engine: Breakout Retest SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,611 [INFO] signal_engine: Liquidity Sweep SOL_USDT LONG: no signal
+2026-06-15 05:16:48,612 [INFO] signal_engine: Liquidity Sweep SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,612 [INFO] signal_engine: Compression Breakout SOL_USDT LONG: no signal
+2026-06-15 05:16:48,613 [INFO] signal_engine: Compression Breakout SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,613 [INFO] signal_engine: Pivot Reversal SOL_USDT LONG: no signal
+2026-06-15 05:16:48,614 [INFO] signal_engine: Pivot Reversal SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,623 [INFO] signal_engine: SOL_USDT | close=70.9700 | H1 EMA21=69.5789 EMA50=68.6480 | H4 EMA50=67.8719 EMA100=70.6492 EMA200=75.5427 | ATR=0.5289
+2026-06-15 05:16:48,625 [INFO] signal_engine: Pullback EMA Trend SOL_USDT LONG: no signal
+2026-06-15 05:16:48,625 [INFO] signal_engine: Pullback EMA Trend SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,626 [INFO] signal_engine: Breakout Retest SOL_USDT LONG: no signal
+2026-06-15 05:16:48,626 [INFO] signal_engine: Breakout Retest SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,627 [INFO] signal_engine: Liquidity Sweep SOL_USDT LONG: no signal
+2026-06-15 05:16:48,628 [INFO] signal_engine: Liquidity Sweep SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,629 [INFO] signal_engine: Compression Breakout SOL_USDT LONG: no signal
+2026-06-15 05:16:48,629 [INFO] signal_engine: Compression Breakout SOL_USDT SHORT: no signal
+2026-06-15 05:16:48,630 [INFO] signal_engine: Pivot Reversal SOL_USDT LONG: no signal
+2026-06-15 05:16:48,630 [INFO] signal_engine: Pivot Reversal SOL_USDT SHORT: no signal
+2026-06-15 05:16:50,571 [INFO] signal_engine: Check LINK_USDT: +6 H1, +2 H4
+2026-06-15 05:16:50,580 [INFO] signal_engine: LINK_USDT | close=8.1750 | H1 EMA21=8.0369 EMA50=7.9764 | H4 EMA50=7.9488 EMA100=8.1906 EMA200=8.6226 | ATR=0.0501
+2026-06-15 05:16:50,582 [INFO] signal_engine: Pullback EMA Trend LINK_USDT LONG: no signal
+2026-06-15 05:16:50,583 [INFO] signal_engine: Pullback EMA Trend LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,583 [INFO] signal_engine: Breakout Retest LINK_USDT LONG: no signal
+2026-06-15 05:16:50,584 [INFO] signal_engine: Breakout Retest LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,584 [INFO] signal_engine: Liquidity Sweep LINK_USDT LONG: no signal
+2026-06-15 05:16:50,585 [INFO] signal_engine: Liquidity Sweep LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,586 [INFO] signal_engine: Compression Breakout LINK_USDT LONG: no signal
+2026-06-15 05:16:50,586 [INFO] signal_engine: Compression Breakout LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,587 [INFO] signal_engine: Pivot Reversal LINK_USDT LONG: no signal
+2026-06-15 05:16:50,587 [INFO] signal_engine: Pivot Reversal LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,596 [INFO] signal_engine: LINK_USDT | close=8.1750 | H1 EMA21=8.0369 EMA50=7.9764 | H4 EMA50=7.9488 EMA100=8.1906 EMA200=8.6226 | ATR=0.0501
+2026-06-15 05:16:50,598 [INFO] signal_engine: Pullback EMA Trend LINK_USDT LONG: no signal
+2026-06-15 05:16:50,598 [INFO] signal_engine: Pullback EMA Trend LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,599 [INFO] signal_engine: Breakout Retest LINK_USDT LONG: no signal
+2026-06-15 05:16:50,599 [INFO] signal_engine: Breakout Retest LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,600 [INFO] signal_engine: Liquidity Sweep LINK_USDT LONG: no signal
+2026-06-15 05:16:50,601 [INFO] signal_engine: Liquidity Sweep LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,601 [INFO] signal_engine: Compression Breakout LINK_USDT LONG: no signal
+2026-06-15 05:16:50,602 [INFO] signal_engine: Compression Breakout LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,602 [INFO] signal_engine: Pivot Reversal LINK_USDT LONG: no signal
+2026-06-15 05:16:50,603 [INFO] signal_engine: Pivot Reversal LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,612 [INFO] signal_engine: LINK_USDT | close=8.1750 | H1 EMA21=8.0369 EMA50=7.9764 | H4 EMA50=7.9488 EMA100=8.1906 EMA200=8.6226 | ATR=0.0501
+2026-06-15 05:16:50,614 [INFO] signal_engine: Pullback EMA Trend LINK_USDT LONG: no signal
+2026-06-15 05:16:50,614 [INFO] signal_engine: Pullback EMA Trend LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,615 [INFO] signal_engine: Breakout Retest LINK_USDT LONG: no signal
+2026-06-15 05:16:50,616 [INFO] signal_engine: Breakout Retest LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,617 [INFO] signal_engine: Liquidity Sweep LINK_USDT LONG: no signal
+2026-06-15 05:16:50,618 [INFO] signal_engine: Liquidity Sweep LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,618 [INFO] signal_engine: Compression Breakout LINK_USDT LONG: no signal
+2026-06-15 05:16:50,619 [INFO] signal_engine: Compression Breakout LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,619 [INFO] signal_engine: Pivot Reversal LINK_USDT LONG: no signal
+2026-06-15 05:16:50,620 [INFO] signal_engine: Pivot Reversal LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,628 [INFO] signal_engine: LINK_USDT | close=8.1750 | H1 EMA21=8.0369 EMA50=7.9764 | H4 EMA50=7.9488 EMA100=8.1906 EMA200=8.6226 | ATR=0.0501
+2026-06-15 05:16:50,630 [INFO] signal_engine: Pullback EMA Trend LINK_USDT LONG: no signal
+2026-06-15 05:16:50,631 [INFO] signal_engine: Pullback EMA Trend LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,631 [INFO] signal_engine: Breakout Retest LINK_USDT LONG: no signal
+2026-06-15 05:16:50,632 [INFO] signal_engine: Breakout Retest LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,633 [INFO] signal_engine: Liquidity Sweep LINK_USDT LONG: no signal
+2026-06-15 05:16:50,634 [INFO] signal_engine: Liquidity Sweep LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,634 [INFO] signal_engine: Compression Breakout LINK_USDT LONG: no signal
+2026-06-15 05:16:50,634 [INFO] signal_engine: Compression Breakout LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,635 [INFO] signal_engine: Pivot Reversal LINK_USDT LONG: no signal
+2026-06-15 05:16:50,635 [INFO] signal_engine: Pivot Reversal LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,644 [INFO] signal_engine: LINK_USDT | close=8.1750 | H1 EMA21=8.0369 EMA50=7.9764 | H4 EMA50=7.9488 EMA100=8.1906 EMA200=8.6226 | ATR=0.0501
+2026-06-15 05:16:50,646 [INFO] signal_engine: Pullback EMA Trend LINK_USDT LONG: no signal
+2026-06-15 05:16:50,646 [INFO] signal_engine: Pullback EMA Trend LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,647 [INFO] signal_engine: Breakout Retest LINK_USDT LONG: no signal
+2026-06-15 05:16:50,647 [INFO] signal_engine: Breakout Retest LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,648 [INFO] signal_engine: Liquidity Sweep LINK_USDT LONG: no signal
+2026-06-15 05:16:50,649 [INFO] signal_engine: Liquidity Sweep LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,650 [INFO] signal_engine: Compression Breakout LINK_USDT LONG: no signal
+2026-06-15 05:16:50,650 [INFO] signal_engine: Compression Breakout LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,651 [INFO] signal_engine: Pivot Reversal LINK_USDT LONG: no signal
+2026-06-15 05:16:50,651 [INFO] signal_engine: Pivot Reversal LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,660 [INFO] signal_engine: LINK_USDT | close=8.1750 | H1 EMA21=8.0369 EMA50=7.9764 | H4 EMA50=7.9488 EMA100=8.1906 EMA200=8.6226 | ATR=0.0501
+2026-06-15 05:16:50,662 [INFO] signal_engine: Pullback EMA Trend LINK_USDT LONG: no signal
+2026-06-15 05:16:50,662 [INFO] signal_engine: Pullback EMA Trend LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,663 [INFO] signal_engine: Breakout Retest LINK_USDT LONG: no signal
+2026-06-15 05:16:50,663 [INFO] signal_engine: Breakout Retest LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,664 [INFO] signal_engine: Liquidity Sweep LINK_USDT LONG: no signal
+2026-06-15 05:16:50,665 [INFO] signal_engine: Liquidity Sweep LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,665 [INFO] signal_engine: Compression Breakout LINK_USDT LONG: no signal
+2026-06-15 05:16:50,666 [INFO] signal_engine: Compression Breakout LINK_USDT SHORT: no signal
+2026-06-15 05:16:50,666 [INFO] signal_engine: Pivot Reversal LINK_USDT LONG: no signal
+2026-06-15 05:16:50,667 [INFO] signal_engine: Pivot Reversal LINK_USDT SHORT: no signal
+2026-06-15 05:16:52,669 [INFO] signal_engine: Check XRP_USDT: +6 H1, +2 H4
+2026-06-15 05:16:52,679 [INFO] signal_engine: XRP_USDT | close=1.1844 | H1 EMA21=1.1639 EMA50=1.1531 | H4 EMA50=1.1509 EMA100=1.1862 EMA200=1.2490 | ATR=0.0082
+2026-06-15 05:16:52,681 [INFO] signal_engine: Pullback EMA Trend XRP_USDT LONG: no signal
+2026-06-15 05:16:52,681 [INFO] signal_engine: Pullback EMA Trend XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,682 [INFO] signal_engine: Breakout Retest XRP_USDT LONG: no signal
+2026-06-15 05:16:52,682 [INFO] signal_engine: Breakout Retest XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,683 [INFO] signal_engine: Liquidity Sweep XRP_USDT LONG: no signal
+2026-06-15 05:16:52,684 [INFO] signal_engine: Liquidity Sweep XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,684 [INFO] signal_engine: Compression Breakout XRP_USDT LONG: no signal
+2026-06-15 05:16:52,685 [INFO] signal_engine: Compression Breakout XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,685 [INFO] signal_engine: Pivot Reversal XRP_USDT LONG: no signal
+2026-06-15 05:16:52,686 [INFO] signal_engine: Pivot Reversal XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,695 [INFO] signal_engine: XRP_USDT | close=1.1844 | H1 EMA21=1.1639 EMA50=1.1531 | H4 EMA50=1.1509 EMA100=1.1862 EMA200=1.2490 | ATR=0.0082
+2026-06-15 05:16:52,696 [INFO] signal_engine: Pullback EMA Trend XRP_USDT LONG: no signal
+2026-06-15 05:16:52,697 [INFO] signal_engine: Pullback EMA Trend XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,697 [INFO] signal_engine: Breakout Retest XRP_USDT LONG: no signal
+2026-06-15 05:16:52,698 [INFO] signal_engine: Breakout Retest XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,699 [INFO] signal_engine: Liquidity Sweep XRP_USDT LONG: no signal
+2026-06-15 05:16:52,700 [INFO] signal_engine: Liquidity Sweep XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,700 [INFO] signal_engine: Compression Breakout XRP_USDT LONG: no signal
+2026-06-15 05:16:52,701 [INFO] signal_engine: Compression Breakout XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,701 [INFO] signal_engine: Pivot Reversal XRP_USDT LONG: no signal
+2026-06-15 05:16:52,702 [INFO] signal_engine: Pivot Reversal XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,710 [INFO] signal_engine: XRP_USDT | close=1.1844 | H1 EMA21=1.1639 EMA50=1.1531 | H4 EMA50=1.1509 EMA100=1.1862 EMA200=1.2490 | ATR=0.0082
+2026-06-15 05:16:52,712 [INFO] signal_engine: Pullback EMA Trend XRP_USDT LONG: no signal
+2026-06-15 05:16:52,713 [INFO] signal_engine: Pullback EMA Trend XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,713 [INFO] signal_engine: Breakout Retest XRP_USDT LONG: no signal
+2026-06-15 05:16:52,714 [INFO] signal_engine: Breakout Retest XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,715 [INFO] signal_engine: Liquidity Sweep XRP_USDT LONG: no signal
+2026-06-15 05:16:52,715 [INFO] signal_engine: Liquidity Sweep XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,716 [INFO] signal_engine: Compression Breakout XRP_USDT LONG: no signal
+2026-06-15 05:16:52,717 [INFO] signal_engine: Compression Breakout XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,717 [INFO] signal_engine: Pivot Reversal XRP_USDT LONG: no signal
+2026-06-15 05:16:52,718 [INFO] signal_engine: Pivot Reversal XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,727 [INFO] signal_engine: XRP_USDT | close=1.1844 | H1 EMA21=1.1639 EMA50=1.1531 | H4 EMA50=1.1509 EMA100=1.1862 EMA200=1.2490 | ATR=0.0082
+2026-06-15 05:16:52,729 [INFO] signal_engine: Pullback EMA Trend XRP_USDT LONG: no signal
+2026-06-15 05:16:52,729 [INFO] signal_engine: Pullback EMA Trend XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,730 [INFO] signal_engine: Breakout Retest XRP_USDT LONG: no signal
+2026-06-15 05:16:52,730 [INFO] signal_engine: Breakout Retest XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,731 [INFO] signal_engine: Liquidity Sweep XRP_USDT LONG: no signal
+2026-06-15 05:16:52,732 [INFO] signal_engine: Liquidity Sweep XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,732 [INFO] signal_engine: Compression Breakout XRP_USDT LONG: no signal
+2026-06-15 05:16:52,733 [INFO] signal_engine: Compression Breakout XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,733 [INFO] signal_engine: Pivot Reversal XRP_USDT LONG: no signal
+2026-06-15 05:16:52,734 [INFO] signal_engine: Pivot Reversal XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,743 [INFO] signal_engine: XRP_USDT | close=1.1844 | H1 EMA21=1.1639 EMA50=1.1531 | H4 EMA50=1.1509 EMA100=1.1862 EMA200=1.2490 | ATR=0.0082
+2026-06-15 05:16:52,745 [INFO] signal_engine: Pullback EMA Trend XRP_USDT LONG: no signal
+2026-06-15 05:16:52,745 [INFO] signal_engine: Pullback EMA Trend XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,746 [INFO] signal_engine: Breakout Retest XRP_USDT LONG: no signal
+2026-06-15 05:16:52,746 [INFO] signal_engine: Breakout Retest XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,747 [INFO] signal_engine: Liquidity Sweep XRP_USDT LONG: no signal
+2026-06-15 05:16:52,748 [INFO] signal_engine: Liquidity Sweep XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,749 [INFO] signal_engine: Compression Breakout XRP_USDT LONG: no signal
+2026-06-15 05:16:52,749 [INFO] signal_engine: Compression Breakout XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,750 [INFO] signal_engine: Pivot Reversal XRP_USDT LONG: no signal
+2026-06-15 05:16:52,750 [INFO] signal_engine: Pivot Reversal XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,759 [INFO] signal_engine: XRP_USDT | close=1.1844 | H1 EMA21=1.1639 EMA50=1.1531 | H4 EMA50=1.1509 EMA100=1.1862 EMA200=1.2490 | ATR=0.0082
+2026-06-15 05:16:52,761 [INFO] signal_engine: Pullback EMA Trend XRP_USDT LONG: no signal
+2026-06-15 05:16:52,761 [INFO] signal_engine: Pullback EMA Trend XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,762 [INFO] signal_engine: Breakout Retest XRP_USDT LONG: no signal
+2026-06-15 05:16:52,762 [INFO] signal_engine: Breakout Retest XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,763 [INFO] signal_engine: Liquidity Sweep XRP_USDT LONG: no signal
+2026-06-15 05:16:52,764 [INFO] signal_engine: Liquidity Sweep XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,764 [INFO] signal_engine: Compression Breakout XRP_USDT LONG: no signal
+2026-06-15 05:16:52,765 [INFO] signal_engine: Compression Breakout XRP_USDT SHORT: no signal
+2026-06-15 05:16:52,765 [INFO] signal_engine: Pivot Reversal XRP_USDT LONG: no signal
+2026-06-15 05:16:52,766 [INFO] signal_engine: Pivot Reversal XRP_USDT SHORT: no signal
+2026-06-15 05:16:54,737 [INFO] signal_engine: Check DOGE_USDT: +6 H1, +2 H4
+2026-06-15 05:16:54,747 [INFO] signal_engine: DOGE_USDT | close=0.0885 | H1 EMA21=0.0879 EMA50=0.0875 | H4 EMA50=0.0871 EMA100=0.0898 EMA200=0.0944 | ATR=0.0005
+2026-06-15 05:16:54,749 [INFO] signal_engine: Pullback EMA Trend DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,749 [INFO] signal_engine: Pullback EMA Trend DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,750 [INFO] signal_engine: Breakout Retest DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,751 [INFO] signal_engine: Breakout Retest DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,751 [INFO] signal_engine: Liquidity Sweep DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,752 [INFO] signal_engine: Liquidity Sweep DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,753 [INFO] signal_engine: Compression Breakout DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,753 [INFO] signal_engine: Compression Breakout DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,754 [INFO] signal_engine: Pivot Reversal DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,754 [INFO] signal_engine: Pivot Reversal DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,763 [INFO] signal_engine: DOGE_USDT | close=0.0885 | H1 EMA21=0.0879 EMA50=0.0875 | H4 EMA50=0.0871 EMA100=0.0898 EMA200=0.0944 | ATR=0.0005
+2026-06-15 05:16:54,765 [INFO] signal_engine: Pullback EMA Trend DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,765 [INFO] signal_engine: Pullback EMA Trend DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,766 [INFO] signal_engine: Breakout Retest DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,767 [INFO] signal_engine: Breakout Retest DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,767 [INFO] signal_engine: Liquidity Sweep DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,768 [INFO] signal_engine: Liquidity Sweep DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,769 [INFO] signal_engine: Compression Breakout DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,769 [INFO] signal_engine: Compression Breakout DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,770 [INFO] signal_engine: Pivot Reversal DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,770 [INFO] signal_engine: Pivot Reversal DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,779 [INFO] signal_engine: DOGE_USDT | close=0.0885 | H1 EMA21=0.0879 EMA50=0.0875 | H4 EMA50=0.0871 EMA100=0.0898 EMA200=0.0944 | ATR=0.0005
+2026-06-15 05:16:54,781 [INFO] signal_engine: Pullback EMA Trend DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,781 [INFO] signal_engine: Pullback EMA Trend DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,782 [INFO] signal_engine: Breakout Retest DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,782 [INFO] signal_engine: Breakout Retest DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,783 [INFO] signal_engine: Liquidity Sweep DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,784 [INFO] signal_engine: Liquidity Sweep DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,785 [INFO] signal_engine: Compression Breakout DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,785 [INFO] signal_engine: Compression Breakout DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,786 [INFO] signal_engine: Pivot Reversal DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,786 [INFO] signal_engine: Pivot Reversal DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,795 [INFO] signal_engine: DOGE_USDT | close=0.0885 | H1 EMA21=0.0879 EMA50=0.0875 | H4 EMA50=0.0871 EMA100=0.0898 EMA200=0.0944 | ATR=0.0005
+2026-06-15 05:16:54,797 [INFO] signal_engine: Pullback EMA Trend DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,797 [INFO] signal_engine: Pullback EMA Trend DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,798 [INFO] signal_engine: Breakout Retest DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,799 [INFO] signal_engine: Breakout Retest DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,799 [INFO] signal_engine: Liquidity Sweep DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,800 [INFO] signal_engine: Liquidity Sweep DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,801 [INFO] signal_engine: Compression Breakout DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,802 [INFO] signal_engine: Compression Breakout DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,802 [INFO] signal_engine: Pivot Reversal DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,803 [INFO] signal_engine: Pivot Reversal DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,812 [INFO] signal_engine: DOGE_USDT | close=0.0885 | H1 EMA21=0.0879 EMA50=0.0875 | H4 EMA50=0.0871 EMA100=0.0898 EMA200=0.0944 | ATR=0.0005
+2026-06-15 05:16:54,813 [INFO] signal_engine: Pullback EMA Trend DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,814 [INFO] signal_engine: Pullback EMA Trend DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,815 [INFO] signal_engine: Breakout Retest DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,815 [INFO] signal_engine: Breakout Retest DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,816 [INFO] signal_engine: Liquidity Sweep DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,817 [INFO] signal_engine: Liquidity Sweep DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,818 [INFO] signal_engine: Compression Breakout DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,818 [INFO] signal_engine: Compression Breakout DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,819 [INFO] signal_engine: Pivot Reversal DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,819 [INFO] signal_engine: Pivot Reversal DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,828 [INFO] signal_engine: DOGE_USDT | close=0.0885 | H1 EMA21=0.0879 EMA50=0.0875 | H4 EMA50=0.0871 EMA100=0.0898 EMA200=0.0944 | ATR=0.0005
+2026-06-15 05:16:54,830 [INFO] signal_engine: Pullback EMA Trend DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,831 [INFO] signal_engine: Pullback EMA Trend DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,831 [INFO] signal_engine: Breakout Retest DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,832 [INFO] signal_engine: Breakout Retest DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,833 [INFO] signal_engine: Liquidity Sweep DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,834 [INFO] signal_engine: Liquidity Sweep DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,834 [INFO] signal_engine: Compression Breakout DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,835 [INFO] signal_engine: Compression Breakout DOGE_USDT SHORT: no signal
+2026-06-15 05:16:54,835 [INFO] signal_engine: Pivot Reversal DOGE_USDT LONG: no signal
+2026-06-15 05:16:54,836 [INFO] signal_engine: Pivot Reversal DOGE_USDT SHORT: no signal
+2026-06-15 05:16:57,027 [INFO] signal_engine: Check LTC_USDT: +6 H1, +2 H4
+2026-06-15 05:16:57,037 [INFO] signal_engine: LTC_USDT | close=45.2690 | H1 EMA21=44.7097 EMA50=44.2280 | H4 EMA50=43.9075 EMA100=45.5522 EMA200=48.4889 | ATR=0.2485
+2026-06-15 05:16:57,039 [INFO] signal_engine: Pullback EMA Trend LTC_USDT LONG: no signal
+2026-06-15 05:16:57,039 [INFO] signal_engine: Pullback EMA Trend LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,040 [INFO] signal_engine: Breakout Retest LTC_USDT LONG: no signal
+2026-06-15 05:16:57,041 [INFO] signal_engine: Breakout Retest LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,042 [INFO] signal_engine: Liquidity Sweep LTC_USDT LONG: no signal
+2026-06-15 05:16:57,043 [INFO] signal_engine: Liquidity Sweep LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,043 [INFO] signal_engine: Compression Breakout LTC_USDT LONG: no signal
+2026-06-15 05:16:57,044 [INFO] signal_engine: Compression Breakout LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,044 [INFO] signal_engine: Pivot Reversal LTC_USDT LONG: no signal
+2026-06-15 05:16:57,045 [INFO] signal_engine: Pivot Reversal LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,054 [INFO] signal_engine: LTC_USDT | close=45.2690 | H1 EMA21=44.7097 EMA50=44.2280 | H4 EMA50=43.9075 EMA100=45.5522 EMA200=48.4889 | ATR=0.2485
+2026-06-15 05:16:57,055 [INFO] signal_engine: Pullback EMA Trend LTC_USDT LONG: no signal
+2026-06-15 05:16:57,056 [INFO] signal_engine: Pullback EMA Trend LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,057 [INFO] signal_engine: Breakout Retest LTC_USDT LONG: no signal
+2026-06-15 05:16:57,057 [INFO] signal_engine: Breakout Retest LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,058 [INFO] signal_engine: Liquidity Sweep LTC_USDT LONG: no signal
+2026-06-15 05:16:57,059 [INFO] signal_engine: Liquidity Sweep LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,060 [INFO] signal_engine: Compression Breakout LTC_USDT LONG: no signal
+2026-06-15 05:16:57,060 [INFO] signal_engine: Compression Breakout LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,061 [INFO] signal_engine: Pivot Reversal LTC_USDT LONG: no signal
+2026-06-15 05:16:57,061 [INFO] signal_engine: Pivot Reversal LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,070 [INFO] signal_engine: LTC_USDT | close=45.2690 | H1 EMA21=44.7097 EMA50=44.2280 | H4 EMA50=43.9075 EMA100=45.5522 EMA200=48.4889 | ATR=0.2485
+2026-06-15 05:16:57,072 [INFO] signal_engine: Pullback EMA Trend LTC_USDT LONG: no signal
+2026-06-15 05:16:57,073 [INFO] signal_engine: Pullback EMA Trend LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,073 [INFO] signal_engine: Breakout Retest LTC_USDT LONG: no signal
+2026-06-15 05:16:57,074 [INFO] signal_engine: Breakout Retest LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,075 [INFO] signal_engine: Liquidity Sweep LTC_USDT LONG: no signal
+2026-06-15 05:16:57,076 [INFO] signal_engine: Liquidity Sweep LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,076 [INFO] signal_engine: Compression Breakout LTC_USDT LONG: no signal
+2026-06-15 05:16:57,077 [INFO] signal_engine: Compression Breakout LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,077 [INFO] signal_engine: Pivot Reversal LTC_USDT LONG: no signal
+2026-06-15 05:16:57,078 [INFO] signal_engine: Pivot Reversal LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,087 [INFO] signal_engine: LTC_USDT | close=45.2690 | H1 EMA21=44.7097 EMA50=44.2280 | H4 EMA50=43.9075 EMA100=45.5522 EMA200=48.4889 | ATR=0.2485
+2026-06-15 05:16:57,089 [INFO] signal_engine: Pullback EMA Trend LTC_USDT LONG: no signal
+2026-06-15 05:16:57,089 [INFO] signal_engine: Pullback EMA Trend LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,090 [INFO] signal_engine: Breakout Retest LTC_USDT LONG: no signal
+2026-06-15 05:16:57,090 [INFO] signal_engine: Breakout Retest LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,091 [INFO] signal_engine: Liquidity Sweep LTC_USDT LONG: no signal
+2026-06-15 05:16:57,092 [INFO] signal_engine: Liquidity Sweep LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,093 [INFO] signal_engine: Compression Breakout LTC_USDT LONG: no signal
+2026-06-15 05:16:57,093 [INFO] signal_engine: Compression Breakout LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,094 [INFO] signal_engine: Pivot Reversal LTC_USDT LONG: no signal
+2026-06-15 05:16:57,094 [INFO] signal_engine: Pivot Reversal LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,103 [INFO] signal_engine: LTC_USDT | close=45.2690 | H1 EMA21=44.7097 EMA50=44.2280 | H4 EMA50=43.9075 EMA100=45.5522 EMA200=48.4889 | ATR=0.2485
+2026-06-15 05:16:57,105 [INFO] signal_engine: Pullback EMA Trend LTC_USDT LONG: no signal
+2026-06-15 05:16:57,105 [INFO] signal_engine: Pullback EMA Trend LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,106 [INFO] signal_engine: Breakout Retest LTC_USDT LONG: no signal
+2026-06-15 05:16:57,106 [INFO] signal_engine: Breakout Retest LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,107 [INFO] signal_engine: Liquidity Sweep LTC_USDT LONG: no signal
+2026-06-15 05:16:57,108 [INFO] signal_engine: Liquidity Sweep LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,109 [INFO] signal_engine: Compression Breakout LTC_USDT LONG: no signal
+2026-06-15 05:16:57,109 [INFO] signal_engine: Compression Breakout LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,110 [INFO] signal_engine: Pivot Reversal LTC_USDT LONG: no signal
+2026-06-15 05:16:57,110 [INFO] signal_engine: Pivot Reversal LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,119 [INFO] signal_engine: LTC_USDT | close=45.2690 | H1 EMA21=44.7097 EMA50=44.2280 | H4 EMA50=43.9075 EMA100=45.5522 EMA200=48.4889 | ATR=0.2485
+2026-06-15 05:16:57,121 [INFO] signal_engine: Pullback EMA Trend LTC_USDT LONG: no signal
+2026-06-15 05:16:57,121 [INFO] signal_engine: Pullback EMA Trend LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,122 [INFO] signal_engine: Breakout Retest LTC_USDT LONG: no signal
+2026-06-15 05:16:57,122 [INFO] signal_engine: Breakout Retest LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,123 [INFO] signal_engine: Liquidity Sweep LTC_USDT LONG: no signal
+2026-06-15 05:16:57,124 [INFO] signal_engine: Liquidity Sweep LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,125 [INFO] signal_engine: Compression Breakout LTC_USDT LONG: no signal
+2026-06-15 05:16:57,125 [INFO] signal_engine: Compression Breakout LTC_USDT SHORT: no signal
+2026-06-15 05:16:57,126 [INFO] signal_engine: Pivot Reversal LTC_USDT LONG: no signal
+2026-06-15 05:16:57,126 [INFO] signal_engine: Pivot Reversal LTC_USDT SHORT: no signal
+2026-06-15 05:16:59,060 [INFO] signal_engine: Check DOT_USDT: +6 H1, +2 H4
+2026-06-15 05:16:59,069 [INFO] signal_engine: DOT_USDT | close=1.0021 | H1 EMA21=0.9821 EMA50=0.9755 | H4 EMA50=0.9811 EMA100=1.0293 EMA200=1.1049 | ATR=0.0069
+2026-06-15 05:16:59,071 [INFO] signal_engine: Pullback EMA Trend DOT_USDT LONG: no signal
+2026-06-15 05:16:59,072 [INFO] signal_engine: Pullback EMA Trend DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,072 [INFO] signal_engine: Breakout Retest DOT_USDT LONG: no signal
+2026-06-15 05:16:59,073 [INFO] signal_engine: Breakout Retest DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,074 [INFO] signal_engine: Liquidity Sweep DOT_USDT LONG: no signal
+2026-06-15 05:16:59,074 [INFO] signal_engine: Liquidity Sweep DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,075 [INFO] signal_engine: Compression Breakout DOT_USDT LONG: no signal
+2026-06-15 05:16:59,075 [INFO] signal_engine: Compression Breakout DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,076 [INFO] signal_engine: Pivot Reversal DOT_USDT LONG: no signal
+2026-06-15 05:16:59,076 [INFO] signal_engine: Pivot Reversal DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,085 [INFO] signal_engine: DOT_USDT | close=1.0021 | H1 EMA21=0.9821 EMA50=0.9755 | H4 EMA50=0.9811 EMA100=1.0293 EMA200=1.1049 | ATR=0.0069
+2026-06-15 05:16:59,087 [INFO] signal_engine: Pullback EMA Trend DOT_USDT LONG: no signal
+2026-06-15 05:16:59,087 [INFO] signal_engine: Pullback EMA Trend DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,088 [INFO] signal_engine: Breakout Retest DOT_USDT LONG: no signal
+2026-06-15 05:16:59,088 [INFO] signal_engine: Breakout Retest DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,089 [INFO] signal_engine: Liquidity Sweep DOT_USDT LONG: no signal
+2026-06-15 05:16:59,090 [INFO] signal_engine: Liquidity Sweep DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,091 [INFO] signal_engine: Compression Breakout DOT_USDT LONG: no signal
+2026-06-15 05:16:59,091 [INFO] signal_engine: Compression Breakout DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,091 [INFO] signal_engine: Pivot Reversal DOT_USDT LONG: no signal
+2026-06-15 05:16:59,092 [INFO] signal_engine: Pivot Reversal DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,101 [INFO] signal_engine: DOT_USDT | close=1.0021 | H1 EMA21=0.9821 EMA50=0.9755 | H4 EMA50=0.9811 EMA100=1.0293 EMA200=1.1049 | ATR=0.0069
+2026-06-15 05:16:59,102 [INFO] signal_engine: Pullback EMA Trend DOT_USDT LONG: no signal
+2026-06-15 05:16:59,103 [INFO] signal_engine: Pullback EMA Trend DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,103 [INFO] signal_engine: Breakout Retest DOT_USDT LONG: no signal
+2026-06-15 05:16:59,104 [INFO] signal_engine: Breakout Retest DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,105 [INFO] signal_engine: Liquidity Sweep DOT_USDT LONG: no signal
+2026-06-15 05:16:59,106 [INFO] signal_engine: Liquidity Sweep DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,106 [INFO] signal_engine: Compression Breakout DOT_USDT LONG: no signal
+2026-06-15 05:16:59,107 [INFO] signal_engine: Compression Breakout DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,107 [INFO] signal_engine: Pivot Reversal DOT_USDT LONG: no signal
+2026-06-15 05:16:59,107 [INFO] signal_engine: Pivot Reversal DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,117 [INFO] signal_engine: DOT_USDT | close=1.0021 | H1 EMA21=0.9821 EMA50=0.9755 | H4 EMA50=0.9811 EMA100=1.0293 EMA200=1.1049 | ATR=0.0069
+2026-06-15 05:16:59,118 [INFO] signal_engine: Pullback EMA Trend DOT_USDT LONG: no signal
+2026-06-15 05:16:59,119 [INFO] signal_engine: Pullback EMA Trend DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,120 [INFO] signal_engine: Breakout Retest DOT_USDT LONG: no signal
+2026-06-15 05:16:59,120 [INFO] signal_engine: Breakout Retest DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,121 [INFO] signal_engine: Liquidity Sweep DOT_USDT LONG: no signal
+2026-06-15 05:16:59,122 [INFO] signal_engine: Liquidity Sweep DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,122 [INFO] signal_engine: Compression Breakout DOT_USDT LONG: no signal
+2026-06-15 05:16:59,123 [INFO] signal_engine: Compression Breakout DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,123 [INFO] signal_engine: Pivot Reversal DOT_USDT LONG: no signal
+2026-06-15 05:16:59,124 [INFO] signal_engine: Pivot Reversal DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,132 [INFO] signal_engine: DOT_USDT | close=1.0021 | H1 EMA21=0.9821 EMA50=0.9755 | H4 EMA50=0.9811 EMA100=1.0293 EMA200=1.1049 | ATR=0.0069
+2026-06-15 05:16:59,134 [INFO] signal_engine: Pullback EMA Trend DOT_USDT LONG: no signal
+2026-06-15 05:16:59,135 [INFO] signal_engine: Pullback EMA Trend DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,135 [INFO] signal_engine: Breakout Retest DOT_USDT LONG: no signal
+2026-06-15 05:16:59,136 [INFO] signal_engine: Breakout Retest DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,137 [INFO] signal_engine: Liquidity Sweep DOT_USDT LONG: no signal
+2026-06-15 05:16:59,137 [INFO] signal_engine: Liquidity Sweep DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,138 [INFO] signal_engine: Compression Breakout DOT_USDT LONG: no signal
+2026-06-15 05:16:59,138 [INFO] signal_engine: Compression Breakout DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,139 [INFO] signal_engine: Pivot Reversal DOT_USDT LONG: no signal
+2026-06-15 05:16:59,139 [INFO] signal_engine: Pivot Reversal DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,149 [INFO] signal_engine: DOT_USDT | close=1.0021 | H1 EMA21=0.9821 EMA50=0.9755 | H4 EMA50=0.9811 EMA100=1.0293 EMA200=1.1049 | ATR=0.0069
+2026-06-15 05:16:59,151 [INFO] signal_engine: Pullback EMA Trend DOT_USDT LONG: no signal
+2026-06-15 05:16:59,151 [INFO] signal_engine: Pullback EMA Trend DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,152 [INFO] signal_engine: Breakout Retest DOT_USDT LONG: no signal
+2026-06-15 05:16:59,152 [INFO] signal_engine: Breakout Retest DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,153 [INFO] signal_engine: Liquidity Sweep DOT_USDT LONG: no signal
+2026-06-15 05:16:59,154 [INFO] signal_engine: Liquidity Sweep DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,154 [INFO] signal_engine: Compression Breakout DOT_USDT LONG: no signal
+2026-06-15 05:16:59,155 [INFO] signal_engine: Compression Breakout DOT_USDT SHORT: no signal
+2026-06-15 05:16:59,155 [INFO] signal_engine: Pivot Reversal DOT_USDT LONG: no signal
+2026-06-15 05:16:59,156 [INFO] signal_engine: Pivot Reversal DOT_USDT SHORT: no signal
+2026-06-15 05:17:01,323 [INFO] signal_engine: Check FIL_USDT: +6 H1, +2 H4
+2026-06-15 05:17:01,333 [INFO] signal_engine: FIL_USDT | close=0.8042 | H1 EMA21=0.7832 EMA50=0.7761 | H4 EMA50=0.7806 EMA100=0.8197 EMA200=0.8761 | ATR=0.0045
+2026-06-15 05:17:01,335 [INFO] signal_engine: Pullback EMA Trend FIL_USDT LONG: no signal
+2026-06-15 05:17:01,335 [INFO] signal_engine: Pullback EMA Trend FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,336 [INFO] signal_engine: Breakout Retest FIL_USDT LONG: no signal
+2026-06-15 05:17:01,336 [INFO] signal_engine: Breakout Retest FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,337 [INFO] signal_engine: Liquidity Sweep FIL_USDT LONG: no signal
+2026-06-15 05:17:01,338 [INFO] signal_engine: Liquidity Sweep FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,338 [INFO] signal_engine: Compression Breakout FIL_USDT LONG: no signal
+2026-06-15 05:17:01,339 [INFO] signal_engine: Compression Breakout FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,339 [INFO] signal_engine: Pivot Reversal FIL_USDT LONG: no signal
+2026-06-15 05:17:01,340 [INFO] signal_engine: Pivot Reversal FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,349 [INFO] signal_engine: FIL_USDT | close=0.8042 | H1 EMA21=0.7832 EMA50=0.7761 | H4 EMA50=0.7806 EMA100=0.8197 EMA200=0.8761 | ATR=0.0045
+2026-06-15 05:17:01,350 [INFO] signal_engine: Pullback EMA Trend FIL_USDT LONG: no signal
+2026-06-15 05:17:01,351 [INFO] signal_engine: Pullback EMA Trend FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,352 [INFO] signal_engine: Breakout Retest FIL_USDT LONG: no signal
+2026-06-15 05:17:01,352 [INFO] signal_engine: Breakout Retest FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,353 [INFO] signal_engine: Liquidity Sweep FIL_USDT LONG: no signal
+2026-06-15 05:17:01,354 [INFO] signal_engine: Liquidity Sweep FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,354 [INFO] signal_engine: Compression Breakout FIL_USDT LONG: no signal
+2026-06-15 05:17:01,355 [INFO] signal_engine: Compression Breakout FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,355 [INFO] signal_engine: Pivot Reversal FIL_USDT LONG: no signal
+2026-06-15 05:17:01,356 [INFO] signal_engine: Pivot Reversal FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,365 [INFO] signal_engine: FIL_USDT | close=0.8042 | H1 EMA21=0.7832 EMA50=0.7761 | H4 EMA50=0.7806 EMA100=0.8197 EMA200=0.8761 | ATR=0.0045
+2026-06-15 05:17:01,367 [INFO] signal_engine: Pullback EMA Trend FIL_USDT LONG: no signal
+2026-06-15 05:17:01,367 [INFO] signal_engine: Pullback EMA Trend FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,368 [INFO] signal_engine: Breakout Retest FIL_USDT LONG: no signal
+2026-06-15 05:17:01,368 [INFO] signal_engine: Breakout Retest FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,370 [INFO] signal_engine: Liquidity Sweep FIL_USDT LONG: no signal
+2026-06-15 05:17:01,371 [INFO] signal_engine: Liquidity Sweep FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,372 [INFO] signal_engine: Compression Breakout FIL_USDT LONG: no signal
+2026-06-15 05:17:01,373 [INFO] signal_engine: Compression Breakout FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,373 [INFO] signal_engine: Pivot Reversal FIL_USDT LONG: no signal
+2026-06-15 05:17:01,375 [INFO] signal_engine: Pivot Reversal FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,391 [INFO] signal_engine: FIL_USDT | close=0.8042 | H1 EMA21=0.7832 EMA50=0.7761 | H4 EMA50=0.7806 EMA100=0.8197 EMA200=0.8761 | ATR=0.0045
+2026-06-15 05:17:01,392 [INFO] signal_engine: Pullback EMA Trend FIL_USDT LONG: no signal
+2026-06-15 05:17:01,393 [INFO] signal_engine: Pullback EMA Trend FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,394 [INFO] signal_engine: Breakout Retest FIL_USDT LONG: no signal
+2026-06-15 05:17:01,394 [INFO] signal_engine: Breakout Retest FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,395 [INFO] signal_engine: Liquidity Sweep FIL_USDT LONG: no signal
+2026-06-15 05:17:01,396 [INFO] signal_engine: Liquidity Sweep FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,396 [INFO] signal_engine: Compression Breakout FIL_USDT LONG: no signal
+2026-06-15 05:17:01,397 [INFO] signal_engine: Compression Breakout FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,397 [INFO] signal_engine: Pivot Reversal FIL_USDT LONG: no signal
+2026-06-15 05:17:01,398 [INFO] signal_engine: Pivot Reversal FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,407 [INFO] signal_engine: FIL_USDT | close=0.8042 | H1 EMA21=0.7832 EMA50=0.7761 | H4 EMA50=0.7806 EMA100=0.8197 EMA200=0.8761 | ATR=0.0045
+2026-06-15 05:17:01,409 [INFO] signal_engine: Pullback EMA Trend FIL_USDT LONG: no signal
+2026-06-15 05:17:01,410 [INFO] signal_engine: Pullback EMA Trend FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,410 [INFO] signal_engine: Breakout Retest FIL_USDT LONG: no signal
+2026-06-15 05:17:01,411 [INFO] signal_engine: Breakout Retest FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,412 [INFO] signal_engine: Liquidity Sweep FIL_USDT LONG: no signal
+2026-06-15 05:17:01,413 [INFO] signal_engine: Liquidity Sweep FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,413 [INFO] signal_engine: Compression Breakout FIL_USDT LONG: no signal
+2026-06-15 05:17:01,414 [INFO] signal_engine: Compression Breakout FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,414 [INFO] signal_engine: Pivot Reversal FIL_USDT LONG: no signal
+2026-06-15 05:17:01,415 [INFO] signal_engine: Pivot Reversal FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,425 [INFO] signal_engine: FIL_USDT | close=0.8042 | H1 EMA21=0.7832 EMA50=0.7761 | H4 EMA50=0.7806 EMA100=0.8197 EMA200=0.8761 | ATR=0.0045
+2026-06-15 05:17:01,426 [INFO] signal_engine: Pullback EMA Trend FIL_USDT LONG: no signal
+2026-06-15 05:17:01,427 [INFO] signal_engine: Pullback EMA Trend FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,428 [INFO] signal_engine: Breakout Retest FIL_USDT LONG: no signal
+2026-06-15 05:17:01,428 [INFO] signal_engine: Breakout Retest FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,429 [INFO] signal_engine: Liquidity Sweep FIL_USDT LONG: no signal
+2026-06-15 05:17:01,430 [INFO] signal_engine: Liquidity Sweep FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,431 [INFO] signal_engine: Compression Breakout FIL_USDT LONG: no signal
+2026-06-15 05:17:01,431 [INFO] signal_engine: Compression Breakout FIL_USDT SHORT: no signal
+2026-06-15 05:17:01,432 [INFO] signal_engine: Pivot Reversal FIL_USDT LONG: no signal
+2026-06-15 05:17:01,432 [INFO] signal_engine: Pivot Reversal FIL_USDT SHORT: no signal
+2026-06-15 05:17:03,623 [INFO] signal_engine: Check BCH_USDT: +6 H1, +2 H4
+2026-06-15 05:17:03,633 [INFO] signal_engine: BCH_USDT | close=210.3000 | H1 EMA21=207.0025 EMA50=205.9108 | H4 EMA50=213.0677 EMA100=239.8317 EMA200=289.5893 | ATR=1.5176
+2026-06-15 05:17:03,635 [INFO] signal_engine: Pullback EMA Trend BCH_USDT LONG: no signal
+2026-06-15 05:17:03,636 [INFO] signal_engine: Pullback EMA Trend BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,636 [INFO] signal_engine: Breakout Retest BCH_USDT LONG: no signal
+2026-06-15 05:17:03,637 [INFO] signal_engine: Breakout Retest BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,638 [INFO] signal_engine: Liquidity Sweep BCH_USDT LONG: no signal
+2026-06-15 05:17:03,639 [INFO] signal_engine: Liquidity Sweep BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,640 [INFO] signal_engine: Compression Breakout BCH_USDT LONG: no signal
+2026-06-15 05:17:03,640 [INFO] signal_engine: Compression Breakout BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,641 [INFO] signal_engine: Pivot Reversal BCH_USDT LONG: no signal
+2026-06-15 05:17:03,641 [INFO] signal_engine: Pivot Reversal BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,650 [INFO] signal_engine: BCH_USDT | close=210.3000 | H1 EMA21=207.0025 EMA50=205.9108 | H4 EMA50=213.0677 EMA100=239.8317 EMA200=289.5893 | ATR=1.5176
+2026-06-15 05:17:03,652 [INFO] signal_engine: Pullback EMA Trend BCH_USDT LONG: no signal
+2026-06-15 05:17:03,653 [INFO] signal_engine: Pullback EMA Trend BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,653 [INFO] signal_engine: Breakout Retest BCH_USDT LONG: no signal
+2026-06-15 05:17:03,654 [INFO] signal_engine: Breakout Retest BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,655 [INFO] signal_engine: Liquidity Sweep BCH_USDT LONG: no signal
+2026-06-15 05:17:03,656 [INFO] signal_engine: Liquidity Sweep BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,656 [INFO] signal_engine: Compression Breakout BCH_USDT LONG: no signal
+2026-06-15 05:17:03,657 [INFO] signal_engine: Compression Breakout BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,658 [INFO] signal_engine: Pivot Reversal BCH_USDT LONG: no signal
+2026-06-15 05:17:03,658 [INFO] signal_engine: Pivot Reversal BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,667 [INFO] signal_engine: BCH_USDT | close=210.3000 | H1 EMA21=207.0025 EMA50=205.9108 | H4 EMA50=213.0677 EMA100=239.8317 EMA200=289.5893 | ATR=1.5176
+2026-06-15 05:17:03,669 [INFO] signal_engine: Pullback EMA Trend BCH_USDT LONG: no signal
+2026-06-15 05:17:03,670 [INFO] signal_engine: Pullback EMA Trend BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,670 [INFO] signal_engine: Breakout Retest BCH_USDT LONG: no signal
+2026-06-15 05:17:03,671 [INFO] signal_engine: Breakout Retest BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,672 [INFO] signal_engine: Liquidity Sweep BCH_USDT LONG: no signal
+2026-06-15 05:17:03,673 [INFO] signal_engine: Liquidity Sweep BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,673 [INFO] signal_engine: Compression Breakout BCH_USDT LONG: no signal
+2026-06-15 05:17:03,674 [INFO] signal_engine: Compression Breakout BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,674 [INFO] signal_engine: Pivot Reversal BCH_USDT LONG: no signal
+2026-06-15 05:17:03,675 [INFO] signal_engine: Pivot Reversal BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,683 [INFO] signal_engine: BCH_USDT | close=210.3000 | H1 EMA21=207.0025 EMA50=205.9108 | H4 EMA50=213.0677 EMA100=239.8317 EMA200=289.5893 | ATR=1.5176
+2026-06-15 05:17:03,685 [INFO] signal_engine: Pullback EMA Trend BCH_USDT LONG: no signal
+2026-06-15 05:17:03,686 [INFO] signal_engine: Pullback EMA Trend BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,686 [INFO] signal_engine: Breakout Retest BCH_USDT LONG: no signal
+2026-06-15 05:17:03,687 [INFO] signal_engine: Breakout Retest BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,688 [INFO] signal_engine: Liquidity Sweep BCH_USDT LONG: no signal
+2026-06-15 05:17:03,689 [INFO] signal_engine: Liquidity Sweep BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,689 [INFO] signal_engine: Compression Breakout BCH_USDT LONG: no signal
+2026-06-15 05:17:03,690 [INFO] signal_engine: Compression Breakout BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,690 [INFO] signal_engine: Pivot Reversal BCH_USDT LONG: no signal
+2026-06-15 05:17:03,691 [INFO] signal_engine: Pivot Reversal BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,700 [INFO] signal_engine: BCH_USDT | close=210.3000 | H1 EMA21=207.0025 EMA50=205.9108 | H4 EMA50=213.0677 EMA100=239.8317 EMA200=289.5893 | ATR=1.5176
+2026-06-15 05:17:03,702 [INFO] signal_engine: Pullback EMA Trend BCH_USDT LONG: no signal
+2026-06-15 05:17:03,703 [INFO] signal_engine: Pullback EMA Trend BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,703 [INFO] signal_engine: Breakout Retest BCH_USDT LONG: no signal
+2026-06-15 05:17:03,704 [INFO] signal_engine: Breakout Retest BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,704 [INFO] signal_engine: Liquidity Sweep BCH_USDT LONG: no signal
+2026-06-15 05:17:03,705 [INFO] signal_engine: Liquidity Sweep BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,706 [INFO] signal_engine: Compression Breakout BCH_USDT LONG: no signal
+2026-06-15 05:17:03,706 [INFO] signal_engine: Compression Breakout BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,707 [INFO] signal_engine: Pivot Reversal BCH_USDT LONG: no signal
+2026-06-15 05:17:03,707 [INFO] signal_engine: Pivot Reversal BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,716 [INFO] signal_engine: BCH_USDT | close=210.3000 | H1 EMA21=207.0025 EMA50=205.9108 | H4 EMA50=213.0677 EMA100=239.8317 EMA200=289.5893 | ATR=1.5176
+2026-06-15 05:17:03,718 [INFO] signal_engine: Pullback EMA Trend BCH_USDT LONG: no signal
+2026-06-15 05:17:03,719 [INFO] signal_engine: Pullback EMA Trend BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,719 [INFO] signal_engine: Breakout Retest BCH_USDT LONG: no signal
+2026-06-15 05:17:03,720 [INFO] signal_engine: Breakout Retest BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,721 [INFO] signal_engine: Liquidity Sweep BCH_USDT LONG: no signal
+2026-06-15 05:17:03,722 [INFO] signal_engine: Liquidity Sweep BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,722 [INFO] signal_engine: Compression Breakout BCH_USDT LONG: no signal
+2026-06-15 05:17:03,723 [INFO] signal_engine: Compression Breakout BCH_USDT SHORT: no signal
+2026-06-15 05:17:03,723 [INFO] signal_engine: Pivot Reversal BCH_USDT LONG: no signal
+2026-06-15 05:17:03,724 [INFO] signal_engine: Pivot Reversal BCH_USDT SHORT: no signal
+2026-06-15 05:17:05,755 [INFO] signal_engine: Check WIF_USDT: +6 H1, +2 H4
+2026-06-15 05:17:05,765 [INFO] signal_engine: WIF_USDT | close=0.1653 | H1 EMA21=0.1618 EMA50=0.1604 | H4 EMA50=0.1604 EMA100=0.1665 EMA200=0.1758 | ATR=0.0009
+2026-06-15 05:17:05,766 [INFO] signal_engine: Pullback EMA Trend WIF_USDT LONG: no signal
+2026-06-15 05:17:05,767 [INFO] signal_engine: Pullback EMA Trend WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,767 [INFO] signal_engine: Breakout Retest WIF_USDT LONG: no signal
+2026-06-15 05:17:05,768 [INFO] signal_engine: Breakout Retest WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,769 [INFO] signal_engine: Liquidity Sweep WIF_USDT LONG: no signal
+2026-06-15 05:17:05,770 [INFO] signal_engine: Liquidity Sweep WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,770 [INFO] signal_engine: Compression Breakout WIF_USDT LONG: no signal
+2026-06-15 05:17:05,771 [INFO] signal_engine: Compression Breakout WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,771 [INFO] signal_engine: Pivot Reversal WIF_USDT LONG: no signal
+2026-06-15 05:17:05,772 [INFO] signal_engine: Pivot Reversal WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,781 [INFO] signal_engine: WIF_USDT | close=0.1653 | H1 EMA21=0.1618 EMA50=0.1604 | H4 EMA50=0.1604 EMA100=0.1665 EMA200=0.1758 | ATR=0.0009
+2026-06-15 05:17:05,782 [INFO] signal_engine: Pullback EMA Trend WIF_USDT LONG: no signal
+2026-06-15 05:17:05,783 [INFO] signal_engine: Pullback EMA Trend WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,783 [INFO] signal_engine: Breakout Retest WIF_USDT LONG: no signal
+2026-06-15 05:17:05,784 [INFO] signal_engine: Breakout Retest WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,785 [INFO] signal_engine: Liquidity Sweep WIF_USDT LONG: no signal
+2026-06-15 05:17:05,786 [INFO] signal_engine: Liquidity Sweep WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,786 [INFO] signal_engine: Compression Breakout WIF_USDT LONG: no signal
+2026-06-15 05:17:05,787 [INFO] signal_engine: Compression Breakout WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,787 [INFO] signal_engine: Pivot Reversal WIF_USDT LONG: no signal
+2026-06-15 05:17:05,788 [INFO] signal_engine: Pivot Reversal WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,796 [INFO] signal_engine: WIF_USDT | close=0.1653 | H1 EMA21=0.1618 EMA50=0.1604 | H4 EMA50=0.1604 EMA100=0.1665 EMA200=0.1758 | ATR=0.0009
+2026-06-15 05:17:05,798 [INFO] signal_engine: Pullback EMA Trend WIF_USDT LONG: no signal
+2026-06-15 05:17:05,799 [INFO] signal_engine: Pullback EMA Trend WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,799 [INFO] signal_engine: Breakout Retest WIF_USDT LONG: no signal
+2026-06-15 05:17:05,800 [INFO] signal_engine: Breakout Retest WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,801 [INFO] signal_engine: Liquidity Sweep WIF_USDT LONG: no signal
+2026-06-15 05:17:05,801 [INFO] signal_engine: Liquidity Sweep WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,802 [INFO] signal_engine: Compression Breakout WIF_USDT LONG: no signal
+2026-06-15 05:17:05,802 [INFO] signal_engine: Compression Breakout WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,803 [INFO] signal_engine: Pivot Reversal WIF_USDT LONG: no signal
+2026-06-15 05:17:05,803 [INFO] signal_engine: Pivot Reversal WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,812 [INFO] signal_engine: WIF_USDT | close=0.1653 | H1 EMA21=0.1618 EMA50=0.1604 | H4 EMA50=0.1604 EMA100=0.1665 EMA200=0.1758 | ATR=0.0009
+2026-06-15 05:17:05,814 [INFO] signal_engine: Pullback EMA Trend WIF_USDT LONG: no signal
+2026-06-15 05:17:05,814 [INFO] signal_engine: Pullback EMA Trend WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,815 [INFO] signal_engine: Breakout Retest WIF_USDT LONG: no signal
+2026-06-15 05:17:05,815 [INFO] signal_engine: Breakout Retest WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,816 [INFO] signal_engine: Liquidity Sweep WIF_USDT LONG: no signal
+2026-06-15 05:17:05,817 [INFO] signal_engine: Liquidity Sweep WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,818 [INFO] signal_engine: Compression Breakout WIF_USDT LONG: no signal
+2026-06-15 05:17:05,818 [INFO] signal_engine: Compression Breakout WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,819 [INFO] signal_engine: Pivot Reversal WIF_USDT LONG: no signal
+2026-06-15 05:17:05,819 [INFO] signal_engine: Pivot Reversal WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,828 [INFO] signal_engine: WIF_USDT | close=0.1653 | H1 EMA21=0.1618 EMA50=0.1604 | H4 EMA50=0.1604 EMA100=0.1665 EMA200=0.1758 | ATR=0.0009
+2026-06-15 05:17:05,830 [INFO] signal_engine: Pullback EMA Trend WIF_USDT LONG: no signal
+2026-06-15 05:17:05,830 [INFO] signal_engine: Pullback EMA Trend WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,831 [INFO] signal_engine: Breakout Retest WIF_USDT LONG: no signal
+2026-06-15 05:17:05,831 [INFO] signal_engine: Breakout Retest WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,832 [INFO] signal_engine: Liquidity Sweep WIF_USDT LONG: no signal
+2026-06-15 05:17:05,833 [INFO] signal_engine: Liquidity Sweep WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,833 [INFO] signal_engine: Compression Breakout WIF_USDT LONG: no signal
+2026-06-15 05:17:05,834 [INFO] signal_engine: Compression Breakout WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,834 [INFO] signal_engine: Pivot Reversal WIF_USDT LONG: no signal
+2026-06-15 05:17:05,835 [INFO] signal_engine: Pivot Reversal WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,844 [INFO] signal_engine: WIF_USDT | close=0.1653 | H1 EMA21=0.1618 EMA50=0.1604 | H4 EMA50=0.1604 EMA100=0.1665 EMA200=0.1758 | ATR=0.0009
+2026-06-15 05:17:05,845 [INFO] signal_engine: Pullback EMA Trend WIF_USDT LONG: no signal
+2026-06-15 05:17:05,846 [INFO] signal_engine: Pullback EMA Trend WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,847 [INFO] signal_engine: Breakout Retest WIF_USDT LONG: no signal
+2026-06-15 05:17:05,847 [INFO] signal_engine: Breakout Retest WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,848 [INFO] signal_engine: Liquidity Sweep WIF_USDT LONG: no signal
+2026-06-15 05:17:05,849 [INFO] signal_engine: Liquidity Sweep WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,849 [INFO] signal_engine: Compression Breakout WIF_USDT LONG: no signal
+2026-06-15 05:17:05,850 [INFO] signal_engine: Compression Breakout WIF_USDT SHORT: no signal
+2026-06-15 05:17:05,850 [INFO] signal_engine: Pivot Reversal WIF_USDT LONG: no signal
+2026-06-15 05:17:05,851 [INFO] signal_engine: Pivot Reversal WIF_USDT SHORT: no signal
+2026-06-15 05:17:07,802 [INFO] signal_engine: Check XLM_USDT: +6 H1, +2 H4
+2026-06-15 05:17:07,811 [INFO] signal_engine: XLM_USDT | close=0.1887 | H1 EMA21=0.1869 EMA50=0.1871 | H4 EMA50=0.1925 EMA100=0.1940 EMA200=0.1879 | ATR=0.0017
+2026-06-15 05:17:07,813 [INFO] signal_engine: Pullback EMA Trend XLM_USDT LONG: no signal
+2026-06-15 05:17:07,814 [INFO] signal_engine: Pullback EMA Trend XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,814 [INFO] signal_engine: Breakout Retest XLM_USDT LONG: no signal
+2026-06-15 05:17:07,815 [INFO] signal_engine: Breakout Retest XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,816 [INFO] signal_engine: Liquidity Sweep XLM_USDT LONG: no signal
+2026-06-15 05:17:07,817 [INFO] signal_engine: Liquidity Sweep XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,817 [INFO] signal_engine: Compression Breakout XLM_USDT LONG: no signal
+2026-06-15 05:17:07,818 [INFO] signal_engine: Compression Breakout XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,818 [INFO] signal_engine: Pivot Reversal XLM_USDT LONG: no signal
+2026-06-15 05:17:07,818 [INFO] signal_engine: Pivot Reversal XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,828 [INFO] signal_engine: XLM_USDT | close=0.1887 | H1 EMA21=0.1869 EMA50=0.1871 | H4 EMA50=0.1925 EMA100=0.1940 EMA200=0.1879 | ATR=0.0017
+2026-06-15 05:17:07,829 [INFO] signal_engine: Pullback EMA Trend XLM_USDT LONG: no signal
+2026-06-15 05:17:07,830 [INFO] signal_engine: Pullback EMA Trend XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,831 [INFO] signal_engine: Breakout Retest XLM_USDT LONG: no signal
+2026-06-15 05:17:07,831 [INFO] signal_engine: Breakout Retest XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,832 [INFO] signal_engine: Liquidity Sweep XLM_USDT LONG: no signal
+2026-06-15 05:17:07,833 [INFO] signal_engine: Liquidity Sweep XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,833 [INFO] signal_engine: Compression Breakout XLM_USDT LONG: no signal
+2026-06-15 05:17:07,834 [INFO] signal_engine: Compression Breakout XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,834 [INFO] signal_engine: Pivot Reversal XLM_USDT LONG: no signal
+2026-06-15 05:17:07,835 [INFO] signal_engine: Pivot Reversal XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,844 [INFO] signal_engine: XLM_USDT | close=0.1887 | H1 EMA21=0.1869 EMA50=0.1871 | H4 EMA50=0.1925 EMA100=0.1940 EMA200=0.1879 | ATR=0.0017
+2026-06-15 05:17:07,846 [INFO] signal_engine: Pullback EMA Trend XLM_USDT LONG: no signal
+2026-06-15 05:17:07,847 [INFO] signal_engine: Pullback EMA Trend XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,847 [INFO] signal_engine: Breakout Retest XLM_USDT LONG: no signal
+2026-06-15 05:17:07,848 [INFO] signal_engine: Breakout Retest XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,848 [INFO] signal_engine: Liquidity Sweep XLM_USDT LONG: no signal
+2026-06-15 05:17:07,849 [INFO] signal_engine: Liquidity Sweep XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,850 [INFO] signal_engine: Compression Breakout XLM_USDT LONG: no signal
+2026-06-15 05:17:07,850 [INFO] signal_engine: Compression Breakout XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,851 [INFO] signal_engine: Pivot Reversal XLM_USDT LONG: no signal
+2026-06-15 05:17:07,851 [INFO] signal_engine: Pivot Reversal XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,861 [INFO] signal_engine: XLM_USDT | close=0.1887 | H1 EMA21=0.1869 EMA50=0.1871 | H4 EMA50=0.1925 EMA100=0.1940 EMA200=0.1879 | ATR=0.0017
+2026-06-15 05:17:07,862 [INFO] signal_engine: Pullback EMA Trend XLM_USDT LONG: no signal
+2026-06-15 05:17:07,863 [INFO] signal_engine: Pullback EMA Trend XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,863 [INFO] signal_engine: Breakout Retest XLM_USDT LONG: no signal
+2026-06-15 05:17:07,864 [INFO] signal_engine: Breakout Retest XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,865 [INFO] signal_engine: Liquidity Sweep XLM_USDT LONG: no signal
+2026-06-15 05:17:07,866 [INFO] signal_engine: Liquidity Sweep XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,866 [INFO] signal_engine: Compression Breakout XLM_USDT LONG: no signal
+2026-06-15 05:17:07,867 [INFO] signal_engine: Compression Breakout XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,867 [INFO] signal_engine: Pivot Reversal XLM_USDT LONG: no signal
+2026-06-15 05:17:07,868 [INFO] signal_engine: Pivot Reversal XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,877 [INFO] signal_engine: XLM_USDT | close=0.1887 | H1 EMA21=0.1869 EMA50=0.1871 | H4 EMA50=0.1925 EMA100=0.1940 EMA200=0.1879 | ATR=0.0017
+2026-06-15 05:17:07,879 [INFO] signal_engine: Pullback EMA Trend XLM_USDT LONG: no signal
+2026-06-15 05:17:07,880 [INFO] signal_engine: Pullback EMA Trend XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,881 [INFO] signal_engine: Breakout Retest XLM_USDT LONG: no signal
+2026-06-15 05:17:07,881 [INFO] signal_engine: Breakout Retest XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,882 [INFO] signal_engine: Liquidity Sweep XLM_USDT LONG: no signal
+2026-06-15 05:17:07,883 [INFO] signal_engine: Liquidity Sweep XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,884 [INFO] signal_engine: Compression Breakout XLM_USDT LONG: no signal
+2026-06-15 05:17:07,884 [INFO] signal_engine: Compression Breakout XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,885 [INFO] signal_engine: Pivot Reversal XLM_USDT LONG: no signal
+2026-06-15 05:17:07,885 [INFO] signal_engine: Pivot Reversal XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,895 [INFO] signal_engine: XLM_USDT | close=0.1887 | H1 EMA21=0.1869 EMA50=0.1871 | H4 EMA50=0.1925 EMA100=0.1940 EMA200=0.1879 | ATR=0.0017
+2026-06-15 05:17:07,896 [INFO] signal_engine: Pullback EMA Trend XLM_USDT LONG: no signal
+2026-06-15 05:17:07,897 [INFO] signal_engine: Pullback EMA Trend XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,898 [INFO] signal_engine: Breakout Retest XLM_USDT LONG: no signal
+2026-06-15 05:17:07,898 [INFO] signal_engine: Breakout Retest XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,899 [INFO] signal_engine: Liquidity Sweep XLM_USDT LONG: no signal
+2026-06-15 05:17:07,900 [INFO] signal_engine: Liquidity Sweep XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,900 [INFO] signal_engine: Compression Breakout XLM_USDT LONG: no signal
+2026-06-15 05:17:07,901 [INFO] signal_engine: Compression Breakout XLM_USDT SHORT: no signal
+2026-06-15 05:17:07,901 [INFO] signal_engine: Pivot Reversal XLM_USDT LONG: no signal
+2026-06-15 05:17:07,902 [INFO] signal_engine: Pivot Reversal XLM_USDT SHORT: no signal
+2026-06-15 05:17:09,863 [INFO] signal_engine: Check PAXG_USDT: +6 H1, +2 H4
+2026-06-15 05:17:09,873 [INFO] signal_engine: PAXG_USDT | close=4318.7100 | H1 EMA21=4274.4007 EMA50=4244.8126 | H4 EMA50=4253.7599 EMA100=4318.7851 EMA200=4410.8837 | ATR=7.0538
+2026-06-15 05:17:09,875 [INFO] signal_engine: Pullback EMA Trend PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,875 [INFO] signal_engine: Pullback EMA Trend PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,876 [INFO] signal_engine: Breakout Retest PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,876 [INFO] signal_engine: Breakout Retest PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,877 [INFO] signal_engine: Liquidity Sweep PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,878 [INFO] signal_engine: Liquidity Sweep PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,879 [INFO] signal_engine: Compression Breakout PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,879 [INFO] signal_engine: Compression Breakout PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,880 [INFO] signal_engine: Pivot Reversal PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,880 [INFO] signal_engine: Pivot Reversal PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,890 [INFO] signal_engine: PAXG_USDT | close=4318.7100 | H1 EMA21=4274.4007 EMA50=4244.8126 | H4 EMA50=4253.7599 EMA100=4318.7851 EMA200=4410.8837 | ATR=7.0538
+2026-06-15 05:17:09,892 [INFO] signal_engine: Pullback EMA Trend PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,892 [INFO] signal_engine: Pullback EMA Trend PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,893 [INFO] signal_engine: Breakout Retest PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,893 [INFO] signal_engine: Breakout Retest PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,894 [INFO] signal_engine: Liquidity Sweep PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,895 [INFO] signal_engine: Liquidity Sweep PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,896 [INFO] signal_engine: Compression Breakout PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,897 [INFO] signal_engine: Compression Breakout PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,897 [INFO] signal_engine: Pivot Reversal PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,898 [INFO] signal_engine: Pivot Reversal PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,907 [INFO] signal_engine: PAXG_USDT | close=4318.7100 | H1 EMA21=4274.4007 EMA50=4244.8126 | H4 EMA50=4253.7599 EMA100=4318.7851 EMA200=4410.8837 | ATR=7.0538
+2026-06-15 05:17:09,909 [INFO] signal_engine: Pullback EMA Trend PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,909 [INFO] signal_engine: Pullback EMA Trend PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,910 [INFO] signal_engine: Breakout Retest PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,910 [INFO] signal_engine: Breakout Retest PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,911 [INFO] signal_engine: Liquidity Sweep PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,912 [INFO] signal_engine: Liquidity Sweep PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,913 [INFO] signal_engine: Compression Breakout PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,914 [INFO] signal_engine: Compression Breakout PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,914 [INFO] signal_engine: Pivot Reversal PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,915 [INFO] signal_engine: Pivot Reversal PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,924 [INFO] signal_engine: PAXG_USDT | close=4318.7100 | H1 EMA21=4274.4007 EMA50=4244.8126 | H4 EMA50=4253.7599 EMA100=4318.7851 EMA200=4410.8837 | ATR=7.0538
+2026-06-15 05:17:09,926 [INFO] signal_engine: Pullback EMA Trend PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,927 [INFO] signal_engine: Pullback EMA Trend PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,927 [INFO] signal_engine: Breakout Retest PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,928 [INFO] signal_engine: Breakout Retest PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,929 [INFO] signal_engine: Liquidity Sweep PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,930 [INFO] signal_engine: Liquidity Sweep PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,930 [INFO] signal_engine: Compression Breakout PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,931 [INFO] signal_engine: Compression Breakout PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,931 [INFO] signal_engine: Pivot Reversal PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,932 [INFO] signal_engine: Pivot Reversal PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,941 [INFO] signal_engine: PAXG_USDT | close=4318.7100 | H1 EMA21=4274.4007 EMA50=4244.8126 | H4 EMA50=4253.7599 EMA100=4318.7851 EMA200=4410.8837 | ATR=7.0538
+2026-06-15 05:17:09,943 [INFO] signal_engine: Pullback EMA Trend PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,943 [INFO] signal_engine: Pullback EMA Trend PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,944 [INFO] signal_engine: Breakout Retest PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,944 [INFO] signal_engine: Breakout Retest PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,945 [INFO] signal_engine: Liquidity Sweep PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,946 [INFO] signal_engine: Liquidity Sweep PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,947 [INFO] signal_engine: Compression Breakout PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,947 [INFO] signal_engine: Compression Breakout PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,948 [INFO] signal_engine: Pivot Reversal PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,948 [INFO] signal_engine: Pivot Reversal PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,957 [INFO] signal_engine: PAXG_USDT | close=4318.7100 | H1 EMA21=4274.4007 EMA50=4244.8126 | H4 EMA50=4253.7599 EMA100=4318.7851 EMA200=4410.8837 | ATR=7.0538
+2026-06-15 05:17:09,959 [INFO] signal_engine: Pullback EMA Trend PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,959 [INFO] signal_engine: Pullback EMA Trend PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,960 [INFO] signal_engine: Breakout Retest PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,960 [INFO] signal_engine: Breakout Retest PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,961 [INFO] signal_engine: Liquidity Sweep PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,962 [INFO] signal_engine: Liquidity Sweep PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,963 [INFO] signal_engine: Compression Breakout PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,963 [INFO] signal_engine: Compression Breakout PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,964 [INFO] signal_engine: Pivot Reversal PAXG_USDT LONG: no signal
+2026-06-15 05:17:09,964 [INFO] signal_engine: Pivot Reversal PAXG_USDT SHORT: no signal
+2026-06-15 05:17:09,964 [INFO] main: --- Fine ciclo di scansione ---
