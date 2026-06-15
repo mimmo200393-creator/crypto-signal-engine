@@ -1,5 +1,5 @@
 -- storage/schema_v2.sql
--- Schema V2.1 per Crypto Signal Engine Institutional Adaptive Framework
+-- Schema V2.2 per Crypto Signal Engine Institutional Adaptive Framework
 -- Mantiene la tabella `trades` V1 per retrocompatibilita' e
 -- aggiunge la tabella `signals` V2 con schema esteso.
 
@@ -39,7 +39,7 @@ CREATE INDEX IF NOT EXISTS idx_trades_asset_dir_stato ON trades(asset, direzione
 CREATE INDEX IF NOT EXISTS idx_trades_stato ON trades(stato);
 
 -- ============================================================
--- V2: tabella signals (nuovo schema esteso)
+-- V2: tabella signals (schema esteso V2.2)
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS signals (
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS signals (
     timestamp_alert DATETIME,
     timestamp_closed DATETIME,
     trade_status TEXT NOT NULL DEFAULT 'GENERATED'
-        CHECK(trade_status IN ('GENERATED','REJECTED','APPROVED','NOTIFIED','OPEN','TP','SL')),
+        CHECK(trade_status IN ('GENERATED','REJECTED','APPROVED','NOTIFIED','OPEN','TP','SL','EXPIRED')),
     rejection_reason TEXT,
     mae REAL,
     mfe REAL,
@@ -69,7 +69,13 @@ CREATE TABLE IF NOT EXISTS signals (
     market_snapshot TEXT,
     macro_event_active BOOLEAN DEFAULT 0,
     macro_event_type TEXT,
-    macro_event_minutes_to_release INTEGER
+    macro_event_minutes_to_release INTEGER,
+    macro_risk TEXT,
+    zone_level REAL,
+    zone_touches INTEGER,
+    session TEXT,
+    momentum_direction TEXT,
+    atr_daily REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_signals_asset_dir_status
