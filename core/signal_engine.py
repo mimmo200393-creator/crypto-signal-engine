@@ -272,11 +272,19 @@ def run_scan_cycle(conn, config: dict, registry: StrategyRegistry):
             if send_telegram and final_ok:
                 db.update_signal_status(conn, signal_id, "OPEN")
 
-                sent_tg = telegram_bot.send_signal_alert(
-                    config["TELEGRAM_BOT_TOKEN"],
-                    config["TELEGRAM_CHAT_ID"],
-                    signal
-                )
+                # Usa formato dedicato per Zone + Confirmation
+                if signal.strategy_name == "Zone + Confirmation":
+                    sent_tg = telegram_bot.send_zone_signal_alert(
+                        config["TELEGRAM_BOT_TOKEN"],
+                        config["TELEGRAM_CHAT_ID"],
+                        signal
+                    )
+                else:
+                    sent_tg = telegram_bot.send_signal_alert(
+                        config["TELEGRAM_BOT_TOKEN"],
+                        config["TELEGRAM_CHAT_ID"],
+                        signal
+                    )
                 ntfy_bot.send_signal_alert(config.get("NTFY_TOPIC"), signal)
 
                 logger.info(
