@@ -1,9 +1,9 @@
 """
-storage/db.py  (V2.1)
+storage/db.py  (V2.2)
 Gestione connessione SQLite.
 
 Mantiene invariate tutte le funzioni V1 (trades, candles_cache).
-Aggiunge le funzioni per la tabella signals V2.
+Aggiunge le funzioni per la tabella signals V2 con campi V2.2.
 """
 
 import sqlite3
@@ -166,7 +166,7 @@ def update_trade_alert_timestamp(conn: sqlite3.Connection, trade_id: int,
 
 
 # ============================================================
-# signals (V2)
+# signals (V2.2)
 # ============================================================
 
 def insert_signal(conn: sqlite3.Connection, signal, market_snapshot: dict = None) -> str:
@@ -182,8 +182,9 @@ def insert_signal(conn: sqlite3.Connection, signal, market_snapshot: dict = None
             raw_score, final_score, market_regime,
             timestamp_setup, trade_status, rejection_reason,
             market_snapshot,
-            macro_event_active, macro_event_type, macro_event_minutes_to_release
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            macro_event_active, macro_event_type, macro_event_minutes_to_release,
+            macro_risk, zone_level, zone_touches, session, momentum_direction, atr_daily
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             signal.signal_id,
@@ -205,6 +206,12 @@ def insert_signal(conn: sqlite3.Connection, signal, market_snapshot: dict = None
             bool(macro_event),
             macro_event["type"] if macro_event else None,
             macro_event["minutes_to_release"] if macro_event else None,
+            ctx.get("macro_risk"),
+            ctx.get("zone_level"),
+            ctx.get("zone_touches"),
+            ctx.get("session"),
+            ctx.get("momentum"),
+            ctx.get("atr_daily"),
         ),
     )
     conn.commit()
