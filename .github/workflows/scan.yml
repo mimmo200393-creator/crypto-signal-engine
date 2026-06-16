@@ -1,5 +1,4 @@
 name: Crypto Signal Engine V2.1 - Scan
-
 on:
   schedule:
     - cron: "*/15 * * * *"
@@ -13,39 +12,31 @@ on:
         description: "Scan reale con soglia Final Score abbassata a 5 (test pipeline)"
         type: boolean
         default: false
-
 permissions:
   contents: write
-
 concurrency:
   group: signal-engine-scan
   cancel-in-progress: false
-
 jobs:
   scan:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-
       - name: Install dependencies
         run: pip install -r requirements.txt --break-system-packages || pip install -r requirements.txt
-
       - name: Set threshold override
         id: threshold
         run: |
@@ -54,7 +45,6 @@ jobs:
           else
             echo "value=" >> $GITHUB_OUTPUT
           fi
-
       - name: Run scan cycle
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -63,7 +53,6 @@ jobs:
           SEND_TEST_ALERT: ${{ github.event.inputs.send_test_alert }}
           TELEGRAM_SCORE_THRESHOLD_OVERRIDE: ${{ steps.threshold.outputs.value }}
         run: python3 main.py
-
       - name: Commit database e log
         run: |
           git config user.name "signal-engine-bot"
@@ -71,7 +60,6 @@ jobs:
           git add data/signals.db logs/engine.log
           git diff --staged --quiet || git commit -m "Scan V2.1 $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           git push
-
       - name: Daily Brief (08:00 UTC)
         if: ${{ github.event_name == 'schedule' }}
         env:
@@ -84,10 +72,27 @@ jobs:
           if [ "$HOUR" = "08" ] && [ "$MINUTE" -lt "20" ]; then
             python3 daily_brief_runner.py
           fi
-
+      - name: Institutional Scanner V3.2 (PAXG_USDT + BTC_USDT)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 v3_scanner_runner.py
+      - name: Institutional Scanner V4.0 Daily Edition (PAXG_USDT + BTC_USDT)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 v4_scanner_runner.py
+      - name: Commit V3/V4 Scanner database
+        run: |
+          git config user.name "signal-engine-bot"
+          git config user.email "actions@github.com"
+          git add data/signals.db
+          git diff --staged --quiet || git commit -m "V3/V4 Scanner $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          git push
       - name: Generate dashboard
         run: python3 generate_dashboard.py
-
       - name: Commit dashboard
         run: |
           git config user.name "signal-engine-bot"
