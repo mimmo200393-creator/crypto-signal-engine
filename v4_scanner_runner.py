@@ -9,8 +9,14 @@ perche' riusa le candele D1/M30/M15 scaricate da quest'ultimo
 (stessa tabella v3_candles_cache, evitando fetch duplicati).
 """
 import os
+import logging
 import yaml
 from core import v4_runner
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 config = yaml.safe_load(open("config.yaml"))
 config["TELEGRAM_BOT_TOKEN"] = os.environ.get("TELEGRAM_BOT_TOKEN", "")
