@@ -13600,3 +13600,853 @@
   ✗ Prezzo nella zona (1.51% da 4402.9213)
   Rejected: PRICE_NOT_IN_ZONE (1.51% > 0.5%)
 2026-06-16 12:34:32,568 [INFO] main: --- Fine ciclo di scansione ---
+2026-06-16 17:50:36,594 [INFO] main: Avvio Crypto Signal Engine V2.1 | strategie=['pullback_ema', 'breakout_retest', 'liquidity_sweep', 'compression_breakout', 'pivot_reversal', 'zone_confirmation'] | watchlist=14 asset
+2026-06-16 17:50:36,598 [INFO] strategy_registry: Strategia registrata: Pullback EMA Trend V1.0
+2026-06-16 17:50:36,599 [INFO] strategy_registry: Strategia registrata: Breakout Retest V1.0
+2026-06-16 17:50:36,601 [INFO] strategy_registry: Strategia registrata: Liquidity Sweep V1.0
+2026-06-16 17:50:36,602 [INFO] strategy_registry: Strategia registrata: Compression Breakout V1.0
+2026-06-16 17:50:36,604 [INFO] strategy_registry: Strategia registrata: Pivot Reversal V1.0
+2026-06-16 17:50:36,607 [INFO] strategy_registry: Strategia registrata: Zone + Confirmation V1.0
+2026-06-16 17:50:36,607 [INFO] strategy_registry: Registry caricato: 6 strategie attive
+2026-06-16 17:50:36,607 [INFO] main: Bootstrap storico...
+2026-06-16 17:50:36,607 [INFO] signal_engine: Bootstrap skip: BTC_USDT 4h (304 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: BTC_USDT 1h (314 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: ETH_USDT 4h (304 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: ETH_USDT 1h (314 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: ADA_USDT 4h (304 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: ADA_USDT 1h (314 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: SOL_USDT 4h (304 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: SOL_USDT 1h (314 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: LINK_USDT 4h (304 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: LINK_USDT 1h (314 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: XRP_USDT 4h (304 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: XRP_USDT 1h (314 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: DOGE_USDT 4h (304 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: DOGE_USDT 1h (314 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: LTC_USDT 4h (304 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: LTC_USDT 1h (314 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: DOT_USDT 4h (304 candele)
+2026-06-16 17:50:36,608 [INFO] signal_engine: Bootstrap skip: DOT_USDT 1h (314 candele)
+2026-06-16 17:50:36,609 [INFO] signal_engine: Bootstrap skip: FIL_USDT 4h (304 candele)
+2026-06-16 17:50:36,609 [INFO] signal_engine: Bootstrap skip: FIL_USDT 1h (314 candele)
+2026-06-16 17:50:36,609 [INFO] signal_engine: Bootstrap skip: BCH_USDT 4h (304 candele)
+2026-06-16 17:50:36,609 [INFO] signal_engine: Bootstrap skip: BCH_USDT 1h (314 candele)
+2026-06-16 17:50:36,609 [INFO] signal_engine: Bootstrap skip: WIF_USDT 4h (304 candele)
+2026-06-16 17:50:36,609 [INFO] signal_engine: Bootstrap skip: WIF_USDT 1h (314 candele)
+2026-06-16 17:50:36,609 [INFO] signal_engine: Bootstrap skip: XLM_USDT 4h (304 candele)
+2026-06-16 17:50:36,609 [INFO] signal_engine: Bootstrap skip: XLM_USDT 1h (314 candele)
+2026-06-16 17:50:36,609 [INFO] signal_engine: Bootstrap skip: PAXG_USDT 4h (304 candele)
+2026-06-16 17:50:36,609 [INFO] signal_engine: Bootstrap skip: PAXG_USDT 1h (314 candele)
+2026-06-16 17:50:36,609 [INFO] main: Bootstrap completato.
+2026-06-16 17:50:36,609 [INFO] main: --- Inizio ciclo di scansione ---
+2026-06-16 17:50:38,717 [INFO] signal_engine: Check BTC_USDT: +5 H1, +1 H4
+2026-06-16 17:50:38,728 [INFO] signal_engine: BTC_USDT: 5 candele accumulate — trade manager aggiornato su tutte, valutazione segnali SOLO sull'ultima (FIX 1)
+2026-06-16 17:50:38,735 [INFO] signal_engine: BTC_USDT | close=65961.6800 | H1 EMA21=66162.8210 EMA50=65845.0348 | H4 EMA50=64792.4279 EMA100=66012.1941 EMA200=69171.6511 | ATR=410.7499
+2026-06-16 17:50:38,736 [INFO] signal_engine: BTC_USDT | Regime: TRENDING
+2026-06-16 17:50:38,736 [INFO] signal_engine: Pullback EMA Trend BTC_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  ✓ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:38,737 [INFO] signal_engine: Pullback EMA Trend BTC_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  ✓ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:38,737 [INFO] signal_engine: Breakout Retest BTC_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:38,738 [INFO] signal_engine: Breakout Retest BTC_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:38,738 [INFO] signal_engine: Liquidity Sweep BTC_USDT LONG:
+  ✓ Livelli S/R significativi (>=2 tocchi)
+  ✗ Sweep del livello (low<S<close)
+  ✗ Rejection wick (>=2x corpo)
+  ✗ Trigger H1
+  Rejected: SWEEP_MISSING
+2026-06-16 17:50:38,739 [INFO] signal_engine: Liquidity Sweep BTC_USDT SHORT:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:38,739 [INFO] signal_engine: Compression Breakout BTC_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:38,740 [INFO] signal_engine: Compression Breakout BTC_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:38,740 [INFO] signal_engine: Pivot Reversal BTC_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:38,741 [INFO] signal_engine: Pivot Reversal BTC_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:38,741 [INFO] signal_engine: Zone + Confirmation BTC_USDT LONG:
+  ✗ Bias H4 allineato
+  ✗ Prezzo nella zona (4.64% da 69171.6511)
+  Rejected: PRICE_NOT_IN_ZONE (4.64% > 0.5%)
+2026-06-16 17:50:38,742 [INFO] signal_engine: Zone + Confirmation BTC_USDT SHORT:
+  ✓ Bias H4 allineato
+  ✓ Prezzo nella zona (0.08% da 66012.1941)
+  ✗ Pattern Rejection Candle
+  ✗ Pattern Liquidity Sweep
+  ✗ Pattern Pullback EMA
+  Rejected: NO_PATTERN_CONFIRMED
+2026-06-16 17:50:40,755 [INFO] signal_engine: Check ETH_USDT: +5 H1, +1 H4
+2026-06-16 17:50:40,765 [INFO] signal_engine: ETH_USDT: 5 candele accumulate — trade manager aggiornato su tutte, valutazione segnali SOLO sull'ultima (FIX 1)
+2026-06-16 17:50:40,770 [INFO] signal_engine: ETH_USDT | close=1796.1500 | H1 EMA21=1787.9196 EMA50=1765.1220 | H4 EMA50=1723.8035 EMA100=1768.9946 EMA200=1888.9256 | ATR=20.1385
+2026-06-16 17:50:40,771 [INFO] signal_engine: ETH_USDT | Regime: TRENDING
+2026-06-16 17:50:40,772 [INFO] signal_engine: Pullback EMA Trend ETH_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  ✓ Pullback EMA21 o EMA50
+  ✓ Trigger H1
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:40,773 [INFO] signal_engine: Pullback EMA Trend ETH_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  ✓ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:40,773 [INFO] signal_engine: Breakout Retest ETH_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:40,773 [INFO] signal_engine: Breakout Retest ETH_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:40,774 [INFO] signal_engine: Liquidity Sweep ETH_USDT LONG:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:40,775 [INFO] signal_engine: Liquidity Sweep ETH_USDT SHORT:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:40,775 [INFO] signal_engine: Compression Breakout ETH_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:40,775 [INFO] signal_engine: Compression Breakout ETH_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:40,776 [INFO] signal_engine: Pivot Reversal ETH_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:40,776 [INFO] signal_engine: Pivot Reversal ETH_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:40,777 [INFO] signal_engine: Zone + Confirmation ETH_USDT LONG:
+  ✗ Bias H4 allineato
+  ✗ Prezzo nella zona (4.91% da 1888.9256)
+  Rejected: PRICE_NOT_IN_ZONE (4.91% > 0.5%)
+2026-06-16 17:50:40,778 [INFO] signal_engine: Zone + Confirmation ETH_USDT SHORT:
+  ✓ Bias H4 allineato
+  ✗ Prezzo nella zona (4.91% da 1888.9256)
+  Rejected: PRICE_NOT_IN_ZONE (4.91% > 0.5%)
+2026-06-16 17:50:43,330 [INFO] signal_engine: Check ADA_USDT: +5 H1, +1 H4
+2026-06-16 17:50:43,341 [INFO] signal_engine: ADA_USDT: 5 candele accumulate — trade manager aggiornato su tutte, valutazione segnali SOLO sull'ultima (FIX 1)
+2026-06-16 17:50:43,346 [INFO] signal_engine: ADA_USDT | close=0.1744 | H1 EMA21=0.1777 EMA50=0.1778 | H4 EMA50=0.1759 EMA100=0.1854 EMA200=0.2045 | ATR=0.0023
+2026-06-16 17:50:43,347 [INFO] signal_engine: ADA_USDT | Regime: TRENDING
+2026-06-16 17:50:43,347 [INFO] signal_engine: Pullback EMA Trend ADA_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✗ Trend H1 (LONG)
+  ✓ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:43,348 [INFO] signal_engine: Pullback EMA Trend ADA_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✓ Trend H1 (SHORT)
+  ✗ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: PULLBACK_MISSING
+2026-06-16 17:50:43,348 [INFO] signal_engine: Breakout Retest ADA_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✗ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:43,349 [INFO] signal_engine: Breakout Retest ADA_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✓ Trend H1 (SHORT)
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:43,350 [INFO] signal_engine: Liquidity Sweep ADA_USDT LONG:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:43,350 [INFO] signal_engine: Liquidity Sweep ADA_USDT SHORT:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:43,351 [INFO] signal_engine: Compression Breakout ADA_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✗ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:43,351 [INFO] signal_engine: Compression Breakout ADA_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✓ Trend H1 (SHORT)
+  ✗ ATR compresso (<80% media)
+  ✗ Range ristretto (<=1 ATR)
+  ✗ Breakout dal range
+  → 1.03 ATR ratio
+  Rejected: ATR_NOT_COMPRESSED (1.03 >= 0.8)
+2026-06-16 17:50:43,352 [INFO] signal_engine: Pivot Reversal ADA_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✗ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:43,352 [INFO] signal_engine: Pivot Reversal ADA_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✓ Trend H1 (SHORT)
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:43,353 [INFO] signal_engine: Zone + Confirmation ADA_USDT LONG:
+  ✗ Bias H4 allineato
+  ✗ Prezzo nella zona (14.72% da 0.2045)
+  Rejected: PRICE_NOT_IN_ZONE (14.72% > 0.5%)
+2026-06-16 17:50:43,354 [INFO] signal_engine: Zone + Confirmation ADA_USDT SHORT:
+  ✓ Bias H4 allineato
+  ✗ Prezzo nella zona (0.82% da 0.1759)
+  Rejected: PRICE_NOT_IN_ZONE (0.82% > 0.5%)
+2026-06-16 17:50:45,667 [INFO] signal_engine: Check SOL_USDT: +5 H1, +1 H4
+2026-06-16 17:50:45,679 [INFO] signal_engine: SOL_USDT: 5 candele accumulate — trade manager aggiornato su tutte, valutazione segnali SOLO sull'ultima (FIX 1)
+2026-06-16 17:50:45,684 [INFO] signal_engine: SOL_USDT | close=73.6800 | H1 EMA21=73.8369 EMA50=72.6897 | H4 EMA50=69.9068 EMA100=71.3050 EMA200=75.3877 | ATR=0.8054
+2026-06-16 17:50:45,685 [INFO] signal_engine: SOL_USDT | Regime: TRENDING
+2026-06-16 17:50:45,685 [INFO] signal_engine: Pullback EMA Trend SOL_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  ✓ Pullback EMA21 o EMA50
+  ✓ Trigger H1
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:45,686 [INFO] signal_engine: Pullback EMA Trend SOL_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  ✓ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:45,686 [INFO] signal_engine: Breakout Retest SOL_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:45,687 [INFO] signal_engine: Breakout Retest SOL_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:45,688 [INFO] signal_engine: Liquidity Sweep SOL_USDT LONG:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:45,688 [INFO] signal_engine: Liquidity Sweep SOL_USDT SHORT:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:45,689 [INFO] signal_engine: Compression Breakout SOL_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:45,689 [INFO] signal_engine: Compression Breakout SOL_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:45,689 [INFO] signal_engine: Pivot Reversal SOL_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:45,690 [INFO] signal_engine: Pivot Reversal SOL_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:45,690 [INFO] signal_engine: Zone + Confirmation SOL_USDT LONG:
+  ✗ Bias H4 allineato
+  ✗ Prezzo nella zona (2.27% da 75.3877)
+  Rejected: PRICE_NOT_IN_ZONE (2.27% > 0.5%)
+2026-06-16 17:50:45,691 [INFO] signal_engine: Zone + Confirmation SOL_USDT SHORT:
+  ✓ Bias H4 allineato
+  ✗ Prezzo nella zona (2.27% da 75.3877)
+  Rejected: PRICE_NOT_IN_ZONE (2.27% > 0.5%)
+2026-06-16 17:50:47,844 [INFO] signal_engine: Check LINK_USDT: +5 H1, +1 H4
+2026-06-16 17:50:47,854 [INFO] signal_engine: LINK_USDT: 5 candele accumulate — trade manager aggiornato su tutte, valutazione segnali SOLO sull'ultima (FIX 1)
+2026-06-16 17:50:47,859 [INFO] signal_engine: LINK_USDT | close=8.2460 | H1 EMA21=8.2756 EMA50=8.2264 | H4 EMA50=8.0715 EMA100=8.2180 EMA200=8.5929 | ATR=0.0832
+2026-06-16 17:50:47,860 [INFO] signal_engine: LINK_USDT | Regime: TRENDING
+2026-06-16 17:50:47,860 [INFO] signal_engine: Pullback EMA Trend LINK_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  ✓ Pullback EMA21 o EMA50
+  ✓ Trigger H1
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:47,861 [INFO] signal_engine: Pullback EMA Trend LINK_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  ✓ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:47,861 [INFO] signal_engine: Breakout Retest LINK_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:47,862 [INFO] signal_engine: Breakout Retest LINK_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:47,862 [INFO] signal_engine: Liquidity Sweep LINK_USDT LONG:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:47,863 [INFO] signal_engine: Liquidity Sweep LINK_USDT SHORT:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:47,864 [INFO] signal_engine: Compression Breakout LINK_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:47,864 [INFO] signal_engine: Compression Breakout LINK_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:47,864 [INFO] signal_engine: Pivot Reversal LINK_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:47,865 [INFO] signal_engine: Pivot Reversal LINK_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:47,866 [INFO] signal_engine: Zone + Confirmation LINK_USDT LONG:
+  ✗ Bias H4 allineato
+  ✗ Prezzo nella zona (4.04% da 8.5929)
+  Rejected: PRICE_NOT_IN_ZONE (4.04% > 0.5%)
+2026-06-16 17:50:47,866 [INFO] signal_engine: Zone + Confirmation LINK_USDT SHORT:
+  ✓ Bias H4 allineato
+  ✗ Prezzo nella zona (4.04% da 8.5929)
+  Rejected: PRICE_NOT_IN_ZONE (4.04% > 0.5%)
+2026-06-16 17:50:49,926 [INFO] signal_engine: Check XRP_USDT: +5 H1, +1 H4
+2026-06-16 17:50:49,936 [INFO] signal_engine: XRP_USDT: 5 candele accumulate — trade manager aggiornato su tutte, valutazione segnali SOLO sull'ultima (FIX 1)
+2026-06-16 17:50:49,941 [INFO] signal_engine: XRP_USDT | close=1.2193 | H1 EMA21=1.2279 EMA50=1.2140 | H4 EMA50=1.1794 EMA100=1.1960 EMA200=1.2474 | ATR=0.0134
+2026-06-16 17:50:49,942 [INFO] signal_engine: XRP_USDT | Regime: TRENDING
+2026-06-16 17:50:49,943 [INFO] signal_engine: Pullback EMA Trend XRP_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  ✓ Pullback EMA21 o EMA50
+  ✓ Trigger H1
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:49,943 [INFO] signal_engine: Pullback EMA Trend XRP_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  ✓ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:49,944 [INFO] signal_engine: Breakout Retest XRP_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:49,944 [INFO] signal_engine: Breakout Retest XRP_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:49,945 [INFO] signal_engine: Liquidity Sweep XRP_USDT LONG:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:49,946 [INFO] signal_engine: Liquidity Sweep XRP_USDT SHORT:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:49,946 [INFO] signal_engine: Compression Breakout XRP_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:49,946 [INFO] signal_engine: Compression Breakout XRP_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:49,947 [INFO] signal_engine: Pivot Reversal XRP_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:49,947 [INFO] signal_engine: Pivot Reversal XRP_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:49,948 [INFO] signal_engine: Zone + Confirmation XRP_USDT LONG:
+  ✗ Bias H4 allineato
+  ✗ Prezzo nella zona (2.25% da 1.2474)
+  Rejected: PRICE_NOT_IN_ZONE (2.25% > 0.5%)
+2026-06-16 17:50:49,948 [INFO] signal_engine: Zone + Confirmation XRP_USDT SHORT:
+  ✓ Bias H4 allineato
+  ✗ Prezzo nella zona (2.25% da 1.2474)
+  Rejected: PRICE_NOT_IN_ZONE (2.25% > 0.5%)
+2026-06-16 17:50:51,985 [INFO] signal_engine: Check DOGE_USDT: +5 H1, +1 H4
+2026-06-16 17:50:51,995 [INFO] signal_engine: DOGE_USDT: 5 candele accumulate — trade manager aggiornato su tutte, valutazione segnali SOLO sull'ultima (FIX 1)
+2026-06-16 17:50:52,000 [INFO] signal_engine: DOGE_USDT | close=0.0872 | H1 EMA21=0.0878 EMA50=0.0880 | H4 EMA50=0.0876 EMA100=0.0896 EMA200=0.0939 | ATR=0.0008
+2026-06-16 17:50:52,001 [INFO] signal_engine: DOGE_USDT | Regime: TRENDING
+2026-06-16 17:50:52,001 [INFO] signal_engine: Pullback EMA Trend DOGE_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✗ Trend H1 (LONG)
+  ✓ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:52,002 [INFO] signal_engine: Pullback EMA Trend DOGE_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✓ Trend H1 (SHORT)
+  ✗ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: PULLBACK_MISSING
+2026-06-16 17:50:52,002 [INFO] signal_engine: Breakout Retest DOGE_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✗ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:52,003 [INFO] signal_engine: Breakout Retest DOGE_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✓ Trend H1 (SHORT)
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:52,004 [INFO] signal_engine: Liquidity Sweep DOGE_USDT LONG:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:52,004 [INFO] signal_engine: Liquidity Sweep DOGE_USDT SHORT:
+  ✓ Livelli S/R significativi (>=2 tocchi)
+  ✗ Sweep del livello (low<S<close)
+  ✗ Rejection wick (>=2x corpo)
+  ✗ Trigger H1
+  Rejected: SWEEP_MISSING
+2026-06-16 17:50:52,005 [INFO] signal_engine: Compression Breakout DOGE_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✗ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:52,005 [INFO] signal_engine: Compression Breakout DOGE_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✓ Trend H1 (SHORT)
+  ✗ ATR compresso (<80% media)
+  ✗ Range ristretto (<=1 ATR)
+  ✗ Breakout dal range
+  → 1.13 ATR ratio
+  Rejected: ATR_NOT_COMPRESSED (1.13 >= 0.8)
+2026-06-16 17:50:52,006 [INFO] signal_engine: Pivot Reversal DOGE_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✗ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:52,007 [INFO] signal_engine: Pivot Reversal DOGE_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✓ Trend H1 (SHORT)
+  ✓ Livelli S/R significativi (>=2 tocchi)
+  ✗ Prezzo al livello (<=0.5 ATR)
+  ✗ Rejection candle (wick>=2x corpo)
+  ✗ Trigger H1
+  Rejected: PRICE_NOT_AT_LEVEL
+2026-06-16 17:50:52,007 [INFO] signal_engine: Zone + Confirmation DOGE_USDT LONG:
+  ✗ Bias H4 allineato
+  ✗ Prezzo nella zona (7.14% da 0.0939)
+  Rejected: PRICE_NOT_IN_ZONE (7.14% > 0.5%)
+2026-06-16 17:50:52,008 [INFO] signal_engine: Zone + Confirmation DOGE_USDT SHORT:
+  ✓ Bias H4 allineato
+  ✓ Prezzo nella zona (0.45% da 0.0876)
+  ✗ Pattern Rejection Candle
+  ✗ Pattern Liquidity Sweep
+  ✗ Pattern Pullback EMA
+  Rejected: NO_PATTERN_CONFIRMED
+2026-06-16 17:50:54,115 [INFO] signal_engine: Check LTC_USDT: +5 H1, +1 H4
+2026-06-16 17:50:54,125 [INFO] signal_engine: LTC_USDT: 5 candele accumulate — trade manager aggiornato su tutte, valutazione segnali SOLO sull'ultima (FIX 1)
+2026-06-16 17:50:54,130 [INFO] signal_engine: LTC_USDT | close=45.4610 | H1 EMA21=45.4261 EMA50=45.2332 | H4 EMA50=44.4668 EMA100=45.5889 EMA200=48.2236 | ATR=0.3812
+2026-06-16 17:50:54,131 [INFO] signal_engine: LTC_USDT | Regime: TRENDING
+2026-06-16 17:50:54,131 [INFO] signal_engine: Pullback EMA Trend LTC_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  ✓ Pullback EMA21 o EMA50
+  ✓ Trigger H1
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:54,132 [INFO] signal_engine: Pullback EMA Trend LTC_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  ✓ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:54,132 [INFO] signal_engine: Breakout Retest LTC_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:54,133 [INFO] signal_engine: Breakout Retest LTC_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:54,133 [INFO] signal_engine: Liquidity Sweep LTC_USDT LONG:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:54,134 [INFO] signal_engine: Liquidity Sweep LTC_USDT SHORT:
+  ✓ Livelli S/R significativi (>=2 tocchi)
+  ✗ Sweep del livello (low<S<close)
+  ✗ Rejection wick (>=2x corpo)
+  ✗ Trigger H1
+  Rejected: SWEEP_MISSING
+2026-06-16 17:50:54,134 [INFO] signal_engine: Compression Breakout LTC_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:54,135 [INFO] signal_engine: Compression Breakout LTC_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:54,135 [INFO] signal_engine: Pivot Reversal LTC_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:54,135 [INFO] signal_engine: Pivot Reversal LTC_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:54,136 [INFO] signal_engine: Zone + Confirmation LTC_USDT LONG:
+  ✗ Bias H4 allineato
+  ✗ Prezzo nella zona (5.73% da 48.2236)
+  Rejected: PRICE_NOT_IN_ZONE (5.73% > 0.5%)
+2026-06-16 17:50:54,137 [INFO] signal_engine: Zone + Confirmation LTC_USDT SHORT:
+  ✓ Bias H4 allineato
+  ✓ Prezzo nella zona (0.28% da 45.5889)
+  ✗ Pattern Rejection Candle
+  ✗ Pattern Liquidity Sweep
+  ✗ Pattern Pullback EMA
+  Rejected: NO_PATTERN_CONFIRMED
+2026-06-16 17:50:56,189 [INFO] signal_engine: Check DOT_USDT: +5 H1, +1 H4
+2026-06-16 17:50:56,199 [INFO] signal_engine: DOT_USDT: 5 candele accumulate — trade manager aggiornato su tutte, valutazione segnali SOLO sull'ultima (FIX 1)
+2026-06-16 17:50:56,204 [INFO] signal_engine: DOT_USDT | close=1.0100 | H1 EMA21=1.0126 EMA50=1.0061 | H4 EMA50=0.9931 EMA100=1.0279 EMA200=1.0959 | ATR=0.0100
+2026-06-16 17:50:56,205 [INFO] signal_engine: DOT_USDT | Regime: NEUTRAL
+2026-06-16 17:50:56,205 [INFO] signal_engine: Pullback EMA Trend DOT_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  ✓ Pullback EMA21 o EMA50
+  ✓ Trigger H1
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:56,206 [INFO] signal_engine: Pullback EMA Trend DOT_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  ✓ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:56,206 [INFO] signal_engine: Breakout Retest DOT_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:56,206 [INFO] signal_engine: Breakout Retest DOT_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:56,207 [INFO] signal_engine: Liquidity Sweep DOT_USDT LONG:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:56,208 [INFO] signal_engine: Liquidity Sweep DOT_USDT SHORT:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:56,208 [INFO] signal_engine: Compression Breakout DOT_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:56,209 [INFO] signal_engine: Compression Breakout DOT_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:56,209 [INFO] signal_engine: Pivot Reversal DOT_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:56,209 [INFO] signal_engine: Pivot Reversal DOT_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:56,210 [INFO] signal_engine: Zone + Confirmation DOT_USDT LONG:
+  ✗ Bias H4 allineato
+  ✗ Prezzo nella zona (7.84% da 1.0959)
+  Rejected: PRICE_NOT_IN_ZONE (7.84% > 0.5%)
+2026-06-16 17:50:56,211 [INFO] signal_engine: Zone + Confirmation DOT_USDT SHORT:
+  ✓ Bias H4 allineato
+  ✗ Prezzo nella zona (1.74% da 1.0279)
+  Rejected: PRICE_NOT_IN_ZONE (1.74% > 0.5%)
+2026-06-16 17:50:58,335 [INFO] signal_engine: Check FIL_USDT: +5 H1, +1 H4
+2026-06-16 17:50:58,346 [INFO] signal_engine: FIL_USDT: 5 candele accumulate — trade manager aggiornato su tutte, valutazione segnali SOLO sull'ultima (FIX 1)
+2026-06-16 17:50:58,350 [INFO] signal_engine: FIL_USDT | close=0.7904 | H1 EMA21=0.7965 EMA50=0.7941 | H4 EMA50=0.7872 EMA100=0.8168 EMA200=0.8681 | ATR=0.0045
+2026-06-16 17:50:58,351 [INFO] signal_engine: FIL_USDT | Regime: RANGING
+2026-06-16 17:50:58,352 [INFO] signal_engine: Pullback EMA Trend FIL_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  ✓ Pullback EMA21 o EMA50
+  ✓ Trigger H1
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:58,352 [INFO] signal_engine: Pullback EMA Trend FIL_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  ✗ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:58,353 [INFO] signal_engine: Breakout Retest FIL_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:58,353 [INFO] signal_engine: Breakout Retest FIL_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:58,354 [INFO] signal_engine: Liquidity Sweep FIL_USDT LONG:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:58,354 [INFO] signal_engine: Liquidity Sweep FIL_USDT SHORT:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:50:58,355 [INFO] signal_engine: Compression Breakout FIL_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:58,355 [INFO] signal_engine: Compression Breakout FIL_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:58,356 [INFO] signal_engine: Pivot Reversal FIL_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:50:58,356 [INFO] signal_engine: Pivot Reversal FIL_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:50:58,357 [INFO] signal_engine: Zone + Confirmation FIL_USDT LONG:
+  ✗ Bias H4 allineato
+  ✗ Prezzo nella zona (8.95% da 0.8681)
+  Rejected: PRICE_NOT_IN_ZONE (8.95% > 0.5%)
+2026-06-16 17:50:58,357 [INFO] signal_engine: Zone + Confirmation FIL_USDT SHORT:
+  ✓ Bias H4 allineato
+  ✗ Prezzo nella zona (3.24% da 0.8168)
+  Rejected: PRICE_NOT_IN_ZONE (3.24% > 0.5%)
+2026-06-16 17:51:00,408 [INFO] signal_engine: Check BCH_USDT: +5 H1, +1 H4
+2026-06-16 17:51:00,418 [INFO] signal_engine: BCH_USDT: 5 candele accumulate — trade manager aggiornato su tutte, valutazione segnali SOLO sull'ultima (FIX 1)
+2026-06-16 17:51:00,423 [INFO] signal_engine: BCH_USDT | close=217.8500 | H1 EMA21=220.1400 EMA50=217.9428 | H4 EMA50=216.3082 EMA100=237.2419 EMA200=283.7952 | ATR=2.6588
+2026-06-16 17:51:00,424 [INFO] signal_engine: BCH_USDT | Regime: NEUTRAL
+2026-06-16 17:51:00,425 [INFO] signal_engine: Pullback EMA Trend BCH_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  ✓ Pullback EMA21 o EMA50
+  ✓ Trigger H1
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:51:00,425 [INFO] signal_engine: Pullback EMA Trend BCH_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  ✓ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:51:00,426 [INFO] signal_engine: Breakout Retest BCH_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:51:00,426 [INFO] signal_engine: Breakout Retest BCH_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:51:00,427 [INFO] signal_engine: Liquidity Sweep BCH_USDT LONG:
+  ✓ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_LEVEL_FOUND
+2026-06-16 17:51:00,427 [INFO] signal_engine: Liquidity Sweep BCH_USDT SHORT:
+  ✓ Livelli S/R significativi (>=2 tocchi)
+  ✗ Sweep del livello (low<S<close)
+  ✗ Rejection wick (>=2x corpo)
+  ✗ Trigger H1
+  Rejected: SWEEP_MISSING
+2026-06-16 17:51:00,428 [INFO] signal_engine: Compression Breakout BCH_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:51:00,428 [INFO] signal_engine: Compression Breakout BCH_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:51:00,429 [INFO] signal_engine: Pivot Reversal BCH_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:51:00,429 [INFO] signal_engine: Pivot Reversal BCH_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:51:00,430 [INFO] signal_engine: Zone + Confirmation BCH_USDT LONG:
+  ✗ Bias H4 allineato
+  ✗ Prezzo nella zona (23.24% da 283.7952)
+  Rejected: PRICE_NOT_IN_ZONE (23.24% > 0.5%)
+2026-06-16 17:51:00,430 [INFO] signal_engine: Zone + Confirmation BCH_USDT SHORT:
+  ✓ Bias H4 allineato
+  ✗ Prezzo nella zona (8.17% da 237.2419)
+  Rejected: PRICE_NOT_IN_ZONE (8.17% > 0.5%)
+2026-06-16 17:51:02,561 [INFO] signal_engine: Check WIF_USDT: +5 H1, +1 H4
+2026-06-16 17:51:02,571 [INFO] signal_engine: WIF_USDT: 5 candele accumulate — trade manager aggiornato su tutte, valutazione segnali SOLO sull'ultima (FIX 1)
+2026-06-16 17:51:02,576 [INFO] signal_engine: WIF_USDT | close=0.1670 | H1 EMA21=0.1694 EMA50=0.1675 | H4 EMA50=0.1633 EMA100=0.1671 EMA200=0.1751 | ATR=0.0011
+2026-06-16 17:51:02,576 [INFO] signal_engine: WIF_USDT | Regime: NEUTRAL
+2026-06-16 17:51:02,577 [INFO] signal_engine: Pullback EMA Trend WIF_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  ✓ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:51:02,578 [INFO] signal_engine: Pullback EMA Trend WIF_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  ✗ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:51:02,578 [INFO] signal_engine: Breakout Retest WIF_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:51:02,578 [INFO] signal_engine: Breakout Retest WIF_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:51:02,579 [INFO] signal_engine: Liquidity Sweep WIF_USDT LONG:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:51:02,580 [INFO] signal_engine: Liquidity Sweep WIF_USDT SHORT:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:51:02,580 [INFO] signal_engine: Compression Breakout WIF_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:51:02,581 [INFO] signal_engine: Compression Breakout WIF_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:51:02,581 [INFO] signal_engine: Pivot Reversal WIF_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:51:02,581 [INFO] signal_engine: Pivot Reversal WIF_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:51:02,582 [INFO] signal_engine: Zone + Confirmation WIF_USDT LONG:
+  ✗ Bias H4 allineato
+  ✗ Prezzo nella zona (4.61% da 0.1751)
+  Rejected: PRICE_NOT_IN_ZONE (4.61% > 0.5%)
+2026-06-16 17:51:02,583 [INFO] signal_engine: Zone + Confirmation WIF_USDT SHORT:
+  ✓ Bias H4 allineato
+  ✓ Prezzo nella zona (0.05% da 0.1671)
+  ✗ Pattern Rejection Candle
+  ✗ Pattern Liquidity Sweep
+  ✗ Pattern Pullback EMA
+  Rejected: NO_PATTERN_CONFIRMED
+2026-06-16 17:51:04,627 [INFO] signal_engine: Check XLM_USDT: +5 H1, +1 H4
+2026-06-16 17:51:04,637 [INFO] signal_engine: XLM_USDT: 5 candele accumulate — trade manager aggiornato su tutte, valutazione segnali SOLO sull'ultima (FIX 1)
+2026-06-16 17:51:04,642 [INFO] signal_engine: XLM_USDT | close=0.2164 | H1 EMA21=0.2177 EMA50=0.2097 | H4 EMA50=0.2003 EMA100=0.1979 EMA200=0.1903 | ATR=0.0054
+2026-06-16 17:51:04,643 [INFO] signal_engine: XLM_USDT | Regime: TRENDING
+2026-06-16 17:51:04,644 [INFO] signal_engine: Pullback EMA Trend XLM_USDT LONG:
+  ✓ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  ✓ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TRIGGER_NOT_CONFIRMED
+2026-06-16 17:51:04,645 [INFO] signal_engine: Pullback EMA Trend XLM_USDT SHORT:
+  ✗ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  ✓ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:51:04,646 [INFO] signal_engine: Breakout Retest XLM_USDT LONG:
+  ✓ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  ✓ Livelli S/R significativi (>=2 tocchi)
+  ✗ Breakout confermato
+  ✗ Retest valido (<=0.3 ATR o wick)
+  ✗ Trigger H1
+  Rejected: BREAKOUT_MISSING
+2026-06-16 17:51:04,646 [INFO] signal_engine: Breakout Retest XLM_USDT SHORT:
+  ✗ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:51:04,647 [INFO] signal_engine: Liquidity Sweep XLM_USDT LONG:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:51:04,648 [INFO] signal_engine: Liquidity Sweep XLM_USDT SHORT:
+  ✓ Livelli S/R significativi (>=2 tocchi)
+  ✗ Sweep del livello (low<S<close)
+  ✗ Rejection wick (>=2x corpo)
+  ✗ Trigger H1
+  Rejected: SWEEP_MISSING
+2026-06-16 17:51:04,648 [INFO] signal_engine: Compression Breakout XLM_USDT LONG:
+  ✓ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  ✗ ATR compresso (<80% media)
+  ✗ Range ristretto (<=1 ATR)
+  ✗ Breakout dal range
+  → 1.01 ATR ratio
+  Rejected: ATR_NOT_COMPRESSED (1.01 >= 0.8)
+2026-06-16 17:51:04,649 [INFO] signal_engine: Compression Breakout XLM_USDT SHORT:
+  ✗ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:51:04,650 [INFO] signal_engine: Pivot Reversal XLM_USDT LONG:
+  ✓ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:51:04,650 [INFO] signal_engine: Pivot Reversal XLM_USDT SHORT:
+  ✗ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:51:04,651 [INFO] signal_engine: Zone + Confirmation XLM_USDT LONG:
+  ✓ Bias H4 allineato
+  ✗ Prezzo nella zona (13.74% da 0.1903)
+  Rejected: PRICE_NOT_IN_ZONE (13.74% > 0.5%)
+2026-06-16 17:51:04,652 [INFO] signal_engine: Zone + Confirmation XLM_USDT SHORT:
+  ✗ Bias H4 allineato
+  ✗ Prezzo nella zona (13.74% da 0.1903)
+  Rejected: PRICE_NOT_IN_ZONE (13.74% > 0.5%)
+2026-06-16 17:51:06,810 [INFO] signal_engine: Check PAXG_USDT: +5 H1, +1 H4
+2026-06-16 17:51:06,820 [INFO] signal_engine: PAXG_USDT: 5 candele accumulate — trade manager aggiornato su tutte, valutazione segnali SOLO sull'ultima (FIX 1)
+2026-06-16 17:51:06,825 [INFO] signal_engine: PAXG_USDT | close=4315.3400 | H1 EMA21=4320.0427 EMA50=4303.2471 | H4 EMA50=4273.9140 EMA100=4319.0330 EMA200=4402.5557 | ATR=6.1979
+2026-06-16 17:51:06,825 [INFO] signal_engine: PAXG_USDT | Regime: TRENDING
+2026-06-16 17:51:06,826 [INFO] signal_engine: Pullback EMA Trend PAXG_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  ✓ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:51:06,827 [INFO] signal_engine: Pullback EMA Trend PAXG_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  ✓ Pullback EMA21 o EMA50
+  ✗ Trigger H1
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:51:06,827 [INFO] signal_engine: Breakout Retest PAXG_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:51:06,828 [INFO] signal_engine: Breakout Retest PAXG_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:51:06,828 [INFO] signal_engine: Liquidity Sweep PAXG_USDT LONG:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:51:06,829 [INFO] signal_engine: Liquidity Sweep PAXG_USDT SHORT:
+  ✗ Livelli S/R significativi (>=2 tocchi)
+  Rejected: NO_SIGNIFICANT_LEVELS
+2026-06-16 17:51:06,830 [INFO] signal_engine: Compression Breakout PAXG_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:51:06,830 [INFO] signal_engine: Compression Breakout PAXG_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:51:06,830 [INFO] signal_engine: Pivot Reversal PAXG_USDT LONG:
+  ✗ Trend H4 (LONG)
+  ✓ Trend H1 (LONG)
+  Rejected: TREND_H4_INVALID
+2026-06-16 17:51:06,831 [INFO] signal_engine: Pivot Reversal PAXG_USDT SHORT:
+  ✓ Trend H4 (SHORT)
+  ✗ Trend H1 (SHORT)
+  Rejected: TREND_H1_INVALID
+2026-06-16 17:51:06,832 [INFO] signal_engine: Zone + Confirmation PAXG_USDT LONG:
+  ✗ Bias H4 allineato
+  ✗ Prezzo nella zona (1.98% da 4402.5557)
+  Rejected: PRICE_NOT_IN_ZONE (1.98% > 0.5%)
+2026-06-16 17:51:06,832 [INFO] signal_engine: Zone + Confirmation PAXG_USDT SHORT:
+  ✓ Bias H4 allineato
+  ✓ Prezzo nella zona (0.09% da 4319.0330)
+  ✗ Pattern Rejection Candle
+  ✗ Pattern Liquidity Sweep
+  ✗ Pattern Pullback EMA
+  Rejected: NO_PATTERN_CONFIRMED
+2026-06-16 17:51:06,833 [INFO] main: --- Fine ciclo di scansione ---
