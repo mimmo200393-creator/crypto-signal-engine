@@ -112,3 +112,23 @@ TIMEFRAMES:
 
 EMA_PERIODS: [21, 50, 100, 200]
 ATR_PERIOD: 14
+
+# ============================================================
+# Institutional Scanner Framework V3.2 (isolato, multi-asset)
+# ============================================================
+V3_SCANNER:
+  enabled: true
+  assets:
+    - PAXG_USDT
+    - BTC_USDT
+
+# ============================================================
+# Institutional Scanner Framework V4.0 Daily Edition (isolato)
+# Coesiste con V3.2 Frozen. Riusa le candele D1/M30/M15 scaricate
+# da V3_SCANNER (stesso ciclo), ma logica e tracking indipendenti.
+# ============================================================
+V4_SCANNER:
+  enabled: true
+  assets:
+    - PAXG_USDT
+    - BTC_USDT
