@@ -42934,3 +42934,57 @@
 2026-06-17 18:21:03,089 [INFO] signal_engine: Check XLM_USDT: +0 H1, +0 H4
 2026-06-17 18:21:05,106 [INFO] signal_engine: Check PAXG_USDT: +0 H1, +0 H4
 2026-06-17 18:21:05,106 [INFO] main: --- Fine ciclo di scansione ---
+2026-06-17 18:25:31,943 [INFO] main: Avvio Crypto Signal Engine V2.1 | strategie=['pullback_ema', 'breakout_retest', 'liquidity_sweep', 'compression_breakout', 'pivot_reversal', 'zone_confirmation'] | watchlist=14 asset
+2026-06-17 18:25:31,947 [INFO] strategy_registry: Strategia registrata: Pullback EMA Trend V1.0
+2026-06-17 18:25:31,950 [INFO] strategy_registry: Strategia registrata: Breakout Retest V1.0
+2026-06-17 18:25:31,951 [INFO] strategy_registry: Strategia registrata: Liquidity Sweep V1.0
+2026-06-17 18:25:31,953 [INFO] strategy_registry: Strategia registrata: Compression Breakout V1.0
+2026-06-17 18:25:31,955 [INFO] strategy_registry: Strategia registrata: Pivot Reversal V1.0
+2026-06-17 18:25:31,959 [INFO] strategy_registry: Strategia registrata: Zone + Confirmation V1.0
+2026-06-17 18:25:31,959 [INFO] strategy_registry: Registry caricato: 6 strategie attive
+2026-06-17 18:25:31,959 [INFO] main: Bootstrap storico...
+2026-06-17 18:25:31,959 [INFO] signal_engine: Bootstrap skip: BTC_USDT 4h (311 candele)
+2026-06-17 18:25:31,960 [INFO] signal_engine: Bootstrap skip: BTC_USDT 1h (344 candele)
+2026-06-17 18:25:31,960 [INFO] signal_engine: Bootstrap skip: ETH_USDT 4h (311 candele)
+2026-06-17 18:25:31,960 [INFO] signal_engine: Bootstrap skip: ETH_USDT 1h (344 candele)
+2026-06-17 18:25:31,960 [INFO] signal_engine: Bootstrap skip: ADA_USDT 4h (311 candele)
+2026-06-17 18:25:31,960 [INFO] signal_engine: Bootstrap skip: ADA_USDT 1h (344 candele)
+2026-06-17 18:25:31,960 [INFO] signal_engine: Bootstrap skip: SOL_USDT 4h (311 candele)
+2026-06-17 18:25:31,960 [INFO] signal_engine: Bootstrap skip: SOL_USDT 1h (344 candele)
+2026-06-17 18:25:31,960 [INFO] signal_engine: Bootstrap skip: LINK_USDT 4h (311 candele)
+2026-06-17 18:25:31,960 [INFO] signal_engine: Bootstrap skip: LINK_USDT 1h (344 candele)
+2026-06-17 18:25:31,960 [INFO] signal_engine: Bootstrap skip: XRP_USDT 4h (311 candele)
+2026-06-17 18:25:31,960 [INFO] signal_engine: Bootstrap skip: XRP_USDT 1h (344 candele)
+2026-06-17 18:25:31,961 [INFO] signal_engine: Bootstrap skip: DOGE_USDT 4h (311 candele)
+2026-06-17 18:25:31,961 [INFO] signal_engine: Bootstrap skip: DOGE_USDT 1h (344 candele)
+2026-06-17 18:25:31,961 [INFO] signal_engine: Bootstrap skip: LTC_USDT 4h (311 candele)
+2026-06-17 18:25:31,961 [INFO] signal_engine: Bootstrap skip: LTC_USDT 1h (344 candele)
+2026-06-17 18:25:31,961 [INFO] signal_engine: Bootstrap skip: DOT_USDT 4h (311 candele)
+2026-06-17 18:25:31,961 [INFO] signal_engine: Bootstrap skip: DOT_USDT 1h (344 candele)
+2026-06-17 18:25:31,961 [INFO] signal_engine: Bootstrap skip: FIL_USDT 4h (311 candele)
+2026-06-17 18:25:31,961 [INFO] signal_engine: Bootstrap skip: FIL_USDT 1h (344 candele)
+2026-06-17 18:25:31,961 [INFO] signal_engine: Bootstrap skip: BCH_USDT 4h (311 candele)
+2026-06-17 18:25:31,961 [INFO] signal_engine: Bootstrap skip: BCH_USDT 1h (344 candele)
+2026-06-17 18:25:31,961 [INFO] signal_engine: Bootstrap skip: WIF_USDT 4h (311 candele)
+2026-06-17 18:25:31,961 [INFO] signal_engine: Bootstrap skip: WIF_USDT 1h (344 candele)
+2026-06-17 18:25:31,962 [INFO] signal_engine: Bootstrap skip: XLM_USDT 4h (311 candele)
+2026-06-17 18:25:31,962 [INFO] signal_engine: Bootstrap skip: XLM_USDT 1h (344 candele)
+2026-06-17 18:25:31,962 [INFO] signal_engine: Bootstrap skip: PAXG_USDT 4h (311 candele)
+2026-06-17 18:25:31,962 [INFO] signal_engine: Bootstrap skip: PAXG_USDT 1h (344 candele)
+2026-06-17 18:25:31,962 [INFO] main: Bootstrap completato.
+2026-06-17 18:25:31,962 [INFO] main: --- Inizio ciclo di scansione ---
+2026-06-17 18:25:33,947 [INFO] signal_engine: Check BTC_USDT: +0 H1, +0 H4
+2026-06-17 18:25:35,919 [INFO] signal_engine: Check ETH_USDT: +0 H1, +0 H4
+2026-06-17 18:25:37,930 [INFO] signal_engine: Check ADA_USDT: +0 H1, +0 H4
+2026-06-17 18:25:39,882 [INFO] signal_engine: Check SOL_USDT: +0 H1, +0 H4
+2026-06-17 18:25:41,860 [INFO] signal_engine: Check LINK_USDT: +0 H1, +0 H4
+2026-06-17 18:25:43,834 [INFO] signal_engine: Check XRP_USDT: +0 H1, +0 H4
+2026-06-17 18:25:45,832 [INFO] signal_engine: Check DOGE_USDT: +0 H1, +0 H4
+2026-06-17 18:25:47,782 [INFO] signal_engine: Check LTC_USDT: +0 H1, +0 H4
+2026-06-17 18:25:49,885 [INFO] signal_engine: Check DOT_USDT: +0 H1, +0 H4
+2026-06-17 18:25:52,025 [INFO] signal_engine: Check FIL_USDT: +0 H1, +0 H4
+2026-06-17 18:25:54,008 [INFO] signal_engine: Check BCH_USDT: +0 H1, +0 H4
+2026-06-17 18:25:55,952 [INFO] signal_engine: Check WIF_USDT: +0 H1, +0 H4
+2026-06-17 18:25:57,936 [INFO] signal_engine: Check XLM_USDT: +0 H1, +0 H4
+2026-06-17 18:25:59,894 [INFO] signal_engine: Check PAXG_USDT: +0 H1, +0 H4
+2026-06-17 18:25:59,894 [INFO] main: --- Fine ciclo di scansione ---
