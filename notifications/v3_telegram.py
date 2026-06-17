@@ -24,11 +24,12 @@ def format_v3_signal_alert(signal: dict) -> str:
     direction = signal["direction"]
     emoji = "🟢" if direction == "BUY" else "🔴"
     quality = signal["signal_quality"]
+    asset_display = signal["asset"].replace("_", " ")
 
     lines = [
         f"{emoji} *INSTITUTIONAL SCANNER V3.2*",
         "",
-        f"Asset: *{signal['asset']}*",
+        f"Asset: *{asset_display}*",
         f"Direzione: *{direction}*",
         "",
         f"Entry: `{_fmt(signal['entry'])}`",
