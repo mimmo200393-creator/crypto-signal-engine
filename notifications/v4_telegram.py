@@ -22,13 +22,14 @@ def format_v4_signal_alert(signal: dict) -> str:
     emoji = "🟢" if direction == "BUY" else "🔴"
     quality = signal["signal_quality"]
     label = signal.get("quality_label", "STANDARD")
+    asset_display = signal["asset"].replace("_", " ")
 
     label_emoji = {"HIGH": "⭐", "STANDARD": "▫️", "LOW": "🔹"}.get(label, "▫️")
 
     lines = [
         f"{emoji} *INSTITUTIONAL SCANNER V4.0 — Daily Edition*",
         "",
-        f"Asset: *{signal['asset']}*",
+        f"Asset: *{asset_display}*",
         f"Direzione: *{direction}*",
         "",
         f"Entry: `{_fmt(signal['entry'])}`",
