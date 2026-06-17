@@ -39,11 +39,12 @@ def format_signal_alert(signal, label: str) -> str:
     """Formato V2 multi-strategia."""
     direction_emoji = "🟢" if signal.direction == "LONG" else "🔴"
     ctx = signal.additional_context or {}
+    asset_display = signal.asset.replace("_", " ")
 
     text = (
         f"{label}\n\n"
         f"Strategy: *{signal.strategy_name} {signal.strategy_version}*\n"
-        f"{direction_emoji} Asset: *{signal.asset}*\n"
+        f"{direction_emoji} Asset: *{asset_display}*\n"
         f"Direction: *{signal.direction}*\n\n"
         f"Entry:       `{signal.entry:.6f}`\n"
         f"Stop Loss:   `{signal.stop_loss:.6f}`\n"
@@ -151,11 +152,12 @@ def format_zone_signal_alert(signal, label: str) -> str:
         return f"{v:.8f}"
 
     momentum_arrow = "↓" if momentum == "DOWN" else "↑"
+    asset_display = signal.asset.replace("_", " ")
 
     text = (
         f"{label}\n\n"
         f"Strategia: *Zone + Confirmation V1.0*\n"
-        f"{direction_emoji} Asset: *{signal.asset}*\n"
+        f"{direction_emoji} Asset: *{asset_display}*\n"
         f"Direzione: *{signal.direction}*\n\n"
         f"Entry:       `{fp(signal.entry)}`\n"
         f"Stop Loss:   `{fp(signal.stop_loss)}`\n"
