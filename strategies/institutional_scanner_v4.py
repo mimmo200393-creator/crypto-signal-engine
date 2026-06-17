@@ -33,12 +33,16 @@ performa meglio nel tempo.
 
 from datetime import datetime, timezone
 from typing import Optional
+import logging
 
 import pandas as pd
+
+logger = logging.getLogger("institutional_scanner_v4")
 
 from strategies.institutional_scanner_v3 import (
     evaluate_daily_context,
     evaluate_h4_structure,
+    find_pivots,
     build_h4_zones,
     price_in_zone,
     check_ote,
@@ -50,6 +54,7 @@ from strategies.institutional_scanner_v3 import (
     find_h1_structure_target,
     find_opposing_h4_zone,
     _find_m15_swing,
+    H4_PIVOT_LOOKBACK,
     M15_BOS_LOOKBACK,
     M15_SL_ATR_MULTIPLIER,
     MIN_TP1_ATR_MULTIPLE,
@@ -67,6 +72,80 @@ SCORE_STRONG_ZONE = 1.0
 SCORE_OTE = 1.0
 SCORE_M30_TRANSITION = 2.0
 SCORE_MAX = 5.0
+
+
+# ============================================================
+# Trend Filter Revision (V4.0 only) — Dow Theory + EMA50/200 H4
+# ============================================================
+
+def evaluate_ema_trend_h4(df_h4: pd.DataFrame) -> str:
+    """
+    Seconda fonte di valutazione del trend H4, indipendente dalla
+    Dow Theory sui pivot. Usa EMA50/EMA200 calcolate su H4.
+
+    Bullish: Close H4 > EMA50 H4 e EMA50 H4 > EMA200 H4
+    Bearish: Close H4 < EMA50 H4 e EMA50 H4 < EMA200 H4
+    Altrimenti: NEUTRAL
+    """
+    if len(df_h4) < 1 or "ema_50" not in df_h4.columns or "ema_200" not in df_h4.columns:
+        return "NEUTRAL"
+
+    last = df_h4.iloc[-1]
+    close = float(last["close"])
+    ema50 = float(last["ema_50"])
+    ema200 = float(last["ema_200"])
+
+    if close > ema50 and ema50 > ema200:
+        return "BULLISH"
+    if close < ema50 and ema50 < ema200:
+        return "BEARISH"
+    return "NEUTRAL"
+
+
+def combine_h4_trend(dow_theory_structure: str, ema_trend: str) -> str:
+    """
+    Combina Dow Theory (pivot H4) ed EMA Trend (EMA50/200 H4) secondo
+    la tabella di decisione V4.0:
+
+        BULLISH + BULLISH = BULLISH
+        BULLISH + NEUTRAL = BULLISH
+        BULLISH + BEARISH = NEUTRAL (conflitto)
+        BEARISH + BEARISH = BEARISH
+        BEARISH + NEUTRAL = BEARISH
+        BEARISH + BULLISH = NEUTRAL (conflitto)
+        NEUTRAL + BULLISH = BULLISH
+        NEUTRAL + BEARISH = BEARISH
+        NEUTRAL + NEUTRAL = NEUTRAL
+    """
+    if dow_theory_structure == ema_trend:
+        return dow_theory_structure
+
+    if dow_theory_structure == "NEUTRAL":
+        return ema_trend
+
+    if ema_trend == "NEUTRAL":
+        return dow_theory_structure
+
+    # Dow Theory e EMA sono entrambi non-NEUTRAL ma diversi -> conflitto diretto
+    return "NEUTRAL"
+
+
+def _fallback_h4_pivot_for_invalidation(df_h4: pd.DataFrame, direction: str):
+    """
+    Quando il trend finale BULLISH/BEARISH deriva dall'EMA Trend
+    (Dow Theory pura era NEUTRAL), evaluate_h4_structure() non
+    popola last_higher_low/last_lower_high perche' la sua struttura
+    pura non li richiede. Recuperiamo qui un pivot di riferimento
+    valido per permettere comunque il controllo di invalidazione
+    del pullback in evaluate_h1_pullback().
+    """
+    pivots = find_pivots(df_h4, H4_PIVOT_LOOKBACK)
+    if direction == "BUY":
+        lows = sorted(pivots["pivot_lows"], key=lambda p: p[2])
+        return lows[-1][1] if lows else None
+    else:
+        highs = sorted(pivots["pivot_highs"], key=lambda p: p[2])
+        return highs[-1][1] if highs else None
 
 
 def generate_v4_signal(market_data: dict) -> dict:
@@ -100,16 +179,52 @@ def generate_v4_signal(market_data: dict) -> dict:
         diagnostics["rejections"].append("ATR_ZERO")
         return {"signal": None, "diagnostics": diagnostics}
 
-    # --- MANDATORY 1: H4 dominant trend valido ---
+    # --- MANDATORY 1: H4 dominant trend valido (Trend Filter Revision) ---
+    # Combina Dow Theory (pivot H4) ed EMA50/200 H4 per ridurre i falsi
+    # NEUTRAL quando il mercato ha gia' una direzione evidente secondo
+    # le medie mobili. V3.2 Frozen NON e' toccato da questa modifica.
     h4_struct = evaluate_h4_structure(df_h4)
-    structure = h4_struct["structure"]
+    dow_theory_structure = h4_struct["structure"]
+
+    ema_trend = evaluate_ema_trend_h4(df_h4)
+
+    structure = combine_h4_trend(dow_theory_structure, ema_trend)
+
+    ema50_h4 = float(df_h4.iloc[-1]["ema_50"]) if "ema_50" in df_h4.columns else None
+    ema200_h4 = float(df_h4.iloc[-1]["ema_200"]) if "ema_200" in df_h4.columns else None
+
+    diagnostics["dow_theory_trend"] = dow_theory_structure
+    diagnostics["ema50_h4"] = ema50_h4
+    diagnostics["ema200_h4"] = ema200_h4
+    diagnostics["ema_trend"] = ema_trend
     diagnostics["h4_structure"] = structure
+
+    logger.info(
+        "%s | Dow Theory Trend = %s | EMA50 H4 = %s EMA200 H4 = %s EMA Trend = %s | Final H4 Trend = %s",
+        asset,
+        dow_theory_structure,
+        f"{ema50_h4:.4f}" if ema50_h4 is not None else "N/A",
+        f"{ema200_h4:.4f}" if ema200_h4 is not None else "N/A",
+        ema_trend,
+        structure,
+    )
 
     if structure == "NEUTRAL":
         diagnostics["rejections"].append("H4_STRUCTURE_NEUTRAL")
         return {"signal": None, "diagnostics": diagnostics}
 
     direction = "BUY" if structure == "BULLISH" else "SELL"
+
+    # Se la Dow Theory pura era NEUTRAL ma il trend combinato e' BULLISH/
+    # BEARISH grazie all'EMA, last_higher_low/last_lower_high non sono
+    # popolati da evaluate_h4_structure(): recuperiamo un pivot di
+    # riferimento valido per non perdere il controllo di invalidazione.
+    if dow_theory_structure == "NEUTRAL":
+        fallback_pivot = _fallback_h4_pivot_for_invalidation(df_h4, direction)
+        if direction == "BUY":
+            h4_struct["last_higher_low"] = fallback_pivot
+        else:
+            h4_struct["last_lower_high"] = fallback_pivot
 
     zones = build_h4_zones(df_h4, atr_h4)
     if not zones:
