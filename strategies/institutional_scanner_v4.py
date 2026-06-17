@@ -156,7 +156,14 @@ def generate_v4_signal(market_data: dict) -> dict:
         asset, df_d1, df_h4, df_h1, df_m30, df_m15 (con EMA/ATR gia' calcolati)
         timestamp (datetime corrente)
 
-    Ritorna {"signal": dict|None, "diagnostics": dict}.
+    Valuta SEMPRE tutti i 4 gate mandatory, anche dopo un fallimento,
+    per fornire un contatore "gate superati / gate totali" che mostra
+    quanto vicino e' un setup ad un segnale completo, anche quando il
+    segnale non viene generato.
+
+    Ritorna {"signal": dict|None, "diagnostics": dict}, dove diagnostics
+    contiene sempre "gates" (lista ordinata di dict con name/passed/detail),
+    "gates_passed" e "gates_total".
     """
     asset = market_data["asset"]
     df_d1 = market_data["df_d1"]
@@ -166,9 +173,36 @@ def generate_v4_signal(market_data: dict) -> dict:
     df_m15 = market_data["df_m15"]
     now = market_data.get("timestamp", datetime.now(timezone.utc))
 
-    diagnostics = {"asset": asset, "rejections": []}
+    diagnostics = {"asset": asset, "rejections": [], "gates": []}
+    GATE_NAMES = ["H4_TREND", "PULLBACK_VALID", "M15_BOS", "RR_MINIMUM"]
+    diagnostics["gates_total"] = len(GATE_NAMES)
+
+    def _finalize(gates_dict, extra_rejection=None):
+        """Costruisce la lista ordinata dei gate con esito, calcola il
+        contatore, e ritorna sempre None come segnale (early-exit)."""
+        gates_list = []
+        passed_count = 0
+        for name in GATE_NAMES:
+            passed = gates_dict.get(name, False)
+            gates_list.append({"name": name, "passed": passed})
+            if passed:
+                passed_count += 1
+        diagnostics["gates"] = gates_list
+        diagnostics["gates_passed"] = passed_count
+        if extra_rejection:
+            diagnostics["rejections"].append(extra_rejection)
+        logger.info(
+            "%s | V4.0 gate superati: %d/%d | %s",
+            asset, passed_count, len(GATE_NAMES),
+            " ".join(f"{g['name']}={'OK' if g['passed'] else 'NO'}" for g in gates_list),
+        )
+        return {"signal": None, "diagnostics": diagnostics}
+
+    gates = {name: False for name in GATE_NAMES}
 
     if len(df_h4) < 15 or len(df_h1) < 35 or len(df_m30) < 20 or len(df_m15) < 10:
+        diagnostics["gates"] = [{"name": n, "passed": False} for n in GATE_NAMES]
+        diagnostics["gates_passed"] = 0
         diagnostics["rejections"].append("INSUFFICIENT_DATA")
         return {"signal": None, "diagnostics": diagnostics}
 
@@ -176,10 +210,12 @@ def generate_v4_signal(market_data: dict) -> dict:
     atr_m15 = float(df_m15.iloc[-1]["atr"]) if "atr" in df_m15.columns else 0
 
     if atr_h4 <= 0 or atr_m15 <= 0:
+        diagnostics["gates"] = [{"name": n, "passed": False} for n in GATE_NAMES]
+        diagnostics["gates_passed"] = 0
         diagnostics["rejections"].append("ATR_ZERO")
         return {"signal": None, "diagnostics": diagnostics}
 
-    # --- MANDATORY 1: H4 dominant trend valido (Trend Filter Revision) ---
+    # --- GATE 1: H4 Trend valido (Trend Filter Revision) ---
     # Combina Dow Theory (pivot H4) ed EMA50/200 H4 per ridurre i falsi
     # NEUTRAL quando il mercato ha gia' una direzione evidente secondo
     # le medie mobili. V3.2 Frozen NON e' toccato da questa modifica.
@@ -209,9 +245,12 @@ def generate_v4_signal(market_data: dict) -> dict:
         structure,
     )
 
+    gates["H4_TREND"] = structure != "NEUTRAL"
+
     if structure == "NEUTRAL":
-        diagnostics["rejections"].append("H4_STRUCTURE_NEUTRAL")
-        return {"signal": None, "diagnostics": diagnostics}
+        # Impossibile determinare una direzione: non possiamo valutare
+        # gli altri gate (pullback/BOS dipendono dalla direzione).
+        return _finalize(gates, "H4_STRUCTURE_NEUTRAL")
 
     direction = "BUY" if structure == "BULLISH" else "SELL"
 
@@ -228,28 +267,31 @@ def generate_v4_signal(market_data: dict) -> dict:
 
     zones = build_h4_zones(df_h4, atr_h4)
     if not zones:
-        diagnostics["rejections"].append("NO_H4_ZONES")
-        return {"signal": None, "diagnostics": diagnostics}
+        # Nessuna zona H4: non possiamo valutare il pullback in modo
+        # affidabile (dipende dalle zone), ma BOS/RR sono indipendenti
+        # dalle zone H4 in se' per la struttura dati attuale, quindi
+        # restano non valutabili senza un pullback di riferimento.
+        return _finalize(gates, "NO_H4_ZONES")
 
-    # --- MANDATORY 2 + 3: Pullback valido E non invalidato ---
+    # --- GATE 2: Pullback valido E non invalidato ---
     pullback = evaluate_h1_pullback(df_h1, df_m15, h4_struct, zones, direction)
     diagnostics["pullback"] = pullback
 
+    gates["PULLBACK_VALID"] = pullback["valid"] and not pullback["invalidated"]
+
     if pullback["invalidated"]:
-        diagnostics["rejections"].append("PULLBACK_INVALIDATED")
-        return {"signal": None, "diagnostics": diagnostics}
+        return _finalize(gates, "PULLBACK_INVALIDATED")
 
     if not pullback["valid"]:
-        diagnostics["rejections"].append("NO_VALID_PULLBACK")
-        return {"signal": None, "diagnostics": diagnostics}
+        return _finalize(gates, "NO_VALID_PULLBACK")
 
-    # --- MANDATORY 4: M15 BOS confermato (chiusura, non wick) ---
+    # --- GATE 3: M15 BOS confermato (chiusura, non wick) ---
     bos_confirmed = evaluate_m15_bos(df_m15, direction)
     diagnostics["m15_bos"] = bos_confirmed
+    gates["M15_BOS"] = bos_confirmed
 
     if not bos_confirmed:
-        diagnostics["rejections"].append("NO_M15_BOS")
-        return {"signal": None, "diagnostics": diagnostics}
+        return _finalize(gates, "NO_M15_BOS")
 
     # --- Entry / Stop Loss ---
     entry = float(df_m15.iloc[-1]["close"])
@@ -272,32 +314,30 @@ def generate_v4_signal(market_data: dict) -> dict:
     tp3 = find_opposing_h4_zone(zones, direction, entry)
 
     if tp1 is None:
-        diagnostics["rejections"].append("NO_TP1")
-        return {"signal": None, "diagnostics": diagnostics}
+        return _finalize(gates, "NO_TP1")
 
-    # --- MANDATORY 5: R/R >= 2 ---
+    # --- GATE 4: R/R >= 2 ---
     risk = abs(entry - stop_loss)
     reward = abs(tp1 - entry)
     if risk <= 0:
-        diagnostics["rejections"].append("RISK_ZERO")
-        return {"signal": None, "diagnostics": diagnostics}
+        return _finalize(gates, "RISK_ZERO")
 
     rr = reward / risk
     diagnostics["rr"] = rr
+    gates["RR_MINIMUM"] = rr >= MIN_RR
 
     if rr < MIN_RR:
-        diagnostics["rejections"].append(f"RR_TOO_LOW_{rr:.2f}")
-        return {"signal": None, "diagnostics": diagnostics}
+        return _finalize(gates, f"RR_TOO_LOW_{rr:.2f}")
 
     # --- Opportunity Filter (mantenuto da V3.2, non esplicitamente rimosso) ---
     tp1_distance = abs(tp1 - entry)
     if tp1_distance < MIN_TP1_ATR_MULTIPLE * atr_m15:
-        diagnostics["rejections"].append("TP1_TOO_CLOSE")
-        return {"signal": None, "diagnostics": diagnostics}
+        gates["RR_MINIMUM"] = False
+        return _finalize(gates, "TP1_TOO_CLOSE")
 
     # ============================================================
-    # Tutte le condizioni obbligatorie superate: il segnale viene
-    # generato. Da qui in poi solo bonus per il ranking.
+    # Tutti i 4 gate mandatory superati: il segnale viene generato.
+    # Da qui in poi solo bonus per il ranking.
     # ============================================================
 
     daily_context = evaluate_daily_context(df_d1) if len(df_d1) > 0 else "NEUTRAL"
@@ -356,5 +396,15 @@ def generate_v4_signal(market_data: dict) -> dict:
         "session": session,
         "timestamp_setup": now.isoformat(),
     }
+
+    gates_list = [{"name": n, "passed": gates[n]} for n in GATE_NAMES]
+    diagnostics["gates"] = gates_list
+    diagnostics["gates_passed"] = sum(1 for g in gates_list if g["passed"])
+
+    logger.info(
+        "%s | V4.0 gate superati: %d/%d | %s | SEGNALE GENERATO",
+        asset, diagnostics["gates_passed"], len(GATE_NAMES),
+        " ".join(f"{g['name']}={'OK' if g['passed'] else 'NO'}" for g in gates_list),
+    )
 
     return {"signal": signal, "diagnostics": diagnostics}
