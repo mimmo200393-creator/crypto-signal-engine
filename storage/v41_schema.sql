@@ -86,3 +86,15 @@ CREATE TABLE IF NOT EXISTS v41_watchlist_alerts (
 
 CREATE INDEX IF NOT EXISTS idx_v41_watchlist_alerts_asset
     ON v41_watchlist_alerts(asset, timestamp_alert);
+
+-- Riferimento persistente all'ultimo alert OPERATIVO inviato per
+-- ciascun asset, usato dalla Duplicate Signal Protection per
+-- confrontare il nuovo setup con l'ultimo effettivamente notificato
+-- (sopravvive a riavvii ed esecuzioni indipendenti del workflow).
+CREATE TABLE IF NOT EXISTS v41_last_alert_state (
+    asset TEXT PRIMARY KEY,
+    direction TEXT NOT NULL,
+    trigger_type TEXT NOT NULL,
+    liquidity_source TEXT,
+    last_updated DATETIME NOT NULL
+);
