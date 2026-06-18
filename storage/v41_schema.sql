@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS v41_signals (
     liquidity_target TEXT,
     liquidity_target_price REAL,
 
+    ote_entry_low REAL,
+    ote_entry_high REAL,
+    ote_in_zone_now BOOLEAN DEFAULT 0,
+
     trader_decision TEXT DEFAULT 'unknown'
         CHECK(trader_decision IN ('unknown','taken','skipped')),
     final_outcome TEXT
@@ -54,3 +58,31 @@ CREATE INDEX IF NOT EXISTS idx_v41_signals_quality
     ON v41_signals(quality_label);
 CREATE INDEX IF NOT EXISTS idx_v41_signals_session
     ON v41_signals(session);
+
+-- Stato di prossimità per asset+livello, usato per evitare di rigenerare
+-- un Watchlist Alert ad ogni scan mentre il prezzo resta nella stessa
+-- fascia. Un nuovo alert scatta solo sulla transizione fuori -> dentro.
+CREATE TABLE IF NOT EXISTS v41_watchlist_state (
+    asset TEXT NOT NULL,
+    level_label TEXT NOT NULL,
+    is_inside_proximity BOOLEAN NOT NULL DEFAULT 0,
+    last_updated DATETIME NOT NULL,
+    PRIMARY KEY (asset, level_label)
+);
+
+-- Storico dei Watchlist Alert effettivamente inviati, per analisi
+-- successiva (es. quanti Watchlist Alert sono poi seguiti da un
+-- Trade Alert reale sullo stesso asset/livello/direzione).
+CREATE TABLE IF NOT EXISTS v41_watchlist_alerts (
+    alert_id TEXT PRIMARY KEY,
+    timestamp_alert DATETIME NOT NULL,
+    asset TEXT NOT NULL,
+    level_label TEXT NOT NULL,
+    level_price REAL NOT NULL,
+    distance_pct REAL NOT NULL,
+    potential_direction TEXT NOT NULL CHECK(potential_direction IN ('BUY','SELL')),
+    followed_by_trade_alert BOOLEAN DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_v41_watchlist_alerts_asset
+    ON v41_watchlist_alerts(asset, timestamp_alert);
