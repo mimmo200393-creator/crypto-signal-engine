@@ -34,6 +34,10 @@ def format_v41_signal_alert(signal: dict) -> str:
     liquidity_source = signal.get("liquidity_source") or "N/A"
     liquidity_target = signal.get("liquidity_target") or "N/A"
 
+    ote_low = signal.get("ote_entry_low")
+    ote_high = signal.get("ote_entry_high")
+    ote_zone_str = f"{_fmt(ote_low)} - {_fmt(ote_high)}" if ote_low is not None and ote_high is not None else "N/A"
+
     lines = [
         f"{emoji} *INSTITUTIONAL SCANNER V4.1 — Intraday Wave*",
         "",
@@ -50,6 +54,7 @@ def format_v41_signal_alert(signal: dict) -> str:
         "",
         f"Liquidity Source: {liquidity_source}",
         f"Liquidity Target: {liquidity_target}",
+        f"OTE Entry Zone: {ote_zone_str}",
         "",
         f"EMA H4: {signal.get('ema_h4', 'N/A')}",
         f"EMA H1: {signal.get('ema_h1', 'N/A')}",
@@ -65,4 +70,34 @@ def format_v41_signal_alert(signal: dict) -> str:
 
 def send_v41_signal_alert(bot_token: str, chat_id: str, signal: dict) -> bool:
     text = format_v41_signal_alert(signal)
+    return send_message(bot_token, chat_id, text)
+
+
+# ============================================================
+# Watchlist Alert (preparatorio, non operativo)
+# ============================================================
+
+def format_v41_watchlist_alert(asset: str, proximity: dict) -> str:
+    asset_display = asset.replace("_", " ")
+    direction = proximity["potential_direction"]
+    emoji = "🟢" if direction == "BUY" else "🔴"
+
+    lines = [
+        f"👀 *WATCHLIST — V4.1 Intraday Wave*",
+        "",
+        f"Asset: *{asset_display}*",
+        "",
+        f"Liquidity Zone: *{proximity['label']}*",
+        f"Level: `{_fmt(proximity['price'])}`",
+        f"Distance: *{proximity['distance_pct'] * 100:.2f}%*",
+        "",
+        f"Potential Direction: {emoji} *{direction}*",
+        "",
+        "_Alert preparatorio: nessuna conferma BOS/CHOCH ancora presente._",
+    ]
+    return "\n".join(lines)
+
+
+def send_v41_watchlist_alert(bot_token: str, chat_id: str, asset: str, proximity: dict) -> bool:
+    text = format_v41_watchlist_alert(asset, proximity)
     return send_message(bot_token, chat_id, text)
