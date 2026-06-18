@@ -98,11 +98,15 @@ def _run_for_asset(conn, asset: str, config: dict):
         signal.get("quality_label", "?"), signal["rr"], signal_id
     )
 
-    bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
+bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = config.get("TELEGRAM_CHAT_ID", "")
+    ntfy_topic = config.get("NTFY_TOPIC", "")
     if bot_token and chat_id:
         sent = v4_telegram.send_v4_signal_alert(bot_token, chat_id, signal)
         logger.info("V4 Scanner [%s]: notifica Telegram inviata=%s", asset, sent)
+    if ntfy_topic:
+        ntfy_sent = v4_telegram.send_v4_signal_alert_ntfy(ntfy_topic, signal)
+        logger.info("V4 Scanner [%s]: notifica ntfy inviata=%s", asset, ntfy_sent)
 
 
 def run_v4_scan(config: dict):
