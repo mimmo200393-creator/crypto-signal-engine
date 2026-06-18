@@ -15,10 +15,34 @@ import sqlite3
 import pandas as pd
 
 
+def _migrate_v41_signals_columns(conn: sqlite3.Connection):
+    """
+    Migrazione leggera e idempotente: se la tabella v41_signals esiste
+    già (da un'installazione precedente) ma le manca una colonna
+    introdotta in seguito, la aggiunge con ALTER TABLE. Necessaria
+    perché CREATE TABLE IF NOT EXISTS non aggiorna lo schema di una
+    tabella già esistente, anche se lo script SQL cambia.
+    """
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(v41_signals)").fetchall()}
+    if not existing_cols:
+        return  # la tabella non esiste ancora: la creerà lo script SQL
+
+    required_columns = {
+        "ote_entry_low": "REAL",
+        "ote_entry_high": "REAL",
+        "ote_in_zone_now": "BOOLEAN DEFAULT 0",
+    }
+    for col_name, col_type in required_columns.items():
+        if col_name not in existing_cols:
+            conn.execute(f"ALTER TABLE v41_signals ADD COLUMN {col_name} {col_type}")
+    conn.commit()
+
+
 def init_v41_schema(conn: sqlite3.Connection, schema_path: str = "storage/v41_schema.sql"):
     with open(schema_path, "r") as f:
         conn.executescript(f.read())
     conn.commit()
+    _migrate_v41_signals_columns(conn)
 
 
 def insert_v41_signal(conn: sqlite3.Connection, signal_dict: dict) -> str:
