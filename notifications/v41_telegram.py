@@ -9,6 +9,7 @@ underscore per evitare problemi di parsing Markdown di Telegram.
 """
 
 from notifications.telegram_bot import send_message
+from notifications import ntfy_bot
 
 
 def _fmt(v) -> str:
@@ -38,6 +39,10 @@ def format_v41_signal_alert(signal: dict) -> str:
     ote_high = signal.get("ote_entry_high")
     ote_zone_str = f"{_fmt(ote_low)} - {_fmt(ote_high)}" if ote_low is not None and ote_high is not None else "N/A"
 
+    em_points = signal.get("expected_move_points")
+    em_barrier = signal.get("expected_move_barrier") or "N/A"
+    em_str = f"{em_points:.1f}pt → {em_barrier}" if em_points is not None else "N/A"
+
     lines = [
         f"{emoji} *INSTITUTIONAL SCANNER V4.1 — Intraday Wave*",
         "",
@@ -46,7 +51,8 @@ def format_v41_signal_alert(signal: dict) -> str:
         "",
         f"Entry: `{_fmt(signal['entry'])}`",
         f"Stop Loss: `{_fmt(signal['stop_loss'])}`",
-        f"Take Profit: `{_fmt(signal.get('take_profit'))}`",
+        f"TP1 (1R): `{_fmt(signal.get('tp1'))}`",
+        f"TP2 (2R): `{_fmt(signal.get('tp2'))}`",
         f"R/R: *{signal.get('rr', 0):.2f}*",
         "",
         f"Trigger: *{triggers_str}*",
@@ -55,6 +61,7 @@ def format_v41_signal_alert(signal: dict) -> str:
         f"Liquidity Source: {liquidity_source}",
         f"Liquidity Target: {liquidity_target}",
         f"OTE Entry Zone: {ote_zone_str}",
+        f"Expected Move: {em_str}",
         "",
         f"EMA H4: {signal.get('ema_h4', 'N/A')}",
         f"EMA H1: {signal.get('ema_h1', 'N/A')}",
@@ -71,6 +78,50 @@ def format_v41_signal_alert(signal: dict) -> str:
 def send_v41_signal_alert(bot_token: str, chat_id: str, signal: dict) -> bool:
     text = format_v41_signal_alert(signal)
     return send_message(bot_token, chat_id, text)
+
+
+def format_v41_signal_alert_plain(signal: dict) -> tuple:
+    """
+    Formato plain-text (senza Markdown) per ntfy. Ritorna (title, body).
+    """
+    direction = signal["direction"]
+    asset_display = signal["asset"].replace("_", " ")
+    quality = signal["quality_score"]
+    label = signal.get("quality_label", "MEDIUM")
+    triggers = signal.get("trigger_types", [])
+    triggers_str = " + ".join(triggers) if triggers else "N/A"
+
+    title = f"V4.1 {asset_display} {direction} | Quality {quality}/12 ({label})"
+
+    ote_low = signal.get("ote_entry_low")
+    ote_high = signal.get("ote_entry_high")
+    ote_zone_str = f"{_fmt(ote_low)} - {_fmt(ote_high)}" if ote_low is not None and ote_high is not None else "N/A"
+
+    body = (
+        f"Entry: {_fmt(signal['entry'])}\n"
+        f"Stop Loss: {_fmt(signal['stop_loss'])}\n"
+        f"TP1 (1R): {_fmt(signal.get('tp1'))}\n"
+        f"TP2 (2R): {_fmt(signal.get('tp2'))}\n"
+        f"R/R: {signal.get('rr', 0):.2f}\n"
+        f"Trigger: {triggers_str}\n"
+        f"Liquidity Source: {signal.get('liquidity_source') or 'N/A'}\n"
+        f"Liquidity Target: {signal.get('liquidity_target') or 'N/A'}\n"
+        f"OTE Entry Zone: {ote_zone_str}\n"
+        f"Sessione: {signal.get('session', 'N/A')}"
+    )
+    return title, body
+
+
+def send_v41_signal_alert_all_channels(bot_token: str, chat_id: str, ntfy_topic: str, signal: dict) -> dict:
+    """
+    Invia il Trade Alert su entrambi i canali (Telegram + ntfy),
+    indipendentemente l'uno dall'altro: se uno fallisce, l'altro
+    viene comunque tentato. Ritorna {"telegram": bool, "ntfy": bool}.
+    """
+    telegram_sent = send_v41_signal_alert(bot_token, chat_id, signal)
+    title, body = format_v41_signal_alert_plain(signal)
+    ntfy_sent = ntfy_bot.send_message(ntfy_topic, title, body)
+    return {"telegram": telegram_sent, "ntfy": ntfy_sent}
 
 
 # ============================================================
@@ -101,3 +152,32 @@ def format_v41_watchlist_alert(asset: str, proximity: dict) -> str:
 def send_v41_watchlist_alert(bot_token: str, chat_id: str, asset: str, proximity: dict) -> bool:
     text = format_v41_watchlist_alert(asset, proximity)
     return send_message(bot_token, chat_id, text)
+
+
+def format_v41_watchlist_alert_plain(asset: str, proximity: dict) -> tuple:
+    """
+    Formato plain-text (senza Markdown) per ntfy. Ritorna (title, body).
+    """
+    asset_display = asset.replace("_", " ")
+    direction = proximity["potential_direction"]
+
+    title = f"WATCHLIST V4.1 {asset_display} | {proximity['label']} -> {direction}"
+    body = (
+        f"Level: {_fmt(proximity['price'])}\n"
+        f"Distance: {proximity['distance_pct'] * 100:.2f}%\n"
+        f"Potential Direction: {direction}\n"
+        f"Alert preparatorio: nessuna conferma BOS/CHOCH ancora presente."
+    )
+    return title, body
+
+
+def send_v41_watchlist_alert_all_channels(bot_token: str, chat_id: str, ntfy_topic: str,
+                                           asset: str, proximity: dict) -> dict:
+    """
+    Invia il Watchlist Alert su entrambi i canali (Telegram + ntfy),
+    indipendentemente l'uno dall'altro. Ritorna {"telegram": bool, "ntfy": bool}.
+    """
+    telegram_sent = send_v41_watchlist_alert(bot_token, chat_id, asset, proximity)
+    title, body = format_v41_watchlist_alert_plain(asset, proximity)
+    ntfy_sent = ntfy_bot.send_message(ntfy_topic, title, body)
+    return {"telegram": telegram_sent, "ntfy": ntfy_sent}
