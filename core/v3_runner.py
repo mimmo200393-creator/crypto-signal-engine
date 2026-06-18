@@ -8,7 +8,7 @@ Ad ogni esecuzione, per ciascun asset in V3_ASSETS (PAXG_USDT, BTC_USDT):
     2. Carica H4/H1 dalle tabelle candles_cache esistenti (riuso dati gia' scaricati)
     3. Calcola indicatori (EMA/ATR) sui 5 timeframe
     4. Esegue la pipeline Trend->Pullback->Transition->Continuation->Execution
-    5. Se generato un segnale valido, lo salva e notifica via Telegram
+    5. Se generato un segnale valido, lo salva e notifica via Telegram e ntfy
 
 PAXG_USDT e BTC_USDT sono valutati e tracciati in modo indipendente.
 Non importa né modifica core/signal_engine.py.
@@ -131,7 +131,7 @@ def _run_for_asset(conn, asset: str, config: dict):
         asset, signal["direction"], signal["signal_quality"], signal["rr"], signal_id
     )
 
-bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
+    bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = config.get("TELEGRAM_CHAT_ID", "")
     ntfy_topic = config.get("NTFY_TOPIC", "")
     if bot_token and chat_id:
