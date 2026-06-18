@@ -141,11 +141,39 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
         logger.info("V4.1 Scanner [%s]: nessun alert in questo ciclo.", asset)
         return
 
+    # --- Duplicate Signal Protection ---
+    # Trigger principale per il confronto: BOS o CHOCH (non il Sweep,
+    # che è solo un rafforzativo). Se entrambi presenti, BOS ha priorità
+    # per il confronto (è il caso più comune con Sweep+BOS).
+    current_trigger_type = "BOS" if signal.get("bos_direction") else "CHOCH"
+    current_liquidity_source = signal.get("liquidity_source")
+
+    last_state = v41_db.get_last_alert_state(conn, asset)
+    is_duplicate = (
+        last_state is not None
+        and last_state["direction"] == signal["direction"]
+        and last_state["trigger_type"] == current_trigger_type
+        and last_state["liquidity_source"] == current_liquidity_source
+    )
+
+    if is_duplicate:
+        logger.info(
+            "V4.1 Scanner [%s]: REJECT DUPLICATE_SIGNAL (stesso direction=%s trigger=%s liquidity_source=%s "
+            "dell'ultimo alert inviato)",
+            asset, signal["direction"], current_trigger_type, current_liquidity_source
+        )
+        return
+
     signal_id = v41_db.insert_v41_signal(conn, signal)
     logger.info(
         "V4.1 Scanner [%s]: ALERT generato [%s] trigger=%s quality=%d/12 (%s) (id=%s)",
         asset, signal["direction"], signal["trigger_types"],
         signal["quality_score"], signal["quality_label"], signal_id
+    )
+
+    v41_db.set_last_alert_state(
+        conn, asset, signal["direction"], current_trigger_type,
+        current_liquidity_source, now.isoformat()
     )
 
     bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
