@@ -114,9 +114,20 @@ EMA_PERIODS: [21, 50, 100, 200]
 ATR_PERIOD: 14
 
 # ============================================================
-# Institutional Scanner Framework V3.2 (isolato, multi-asset)
+# Institutional Scanner Framework V3.2 Frozen (benchmark)
 # ============================================================
 V3_SCANNER:
+  enabled: true
+  assets:
+    - PAXG_USDT
+    - BTC_USDT
+
+# ============================================================
+# Institutional Scanner Framework V3.2 Dynamic (sperimentale)
+# H4_STRUCTURE_NEUTRAL non blocca la pipeline: diventa Quality Factor.
+# Confronto statistico con V3.2 Frozen su tabella v3d_signals separata.
+# ============================================================
+V3D_SCANNER:
   enabled: true
   assets:
     - PAXG_USDT
@@ -133,7 +144,7 @@ V4_SCANNER:
     - PAXG_USDT
     - BTC_USDT
 
-    # ============================================================
+# ============================================================
 # Institutional Scanner V4.1 Intraday Wave Edition.
 # Trigger-driven (BOS/CHOCH + Liquidity Sweep), confluence di
 # contesto solo per il Quality Score, News Filter come hard gate.
