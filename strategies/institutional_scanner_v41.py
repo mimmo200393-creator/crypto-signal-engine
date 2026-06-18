@@ -41,6 +41,8 @@ from strategies.institutional_scanner_v3 import (
     get_session,
     H4_PIVOT_LOOKBACK,
     M15_BOS_LOOKBACK,
+    OTE_LOW,
+    OTE_HIGH,
 )
 from strategies.institutional_scanner_v4 import (
     evaluate_ema_trend_h4,
@@ -66,6 +68,11 @@ WEEKLY_LOOKBACK_DAYS = 7        # candele D1 aggregate per Weekly High/Low
 EQUAL_LEVEL_TOLERANCE_PCT = 0.001   # 0.1% per considerare due livelli "equal"
 LIQUIDITY_PROXIMITY_PCT = 0.003     # 0.3% di vicinanza per associare un trigger a un Source
 SCORE_LIQUIDITY_CONTEXT = 1         # bonus Quality Score se il trigger avviene vicino a un Source
+
+# ============================================================
+# Watchlist Alert (preparatorio, non operativo)
+# ============================================================
+WATCHLIST_PROXIMITY_PCT = 0.005     # 0.5% di vicinanza per attivare un Watchlist Alert
 
 # ============================================================
 # News Filter (hard gate)
@@ -201,6 +208,41 @@ def evaluate_m15_liquidity_sweep(df_m15: pd.DataFrame) -> Optional[str]:
     penetration_down = (swing_low - last_low) / swing_low if swing_low else 0
     if penetration_down > SWEEP_PENETRATION_MIN_PCT and last_close > swing_low and last_close > last_open:
         return "BULLISH"
+
+    return None
+
+
+def evaluate_m15_liquidity_sweep_detailed(df_m15: pd.DataFrame) -> Optional[dict]:
+    """
+    Variante di evaluate_m15_liquidity_sweep() che espone anche il
+    prezzo esatto del picco di penetrazione (necessario come punto
+    iniziale dell'impulso Fibonacci). Stessa logica di rilevamento,
+    nessuna duplicazione di soglie o regole.
+
+    Ritorna {"direction": "BULLISH"|"BEARISH", "peak_price": float}
+    oppure None.
+    """
+    if len(df_m15) < SWEEP_LOOKBACK_CANDLES + 3:
+        return None
+
+    recent = df_m15.iloc[-(SWEEP_LOOKBACK_CANDLES + 1):-1]
+    last = df_m15.iloc[-1]
+
+    swing_high = float(recent["high"].max())
+    swing_low = float(recent["low"].min())
+
+    last_high = float(last["high"])
+    last_low = float(last["low"])
+    last_close = float(last["close"])
+    last_open = float(last["open"])
+
+    penetration_up = (last_high - swing_high) / swing_high if swing_high else 0
+    if penetration_up > SWEEP_PENETRATION_MIN_PCT and last_close < swing_high and last_close < last_open:
+        return {"direction": "BEARISH", "peak_price": last_high}
+
+    penetration_down = (swing_low - last_low) / swing_low if swing_low else 0
+    if penetration_down > SWEEP_PENETRATION_MIN_PCT and last_close > swing_low and last_close > last_open:
+        return {"direction": "BULLISH", "peak_price": last_low}
 
     return None
 
@@ -347,6 +389,128 @@ def find_liquidity_target(liquidity_map: dict, current_price: float, direction: 
         return min(not_reached, key=lambda lv: lv["price"]) if not_reached else None
 
 
+def find_watchlist_proximities(liquidity_map: dict, current_price: float) -> list:
+    """
+    Identifica tutti i livelli di liquidità entro WATCHLIST_PROXIMITY_PCT
+    dal prezzo attuale, indipendentemente da bias o direzione (la
+    Watchlist è preparatoria, non richiede ancora un trigger).
+
+    Per ciascun livello "high" lo scenario potenziale è SELL (possibile
+    resistenza), per ciascun livello "low" lo scenario potenziale è BUY
+    (possibile supporto) — logica intenzionalmente semplice, senza
+    considerare il trend H4 dominante in questa prima versione.
+
+    Livelli con la stessa etichetta (es. più coppie "Equal Highs") e
+    prezzo molto vicino tra loro vengono deduplicati, mantenendo solo
+    il più vicino al prezzo attuale, per evitare ripetizioni quasi
+    identiche nello stesso alert.
+
+    Ritorna una lista di dict:
+        {"label": str, "price": float, "kind": "high"|"low",
+         "distance_pct": float, "potential_direction": "BUY"|"SELL"}
+    """
+    proximities = []
+    for lv in liquidity_map["levels"]:
+        if lv["price"] == 0:
+            continue
+        distance_pct = abs(lv["price"] - current_price) / lv["price"]
+        if distance_pct <= WATCHLIST_PROXIMITY_PCT:
+            potential_direction = "SELL" if lv["kind"] == "high" else "BUY"
+            proximities.append({
+                "label": lv["label"],
+                "price": lv["price"],
+                "kind": lv["kind"],
+                "distance_pct": distance_pct,
+                "potential_direction": potential_direction,
+            })
+
+    deduplicated = {}
+    for p in proximities:
+        key = p["label"]
+        if key not in deduplicated or p["distance_pct"] < deduplicated[key]["distance_pct"]:
+            deduplicated[key] = p
+
+    return sorted(deduplicated.values(), key=lambda p: p["distance_pct"])
+
+
+# ============================================================
+# Fibonacci / OTE Entry Zone (qualità e pianificazione, non trigger)
+# ============================================================
+
+def calculate_v41_fibonacci(df_m15: pd.DataFrame, direction: str,
+                             sweep_detail: Optional[dict]) -> Optional[dict]:
+    """
+    Calcola l'impulso Fibonacci sul movimento reale che ha originato
+    il trigger (non un lookback generico), per ottenere una Entry Zone
+    OTE coerente con il setup:
+
+        SELL con Sweep: impulso da massimo del sweep a livello che
+                         conferma il BOS bearish (chiusura).
+        BUY  con Sweep: impulso da minimo del sweep a livello che
+                         conferma il BOS bullish (chiusura).
+
+        CHOCH senza Sweep precedente: impulso dal pivot strutturale
+        rotto dal CHOCH (ultimo Lower High per CHOCH Bullish, ultimo
+        Higher Low per CHOCH Bearish) all'estremo della candela che
+        ha confermato la rottura (soluzione semplice, non il massimo
+        rigore teorico, ma robusta e coerente con l'obiettivo V4.1).
+
+    Ritorna {"start": float, "end": float, "ote_lower": float,
+             "ote_upper": float, "in_ote": bool} oppure None se
+    l'impulso non è calcolabile.
+    """
+    if len(df_m15) < 1:
+        return None
+
+    last = df_m15.iloc[-1]
+    last_close = float(last["close"])
+
+    start_price = None
+    end_price = None
+
+    if sweep_detail is not None:
+        start_price = sweep_detail["peak_price"]
+        swing_type = "low" if direction == "SELL" else "high"
+        end_price = _find_m15_swing(df_m15.iloc[:-1], swing_type, M15_BOS_LOOKBACK)
+    else:
+        pivots = find_pivots(df_m15.iloc[:-1], M15_CHOCH_LOOKBACK)
+        if direction == "BUY":
+            highs = sorted(pivots["pivot_highs"], key=lambda p: p[2])
+            if highs:
+                start_price = highs[-1][1]
+                end_price = float(last["high"])
+        else:
+            lows = sorted(pivots["pivot_lows"], key=lambda p: p[2])
+            if lows:
+                start_price = lows[-1][1]
+                end_price = float(last["low"])
+
+    if start_price is None or end_price is None:
+        return None
+
+    impulse = abs(start_price - end_price)
+    if impulse <= 0:
+        return None
+
+    if direction == "BUY":
+        ote_lower = end_price - impulse * OTE_HIGH
+        ote_upper = end_price - impulse * OTE_LOW
+    else:
+        ote_lower = end_price + impulse * OTE_LOW
+        ote_upper = end_price + impulse * OTE_HIGH
+
+    lo, hi = min(ote_lower, ote_upper), max(ote_lower, ote_upper)
+    in_ote = lo <= last_close <= hi
+
+    return {
+        "start": start_price,
+        "end": end_price,
+        "ote_lower": lo,
+        "ote_upper": hi,
+        "in_ote": in_ote,
+    }
+
+
 # ============================================================
 # News Filter (hard gate)
 # ============================================================
@@ -452,7 +616,8 @@ def generate_v41_signal(market_data: dict) -> dict:
         diagnostics["trigger_types"].append("CHOCH")
 
     # --- Liquidity Sweep (rafforza il trigger, non determina la direzione) ---
-    sweep_direction = evaluate_m15_liquidity_sweep(df_m15)
+    sweep_detail = evaluate_m15_liquidity_sweep_detailed(df_m15)
+    sweep_direction = sweep_detail["direction"] if sweep_detail else None
     diagnostics["sweep_direction"] = sweep_direction
     if sweep_direction:
         diagnostics["trigger_types"].append("LIQUIDITY_SWEEP")
@@ -467,6 +632,11 @@ def generate_v41_signal(market_data: dict) -> dict:
 
     diagnostics["liquidity_source"] = liquidity_source["label"] if liquidity_source else None
     diagnostics["liquidity_target"] = liquidity_target["label"] if liquidity_target else None
+
+    # --- Fibonacci / OTE Entry Zone (qualità e pianificazione, non trigger) ---
+    fibonacci = calculate_v41_fibonacci(df_m15, direction, sweep_detail)
+    fib_in_ote = fibonacci["in_ote"] if fibonacci else False
+    diagnostics["fibonacci"] = fibonacci
 
     # ============================================================
     # Trigger soddisfatto: il segnale viene generato. Da qui in poi
@@ -483,7 +653,7 @@ def generate_v41_signal(market_data: dict) -> dict:
         price_in_zone(float(df_h1.iloc[-1]["close"]), z, tolerance_pct=0.006) for z in zones
     ) if zones else False
     sr_reaction = evaluate_sr_reaction(df_h1, zones)
-    ote_present = check_ote(df_h1, direction) if len(df_h1) >= 30 else False
+    ote_present = fib_in_ote
 
     ema_h4_aligned = ema_h4 == structural_direction
     ema_h1_aligned = ema_h1 == structural_direction
@@ -578,6 +748,9 @@ def generate_v41_signal(market_data: dict) -> dict:
         "liquidity_source": liquidity_source["label"] if liquidity_source else None,
         "liquidity_target": liquidity_target["label"] if liquidity_target else None,
         "liquidity_target_price": liquidity_target["price"] if liquidity_target else None,
+        "ote_entry_low": fibonacci["ote_lower"] if fibonacci else None,
+        "ote_entry_high": fibonacci["ote_upper"] if fibonacci else None,
+        "ote_in_zone_now": fib_in_ote,
         "timestamp_setup": now.isoformat(),
     }
 
@@ -585,6 +758,31 @@ def generate_v41_signal(market_data: dict) -> dict:
         "%s | V4.1 ALERT [%s] trigger=%s quality=%d/%d (%s) session=%s",
         asset, direction, diagnostics["trigger_types"], score, SCORE_MAX,
         quality_label, session,
+    )
+    logger.info(
+        "%s | Quality breakdown: EMA_H4=%s(%s) EMA_H1=%s(%s) ZONE_H4=%s SR=%s "
+        "DOW_THEORY=%s(%s) MOMENTUM=%s(%s) OTE=%s SESSION=%s LIQUIDITY_CTX=%s | totale=%d/%d",
+        asset,
+        "OK" if ema_h4_aligned else "NO", ema_h4,
+        "OK" if ema_h1_aligned else "NO", ema_h1,
+        "OK" if in_h4_zone else "NO",
+        "OK" if sr_reaction else "NO",
+        "OK" if dow_aligned else "NO", dow_theory_h4,
+        "OK" if momentum_aligned else "NO", momentum,
+        "OK" if ote_present else "NO",
+        "OK" if session_bonus else "NO",
+        "OK" if liquidity_source is not None else "NO",
+        score, SCORE_MAX,
+    )
+    logger.info(
+        "%s | Liquidity context: Source=%s Target=%s(%s) | OTE Entry Zone=%s-%s (in zona ora=%s)",
+        asset,
+        liquidity_source["label"] if liquidity_source else "N/A",
+        liquidity_target["label"] if liquidity_target else "N/A",
+        f"{liquidity_target['price']:.4f}" if liquidity_target else "N/A",
+        f"{fibonacci['ote_lower']:.4f}" if fibonacci else "N/A",
+        f"{fibonacci['ote_upper']:.4f}" if fibonacci else "N/A",
+        fib_in_ote,
     )
 
     return {"signal": signal, "diagnostics": diagnostics}
