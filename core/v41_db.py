@@ -12,6 +12,7 @@ v3_candles_cache (stessi dati di mercato, stesso asset).
 import json
 import uuid
 import sqlite3
+from typing import Optional
 import pandas as pd
 
 
@@ -177,3 +178,39 @@ def insert_watchlist_alert(conn: sqlite3.Connection, asset: str, proximity: dict
     )
     conn.commit()
     return alert_id
+
+
+# ============================================================
+# Duplicate Signal Protection (stato ultimo alert operativo per asset)
+# ============================================================
+
+def get_last_alert_state(conn: sqlite3.Connection, asset: str) -> Optional[dict]:
+    """
+    Ritorna l'ultimo alert operativo registrato per l'asset, come dict
+    {"direction", "trigger_type", "liquidity_source"}, oppure None se
+    non è ancora stato inviato alcun alert per quell'asset.
+    """
+    row = conn.execute(
+        "SELECT direction, trigger_type, liquidity_source FROM v41_last_alert_state WHERE asset = ?",
+        (asset,)
+    ).fetchone()
+    if row is None:
+        return None
+    return {"direction": row[0], "trigger_type": row[1], "liquidity_source": row[2]}
+
+
+def set_last_alert_state(conn: sqlite3.Connection, asset: str, direction: str,
+                          trigger_type: str, liquidity_source, timestamp: str):
+    conn.execute(
+        """
+        INSERT INTO v41_last_alert_state (asset, direction, trigger_type, liquidity_source, last_updated)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(asset) DO UPDATE SET
+            direction = excluded.direction,
+            trigger_type = excluded.trigger_type,
+            liquidity_source = excluded.liquidity_source,
+            last_updated = excluded.last_updated
+        """,
+        (asset, direction, trigger_type, liquidity_source, timestamp)
+    )
+    conn.commit()
