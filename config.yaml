@@ -132,3 +132,16 @@ V4_SCANNER:
   assets:
     - PAXG_USDT
     - BTC_USDT
+
+    # ============================================================
+# Institutional Scanner V4.1 Intraday Wave Edition.
+# Trigger-driven (BOS/CHOCH + Liquidity Sweep), confluence di
+# contesto solo per il Quality Score, News Filter come hard gate.
+# Riusa le candele H4/H1/M15 da V3_SCANNER (stesso ciclo), ma
+# logica e tracking completamente indipendenti (tabella v41_signals).
+# ============================================================
+V41_SCANNER:
+  enabled: true
+  assets:
+    - PAXG_USDT
+    - BTC_USDT
