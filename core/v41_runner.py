@@ -20,6 +20,7 @@ from core import v3_db
 from core import v41_db
 from strategies import institutional_scanner_v41 as v41
 from notifications import v41_telegram
+from notifications import ntfy_bot
 
 logger = logging.getLogger("v41_runner")
 
@@ -72,7 +73,6 @@ def _check_watchlist(conn, asset: str, df_h4, df_d1, df_m15, now: datetime, conf
     proximities_by_label = {p["label"]: p for p in proximities}
     timestamp_str = now.isoformat()
 
-    # Livelli ora in prossimità: controllo la transizione
     for label, proximity in proximities_by_label.items():
         was_inside = v41_db.get_watchlist_state(conn, asset, label)
         if not was_inside:
@@ -84,13 +84,16 @@ def _check_watchlist(conn, asset: str, df_h4, df_d1, df_m15, now: datetime, conf
             )
             bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
             chat_id = config.get("TELEGRAM_CHAT_ID", "")
+            ntfy_topic = config.get("NTFY_TOPIC", "")
             if bot_token and chat_id:
                 sent = v41_telegram.send_v41_watchlist_alert(bot_token, chat_id, asset, proximity)
                 logger.info("V4.1 Scanner [%s]: notifica Watchlist Telegram inviata=%s", asset, sent)
+            if ntfy_topic:
+                title, body = v41_telegram.format_v41_watchlist_alert_plain(asset, proximity)
+                ntfy_sent = ntfy_bot.send_message(ntfy_topic, title, body)
+                logger.info("V4.1 Scanner [%s]: notifica Watchlist ntfy inviata=%s", asset, ntfy_sent)
         v41_db.set_watchlist_state(conn, asset, label, True, timestamp_str)
 
-    # Livelli che NON sono più in prossimità: reset dello stato a False,
-    # cosi' un futuro rientro genera un nuovo Watchlist Alert
     all_level_labels = {lv["label"] for lv in liquidity_map["levels"]}
     for label in all_level_labels:
         if label not in proximities_by_label:
@@ -111,6 +114,28 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
             asset, len(df_h4), len(df_h1), len(df_m15)
         )
         return
+
+    # --- Monitoraggio automatico segnali aperti ---
+    # Eseguito prima di tutto il resto: aggiorna MAE/MFE/outcome per
+    # tutti i segnali ancora OPEN usando il prezzo M15 corrente, senza
+    # fetch aggiuntivi verso l'exchange.
+    try:
+        last_m15 = df_m15.iloc[-1]
+        updated_signals = v41_db.monitor_open_signals(
+            conn, asset,
+            current_high=float(last_m15["high"]),
+            current_low=float(last_m15["low"]),
+            now_iso=now.isoformat(),
+            expiry_hours=24,
+        )
+        for upd in updated_signals:
+            logger.info(
+                "V4.1 Monitor [%s]: segnale %s -> outcome=%s tp1_hit=%s tp2_hit=%s",
+                asset, upd["signal_id"][:8], upd["outcome"],
+                upd["tp1_hit"], upd["tp2_hit"]
+            )
+    except Exception as e:
+        logger.error("V4.1 Monitor [%s]: errore monitoraggio: %s", asset, e)
 
     # Watchlist Alert: valutato indipendentemente dal trade alert,
     # serve a preparare il trader anche quando il trigger operativo
@@ -142,9 +167,6 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
         return
 
     # --- Duplicate Signal Protection ---
-    # Trigger principale per il confronto: BOS o CHOCH (non il Sweep,
-    # che è solo un rafforzativo). Se entrambi presenti, BOS ha priorità
-    # per il confronto (è il caso più comune con Sweep+BOS).
     current_trigger_type = "BOS" if signal.get("bos_direction") else "CHOCH"
     current_liquidity_source = signal.get("liquidity_source")
 
@@ -178,9 +200,14 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
 
     bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = config.get("TELEGRAM_CHAT_ID", "")
+    ntfy_topic = config.get("NTFY_TOPIC", "")
     if bot_token and chat_id:
         sent = v41_telegram.send_v41_signal_alert(bot_token, chat_id, signal)
         logger.info("V4.1 Scanner [%s]: notifica Telegram inviata=%s", asset, sent)
+    if ntfy_topic:
+        title, body = v41_telegram.format_v41_signal_alert_plain(signal)
+        ntfy_sent = ntfy_bot.send_message(ntfy_topic, title, body)
+        logger.info("V4.1 Scanner [%s]: notifica ntfy inviata=%s", asset, ntfy_sent)
 
 
 def run_v41_scan(config: dict):
