@@ -75,6 +75,14 @@ SCORE_LIQUIDITY_CONTEXT = 1         # bonus Quality Score se il trigger avviene 
 WATCHLIST_PROXIMITY_PCT = 0.005     # 0.5% di vicinanza per attivare un Watchlist Alert
 
 # ============================================================
+# Tradeability Filter (hard gate): rifiuta setup con stop troppo ampio
+# per un framework intraday. Valori assoluti per PAXG (in punti),
+# percentuale per BTC, per coerenza con la scala di prezzo di ciascuno.
+# ============================================================
+MAX_STOP_DISTANCE_PAXG_POINTS = 30.0
+MAX_STOP_DISTANCE_BTC_PCT = 0.01     # 1%
+
+# ============================================================
 # News Filter (hard gate)
 # ============================================================
 NEWS_BLACKOUT_WINDOW_MINUTES = 30
@@ -527,6 +535,28 @@ def is_news_blackout(macro_provider, now: datetime) -> Optional[dict]:
 
 
 # ============================================================
+# Tradeability Filter (hard gate)
+# ============================================================
+
+def is_stop_too_wide(asset: str, entry: float, stop_loss: float) -> bool:
+    """
+    Hard gate intraday: rifiuta setup il cui Stop Loss naturale supera
+    il limite massimo accettabile per quell'asset. PAXG in punti
+    assoluti, BTC in percentuale (scale di prezzo molto diverse).
+    Asset non esplicitamente coperti non vengono filtrati (nessun
+    limite noto, comportamento permissivo di default).
+    """
+    distance = abs(entry - stop_loss)
+    if asset == "PAXG_USDT":
+        return distance > MAX_STOP_DISTANCE_PAXG_POINTS
+    if asset == "BTC_USDT":
+        if entry == 0:
+            return False
+        return (distance / entry) > MAX_STOP_DISTANCE_BTC_PCT
+    return False
+
+
+# ============================================================
 # Pipeline principale
 # ============================================================
 
@@ -714,13 +744,25 @@ def generate_v41_signal(market_data: dict) -> dict:
         diagnostics["rejections"].append("RISK_ZERO")
         return {"signal": None, "diagnostics": diagnostics}
 
-    # Target: 1.5x il rischio come riferimento intraday (non vincolante
-    # come V3.2/V4.0: lo scanner segnala l'opportunità, la gestione del
-    # trade resta al trader).
+    # --- Tradeability Filter (hard gate): stop troppo ampio per intraday ---
+    if is_stop_too_wide(asset, entry, stop_loss):
+        diagnostics["rejections"].append("STOP_TOO_WIDE")
+        diagnostics["stop_distance"] = risk
+        logger.info(
+            "%s | V4.1 REJECT: STOP_TOO_WIDE (distanza=%.2f, limite=%s)",
+            asset, risk,
+            f"{MAX_STOP_DISTANCE_PAXG_POINTS}pt" if asset == "PAXG_USDT"
+            else f"{MAX_STOP_DISTANCE_BTC_PCT*100:.1f}%",
+        )
+        return {"signal": None, "diagnostics": diagnostics}
+
+    # Target: 2x il rischio (R/R 1:2) come riferimento intraday (non
+    # vincolante come V3.2/V4.0: lo scanner segnala l'opportunità, la
+    # gestione del trade resta al trader).
     if direction == "BUY":
-        take_profit = entry + 1.5 * risk
+        take_profit = entry + 2.0 * risk
     else:
-        take_profit = entry - 1.5 * risk
+        take_profit = entry - 2.0 * risk
 
     rr = abs(take_profit - entry) / risk
 
