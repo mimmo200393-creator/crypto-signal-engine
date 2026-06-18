@@ -12,7 +12,11 @@ CREATE TABLE IF NOT EXISTS v41_signals (
 
     entry REAL NOT NULL,
     stop_loss REAL NOT NULL,
-    take_profit REAL,
+    take_profit REAL,       -- TP2 (2R), per compatibilità con il campo originale
+    tp1 REAL,               -- 1R
+    tp2 REAL,               -- 2R (identico a take_profit, campo esplicito per le statistiche)
+    tp1_hit BOOLEAN DEFAULT 0,
+    tp2_hit BOOLEAN DEFAULT 0,
     rr REAL,
 
     trigger_types TEXT,           -- JSON list: BOS / CHOCH / LIQUIDITY_SWEEP
@@ -39,6 +43,11 @@ CREATE TABLE IF NOT EXISTS v41_signals (
     ote_entry_low REAL,
     ote_entry_high REAL,
     ote_in_zone_now BOOLEAN DEFAULT 0,
+
+    expected_move_points REAL,
+    expected_move_pct REAL,
+    expected_move_barrier TEXT,
+    expected_move_barrier_price REAL,
 
     trader_decision TEXT DEFAULT 'unknown'
         CHECK(trader_decision IN ('unknown','taken','skipped')),
