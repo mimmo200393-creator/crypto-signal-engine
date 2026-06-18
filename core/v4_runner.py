@@ -98,7 +98,7 @@ def _run_for_asset(conn, asset: str, config: dict):
         signal.get("quality_label", "?"), signal["rr"], signal_id
     )
 
-bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
+    bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = config.get("TELEGRAM_CHAT_ID", "")
     ntfy_topic = config.get("NTFY_TOPIC", "")
     if bot_token and chat_id:
