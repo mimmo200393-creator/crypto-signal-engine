@@ -55,6 +55,50 @@ def _prepare_dataframes(conn, asset: str, config: dict):
     return df_h4, df_h1, df_m15, df_d1
 
 
+def _check_watchlist(conn, asset: str, df_h4, df_d1, df_m15, now: datetime, config: dict):
+    """
+    Valuta i livelli di liquidità in prossimità del prezzo attuale e
+    genera un Watchlist Alert solo sulla transizione fuori -> dentro
+    fascia per ciascun livello, per evitare notifiche ripetute mentre
+    il prezzo resta nella stessa zona.
+    """
+    if len(df_m15) < 1:
+        return
+
+    current_price = float(df_m15.iloc[-1]["close"])
+    liquidity_map = v41.build_liquidity_map(df_h4, df_d1)
+    proximities = v41.find_watchlist_proximities(liquidity_map, current_price)
+
+    proximities_by_label = {p["label"]: p for p in proximities}
+    timestamp_str = now.isoformat()
+
+    # Livelli ora in prossimità: controllo la transizione
+    for label, proximity in proximities_by_label.items():
+        was_inside = v41_db.get_watchlist_state(conn, asset, label)
+        if not was_inside:
+            alert_id = v41_db.insert_watchlist_alert(conn, asset, proximity, timestamp_str)
+            logger.info(
+                "V4.1 Scanner [%s]: WATCHLIST ALERT [%s] livello=%s distanza=%.3f%% potential=%s (id=%s)",
+                asset, asset, label, proximity["distance_pct"] * 100,
+                proximity["potential_direction"], alert_id
+            )
+            bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
+            chat_id = config.get("TELEGRAM_CHAT_ID", "")
+            if bot_token and chat_id:
+                sent = v41_telegram.send_v41_watchlist_alert(bot_token, chat_id, asset, proximity)
+                logger.info("V4.1 Scanner [%s]: notifica Watchlist Telegram inviata=%s", asset, sent)
+        v41_db.set_watchlist_state(conn, asset, label, True, timestamp_str)
+
+    # Livelli che NON sono più in prossimità: reset dello stato a False,
+    # cosi' un futuro rientro genera un nuovo Watchlist Alert
+    all_level_labels = {lv["label"] for lv in liquidity_map["levels"]}
+    for label in all_level_labels:
+        if label not in proximities_by_label:
+            was_inside = v41_db.get_watchlist_state(conn, asset, label)
+            if was_inside:
+                v41_db.set_watchlist_state(conn, asset, label, False, timestamp_str)
+
+
 def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime):
     logger.info("V4.1 Scanner: inizio ciclo per %s", asset)
 
@@ -67,6 +111,14 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
             asset, len(df_h4), len(df_h1), len(df_m15)
         )
         return
+
+    # Watchlist Alert: valutato indipendentemente dal trade alert,
+    # serve a preparare il trader anche quando il trigger operativo
+    # (BOS/CHOCH) non è ancora scattato.
+    try:
+        _check_watchlist(conn, asset, df_h4, df_d1, df_m15, now, config)
+    except Exception as e:
+        logger.error("V4.1 Scanner [%s]: errore Watchlist non gestito: %s", asset, e)
 
     market_data = {
         "asset": asset,
