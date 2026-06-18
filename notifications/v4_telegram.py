@@ -7,6 +7,7 @@ riusa solo la funzione di base send_message.
 """
 
 from notifications.telegram_bot import send_message
+from notifications import ntfy_bot
 
 
 def _fmt(v) -> str:
@@ -56,3 +57,26 @@ def format_v4_signal_alert(signal: dict) -> str:
 def send_v4_signal_alert(bot_token: str, chat_id: str, signal: dict) -> bool:
     text = format_v4_signal_alert(signal)
     return send_message(bot_token, chat_id, text)
+
+
+def format_v4_signal_alert_plain(signal: dict) -> tuple:
+    """Formato plain-text per ntfy (senza Markdown). Ritorna (title, body)."""
+    direction = signal["direction"]
+    asset_display = signal["asset"].replace("_", " ")
+    quality = signal["signal_quality"]
+    label = signal.get("quality_label", "STANDARD")
+    title = f"V4.0 {asset_display} {direction} | Quality {quality:.0f}/5 ({label})"
+    body = (
+        f"Entry: {_fmt(signal['entry'])}\n"
+        f"Stop Loss: {_fmt(signal['stop_loss'])}\n"
+        f"TP1: {_fmt(signal.get('tp1'))} | TP2: {_fmt(signal.get('tp2'))}\n"
+        f"R/R: {signal['rr']:.2f}\n"
+        f"H4 Structure: {signal.get('h4_structure_status', 'N/A')}\n"
+        f"Sessione: {signal.get('session', 'N/A')}"
+    )
+    return title, body
+
+
+def send_v4_signal_alert_ntfy(ntfy_topic: str, signal: dict) -> bool:
+    title, body = format_v4_signal_alert_plain(signal)
+    return ntfy_bot.send_message(ntfy_topic, title, body)
