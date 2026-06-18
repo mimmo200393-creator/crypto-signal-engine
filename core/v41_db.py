@@ -32,6 +32,14 @@ def _migrate_v41_signals_columns(conn: sqlite3.Connection):
         "ote_entry_low": "REAL",
         "ote_entry_high": "REAL",
         "ote_in_zone_now": "BOOLEAN DEFAULT 0",
+        "expected_move_points": "REAL",
+        "expected_move_pct": "REAL",
+        "expected_move_barrier": "TEXT",
+        "expected_move_barrier_price": "REAL",
+        "tp1": "REAL",
+        "tp2": "REAL",
+        "tp1_hit": "BOOLEAN DEFAULT 0",
+        "tp2_hit": "BOOLEAN DEFAULT 0",
     }
     for col_name, col_type in required_columns.items():
         if col_name not in existing_cols:
@@ -55,15 +63,17 @@ def insert_v41_signal(conn: sqlite3.Connection, signal_dict: dict) -> str:
         """
         INSERT INTO v41_signals (
             signal_id, timestamp_setup, asset, direction,
-            entry, stop_loss, take_profit, rr,
+            entry, stop_loss, take_profit, tp1, tp2, rr,
             trigger_types, sweep_direction, bos_direction, choch_direction,
             quality_score, quality_label,
             ema_h4, ema_h1, dow_theory_h4, momentum,
             in_h4_zone, sr_reaction, ote_present, session,
             liquidity_source, liquidity_target, liquidity_target_price,
             ote_entry_low, ote_entry_high, ote_in_zone_now,
+            expected_move_points, expected_move_pct,
+            expected_move_barrier, expected_move_barrier_price,
             trader_decision, final_outcome, market_snapshot
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             signal_id,
@@ -72,7 +82,9 @@ def insert_v41_signal(conn: sqlite3.Connection, signal_dict: dict) -> str:
             signal_dict["direction"],
             signal_dict["entry"],
             signal_dict["stop_loss"],
-            signal_dict.get("take_profit"),
+            signal_dict.get("take_profit"),   # TP2 per compatibilità
+            signal_dict.get("tp1"),
+            signal_dict.get("tp2"),
             signal_dict.get("rr"),
             trigger_types_json,
             signal_dict.get("sweep_direction"),
@@ -94,6 +106,10 @@ def insert_v41_signal(conn: sqlite3.Connection, signal_dict: dict) -> str:
             signal_dict.get("ote_entry_low"),
             signal_dict.get("ote_entry_high"),
             signal_dict.get("ote_in_zone_now", False),
+            signal_dict.get("expected_move_points"),
+            signal_dict.get("expected_move_pct"),
+            signal_dict.get("expected_move_barrier"),
+            signal_dict.get("expected_move_barrier_price"),
             "unknown",
             "OPEN",
             snapshot_json,
@@ -116,7 +132,8 @@ def get_open_v41_signals(conn: sqlite3.Connection, asset: str = None) -> pd.Data
 
 def update_v41_signal_outcome(conn: sqlite3.Connection, signal_id: str,
                                final_outcome: str, timestamp_closed: str = None,
-                               mae: float = None, mfe: float = None):
+                               mae: float = None, mfe: float = None,
+                               tp1_hit: bool = None, tp2_hit: bool = None):
     updates = ["final_outcome = ?"]
     params = [final_outcome]
     if timestamp_closed:
@@ -125,9 +142,126 @@ def update_v41_signal_outcome(conn: sqlite3.Connection, signal_id: str,
         updates.append("mae = ?"); params.append(mae)
     if mfe is not None:
         updates.append("mfe = ?"); params.append(mfe)
+    if tp1_hit is not None:
+        updates.append("tp1_hit = ?"); params.append(tp1_hit)
+    if tp2_hit is not None:
+        updates.append("tp2_hit = ?"); params.append(tp2_hit)
     params.append(signal_id)
     conn.execute(f"UPDATE v41_signals SET {', '.join(updates)} WHERE signal_id = ?", params)
     conn.commit()
+
+
+def monitor_open_signals(conn: sqlite3.Connection, asset: str,
+                          current_high: float, current_low: float,
+                          now_iso: str, expiry_hours: int = 24) -> list:
+    """
+    Monitora i segnali aperti per un asset usando high/low dell'ultima
+    candela M15 disponibile nel DB (nessun fetch aggiuntivo).
+
+    Per ciascun segnale aperto verifica nell'ordine:
+        1. SL raggiunto (high/low tocca o supera stop_loss)
+        2. TP2 raggiunto (high/low tocca o supera tp2)
+        3. TP1 raggiunto (high/low tocca o supera tp1) — aggiorna solo tp1_hit
+        4. Scadenza dopo expiry_hours: chiude come EXPIRED
+
+    Aggiorna MAE e MFE ad ogni scan, indipendentemente dall'outcome.
+    SL ha priorità su TP (caso raro di candela con wick che tocca entrambi).
+
+    Ritorna lista di dict {"signal_id", "outcome", "tp1_hit", "tp2_hit"}
+    per ogni segnale aggiornato in questo ciclo.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    rows = conn.execute(
+        """SELECT signal_id, direction, entry, stop_loss, tp1, tp2,
+                  mae, mfe, tp1_hit, timestamp_setup
+           FROM v41_signals
+           WHERE final_outcome = 'OPEN' AND asset = ?""",
+        (asset,)
+    ).fetchall()
+
+    updated = []
+
+    for row in rows:
+        sid, direction, entry, sl, tp1, tp2, mae, mfe, tp1_hit_db, ts_setup = row
+
+        if entry is None or sl is None:
+            continue
+
+        # Aggiorna MAE e MFE (peggiore e migliore escursione avversa/favorevole)
+        if direction == "BUY":
+            adverse = entry - current_low     # quanto è sceso contro di noi
+            favorable = current_high - entry  # quanto è salito a favore
+        else:
+            adverse = current_high - entry
+            favorable = entry - current_low
+
+        new_mae = max(mae or 0, adverse)
+        new_mfe = max(mfe or 0, favorable)
+
+        # Verifica scadenza (priorità massima dopo SL)
+        try:
+            setup_dt = datetime.fromisoformat(ts_setup)
+            if setup_dt.tzinfo is None:
+                setup_dt = setup_dt.replace(tzinfo=timezone.utc)
+            elapsed = datetime.now(timezone.utc) - setup_dt
+            expired = elapsed > timedelta(hours=expiry_hours)
+        except Exception:
+            expired = False
+
+        # Verifica SL
+        sl_hit = (direction == "BUY" and current_low <= sl) or \
+                 (direction == "SELL" and current_high >= sl)
+
+        # Verifica TP2
+        tp2_hit_now = tp2 is not None and (
+            (direction == "BUY" and current_high >= tp2) or
+            (direction == "SELL" and current_low <= tp2)
+        )
+
+        # Verifica TP1
+        tp1_hit_now = tp1 is not None and (
+            (direction == "BUY" and current_high >= tp1) or
+            (direction == "SELL" and current_low <= tp1)
+        )
+
+        # SL ha sempre priorità su TP (candela con spike in entrambe le direzioni)
+        if sl_hit:
+            update_v41_signal_outcome(
+                conn, sid, "SL", now_iso,
+                mae=new_mae, mfe=new_mfe,
+                tp1_hit=bool(tp1_hit_db or tp1_hit_now),
+                tp2_hit=False,
+            )
+            updated.append({"signal_id": sid, "outcome": "SL",
+                             "tp1_hit": bool(tp1_hit_now), "tp2_hit": False})
+        elif tp2_hit_now:
+            update_v41_signal_outcome(
+                conn, sid, "TP", now_iso,
+                mae=new_mae, mfe=new_mfe,
+                tp1_hit=True, tp2_hit=True,
+            )
+            updated.append({"signal_id": sid, "outcome": "TP2",
+                             "tp1_hit": True, "tp2_hit": True})
+        elif expired:
+            update_v41_signal_outcome(
+                conn, sid, "EXPIRED", now_iso,
+                mae=new_mae, mfe=new_mfe,
+                tp1_hit=bool(tp1_hit_db or tp1_hit_now),
+                tp2_hit=False,
+            )
+            updated.append({"signal_id": sid, "outcome": "EXPIRED",
+                             "tp1_hit": bool(tp1_hit_now), "tp2_hit": False})
+        else:
+            # Segnale ancora aperto: aggiorna MAE/MFE e tp1_hit se raggiunto
+            new_tp1_hit = bool(tp1_hit_db or tp1_hit_now)
+            conn.execute(
+                "UPDATE v41_signals SET mae=?, mfe=?, tp1_hit=? WHERE signal_id=?",
+                (new_mae, new_mfe, new_tp1_hit, sid)
+            )
+            conn.commit()
+
+    return updated
 
 
 # ============================================================
