@@ -28,6 +28,9 @@ header .meta{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--di
 .fw-grid .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);display:block;margin-top:2px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px}
 .ch{padding:10px 16px;border-bottom:1px solid var(--border);font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.ch.live{color:var(--accent)}
+.pulse{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent);margin-right:6px;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .tabs{display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--border)}
 .tab{padding:8px 20px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;border-bottom:2px solid transparent;color:var(--dim);transition:.15s;margin-bottom:-1px}
 .tab.active.t-v41{color:var(--v41);border-color:var(--v41)}
@@ -58,7 +61,7 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
 <header>
   <h1>Crypto Signal Engine — Dashboard</h1>
   <div class="meta">
-    2026-06-19 01:11 UTC &nbsp;|&nbsp;
+    2026-06-19 01:16 UTC &nbsp;|&nbsp;
     Open: V3<span class="open-pill">0</span>
     V4<span class="open-pill">0</span>
     V4.1<span class="open-pill">15</span>
@@ -112,6 +115,184 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
   </div>
 
   <div id="tab-v41" class="tab-content active">
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="ch live"><span class="pulse"></span>Segnali in monitoraggio — V4.1 (15 aperti)</div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr>
+          <th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th>
+          <th>TP1</th><th>TP2</th><th>Quality</th>
+          <th>MAE</th><th>MFE</th><th>Aperto</th>
+        </tr></thead>
+        <tbody><tr>
+  <td><strong>BTC</strong></td>
+  <td class="buy">BUY</td>
+  <td class="mono">63,008.80</td>
+  <td class="mono neg">62,750.73</td>
+  <td class="mono">63,266.87 </td>
+  <td class="mono">63,524.94</td>
+  <td><span class="ql-low">LOW</span> <span class="dim">(2/12)</span></td>
+  <td class="mono neg">45.6</td>
+  <td class="mono pos">64.2</td>
+  <td class="mono dim">0.8h</td>
+</tr><tr>
+  <td><strong>PAXG</strong></td>
+  <td class="sell">SELL</td>
+  <td class="mono">4,185.78</td>
+  <td class="mono neg">4,204.26</td>
+  <td class="mono">4,167.30 </td>
+  <td class="mono">4,148.82</td>
+  <td><span class="ql-high">HIGH</span> <span class="dim">(9/12)</span></td>
+  <td class="mono neg">2.1</td>
+  <td class="mono pos">3.9</td>
+  <td class="mono dim">1.2h</td>
+</tr><tr>
+  <td><strong>BTC</strong></td>
+  <td class="sell">SELL</td>
+  <td class="mono">62,812.78</td>
+  <td class="mono neg">63,173.28</td>
+  <td class="mono">— </td>
+  <td class="mono">—</td>
+  <td><span class="ql-low">LOW</span> <span class="dim">(3/12)</span></td>
+  <td class="mono neg">260.2</td>
+  <td class="mono pos">62.0</td>
+  <td class="mono dim">2.7h</td>
+</tr><tr>
+  <td><strong>PAXG</strong></td>
+  <td class="sell">SELL</td>
+  <td class="mono">4,203.89</td>
+  <td class="mono neg">4,214.23</td>
+  <td class="mono">— </td>
+  <td class="mono">—</td>
+  <td><span class="ql-medium">MEDIUM</span> <span class="dim">(6/12)</span></td>
+  <td class="mono neg">0.4</td>
+  <td class="mono pos">22.0</td>
+  <td class="mono dim">3.0h</td>
+</tr><tr>
+  <td><strong>BTC</strong></td>
+  <td class="buy">BUY</td>
+  <td class="mono">63,050.01</td>
+  <td class="mono neg">62,648.57</td>
+  <td class="mono">— </td>
+  <td class="mono">—</td>
+  <td><span class="ql-low">LOW</span> <span class="dim">(1/12)</span></td>
+  <td class="mono neg">299.3</td>
+  <td class="mono pos">123.3</td>
+  <td class="mono dim">5.3h</td>
+</tr><tr>
+  <td><strong>PAXG</strong></td>
+  <td class="sell">SELL</td>
+  <td class="mono">4,203.03</td>
+  <td class="mono neg">4,229.02</td>
+  <td class="mono">— </td>
+  <td class="mono">—</td>
+  <td><span class="ql-medium">MEDIUM</span> <span class="dim">(6/12)</span></td>
+  <td class="mono neg">13.8</td>
+  <td class="mono pos">21.2</td>
+  <td class="mono dim">6.0h</td>
+</tr><tr>
+  <td><strong>BTC</strong></td>
+  <td class="buy">BUY</td>
+  <td class="mono">62,812.44</td>
+  <td class="mono neg">62,484.53</td>
+  <td class="mono">— </td>
+  <td class="mono">—</td>
+  <td><span class="ql-low">LOW</span> <span class="dim">(2/12)</span></td>
+  <td class="mono neg">61.7</td>
+  <td class="mono pos">360.8</td>
+  <td class="mono dim">6.7h</td>
+</tr><tr>
+  <td><strong>PAXG</strong></td>
+  <td class="sell">SELL</td>
+  <td class="mono">4,246.01</td>
+  <td class="mono neg">4,266.00</td>
+  <td class="mono">— </td>
+  <td class="mono">—</td>
+  <td><span class="ql-medium">MEDIUM</span> <span class="dim">(6/12)</span></td>
+  <td class="mono neg">0.0</td>
+  <td class="mono pos">64.2</td>
+  <td class="mono dim">10.7h</td>
+</tr><tr>
+  <td><strong>BTC</strong></td>
+  <td class="sell">SELL</td>
+  <td class="mono">63,942.50</td>
+  <td class="mono neg">64,159.71</td>
+  <td class="mono">— </td>
+  <td class="mono">—</td>
+  <td><span class="ql-medium">MEDIUM</span> <span class="dim">(7/12)</span></td>
+  <td class="mono neg">0.0</td>
+  <td class="mono pos">1191.8</td>
+  <td class="mono dim">11.5h</td>
+</tr><tr>
+  <td><strong>PAXG</strong></td>
+  <td class="sell">SELL</td>
+  <td class="mono">4,247.28</td>
+  <td class="mono neg">4,320.67</td>
+  <td class="mono">— </td>
+  <td class="mono">—</td>
+  <td><span class="ql-medium">MEDIUM</span> <span class="dim">(6/12)</span></td>
+  <td class="mono neg">0.0</td>
+  <td class="mono pos">65.4</td>
+  <td class="mono dim">13.6h</td>
+</tr><tr>
+  <td><strong>PAXG</strong></td>
+  <td class="sell">SELL</td>
+  <td class="mono">4,247.28</td>
+  <td class="mono neg">4,320.67</td>
+  <td class="mono">— </td>
+  <td class="mono">—</td>
+  <td><span class="ql-medium">MEDIUM</span> <span class="dim">(6/12)</span></td>
+  <td class="mono neg">0.0</td>
+  <td class="mono pos">65.4</td>
+  <td class="mono dim">13.7h</td>
+</tr><tr>
+  <td><strong>PAXG</strong></td>
+  <td class="sell">SELL</td>
+  <td class="mono">4,247.28</td>
+  <td class="mono neg">4,320.67</td>
+  <td class="mono">— </td>
+  <td class="mono">—</td>
+  <td><span class="ql-medium">MEDIUM</span> <span class="dim">(6/12)</span></td>
+  <td class="mono neg">0.0</td>
+  <td class="mono pos">65.4</td>
+  <td class="mono dim">13.8h</td>
+</tr><tr>
+  <td><strong>PAXG</strong></td>
+  <td class="sell">SELL</td>
+  <td class="mono">4,247.28</td>
+  <td class="mono neg">4,320.67</td>
+  <td class="mono">— </td>
+  <td class="mono">—</td>
+  <td><span class="ql-medium">MEDIUM</span> <span class="dim">(6/12)</span></td>
+  <td class="mono neg">0.0</td>
+  <td class="mono pos">65.4</td>
+  <td class="mono dim">13.8h</td>
+</tr><tr>
+  <td><strong>PAXG</strong></td>
+  <td class="sell">SELL</td>
+  <td class="mono">4,247.28</td>
+  <td class="mono neg">4,320.67</td>
+  <td class="mono">— </td>
+  <td class="mono">—</td>
+  <td><span class="ql-medium">MEDIUM</span> <span class="dim">(6/12)</span></td>
+  <td class="mono neg">0.0</td>
+  <td class="mono pos">65.4</td>
+  <td class="mono dim">13.9h</td>
+</tr><tr>
+  <td><strong>PAXG</strong></td>
+  <td class="sell">SELL</td>
+  <td class="mono">4,247.28</td>
+  <td class="mono neg">4,320.67</td>
+  <td class="mono">— </td>
+  <td class="mono">—</td>
+  <td><span class="ql-medium">MEDIUM</span> <span class="dim">(6/12)</span></td>
+  <td class="mono neg">0.0</td>
+  <td class="mono pos">65.4</td>
+  <td class="mono dim">14.2h</td>
+</tr></tbody>
+      </table></div>
+    </div>
+
     <div class="grid-2">
       <div class="card">
   <div class="ch">Per Quality Score</div>
@@ -181,7 +362,7 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
 </tr></tbody></table></div>
     </div>
     <div class="card">
-      <div class="ch">Segnali recenti — V4.1</div>
+      <div class="ch">Segnali chiusi — V4.1</div>
       <div style="overflow-x:auto"><table>
         <thead><tr><th>Timestamp</th><th>Asset</th><th>Dir</th><th>Trigger</th><th>Quality</th><th>Sessione</th><th>Outcome</th></tr></thead>
         <tbody><tr>
