@@ -51,6 +51,25 @@ from strategies.institutional_scanner_v4 import (
 
 logger = logging.getLogger("institutional_scanner_v41")
 
+
+def get_session_v41(dt: datetime) -> str:
+    """
+    Sessioni di mercato in UTC con finestre corrette.
+    LONDON   08:00 - 13:29 UTC
+    OVERLAP  13:30 - 16:30 UTC  (LSE + NYSE aperte insieme)
+    NEW_YORK 16:31 - 22:00 UTC
+    ASIA     tutto il resto
+    """
+    t = dt.hour * 60 + dt.minute
+    if 8 * 60 <= t < 13 * 60 + 30:
+        return "LONDON"
+    if 13 * 60 + 30 <= t <= 16 * 60 + 30:
+        return "OVERLAP"
+    if 16 * 60 + 31 <= t <= 22 * 60:
+        return "NEW_YORK"
+    return "ASIA"
+
+
 V41_ASSETS = ["PAXG_USDT", "BTC_USDT"]
 
 # ============================================================
@@ -473,7 +492,7 @@ def generate_v41_signal(market_data: dict) -> dict:
     ema_h4 = evaluate_ema_trend(df_h4)
     ema_h1 = evaluate_ema_trend(df_h1)
     momentum = evaluate_m15_momentum(df_m15)
-    session = get_session(now)
+    session = get_session_v41(now)
 
     zones = build_h4_zones(df_h4, atr_h4) if atr_h4 > 0 else []
     in_h4_zone = any(
@@ -486,7 +505,7 @@ def generate_v41_signal(market_data: dict) -> dict:
     ema_h1_aligned = ema_h1 == structural_direction
     dow_aligned = dow_theory_h4 == structural_direction
     momentum_aligned = momentum == structural_direction
-    session_bonus = session in ("LONDON", "NEW_YORK")
+    session_bonus = session in ("LONDON", "OVERLAP", "NEW_YORK")
 
     score = 0
     if ema_h4_aligned:
