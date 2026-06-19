@@ -96,12 +96,18 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 v41_scanner_runner.py
-      - name: Commit V3/V3D/V4/V41 Scanner database
+      - name: Institutional Scanner V4.1 Phase 1 (PAXG_USDT + BTC_USDT)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 v41p1_scanner_runner.py
+      - name: Commit V3/V3D/V4/V41/V41P1 Scanner database
         run: |
           git config user.name "signal-engine-bot"
           git config user.email "actions@github.com"
           git add data/signals.db
-          git diff --staged --quiet || git commit -m "V3/V3D/V4/V4.1 Scanner $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          git diff --staged --quiet || git commit -m "V3/V3D/V4/V4.1/V4.1P1 Scanner $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           git push
       - name: Generate and commit dashboard (only if DB changed)
         run: |
