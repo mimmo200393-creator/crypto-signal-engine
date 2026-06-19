@@ -8,7 +8,7 @@ Eseguito automaticamente dal workflow GitHub Actions ad ogni scan.
 import sqlite3
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 DB_PATH = os.environ.get("DB_PATH", "data/signals.db")
 OUT_PATH = "docs/unified_dashboard.html"
@@ -97,6 +97,78 @@ def load_v41(conn):
     return result
 
 
+def load_v41_open(conn):
+    """Carica segnali OPEN di V4.1 con MAE/MFE aggiornati."""
+    rows = q(conn, """SELECT asset, direction, session, entry, stop_loss,
+                             tp1, tp2, quality_label, quality_score,
+                             trigger_types, mae, mfe, tp1_hit, timestamp_setup,
+                             liquidity_source, liquidity_target, expected_move_points
+                      FROM v41_signals WHERE final_outcome = 'OPEN'
+                      ORDER BY timestamp_setup DESC""")
+    result = []
+    now = datetime.now(timezone.utc)
+    for r in rows:
+        try:
+            types = json.loads(r[9]) if r[9] else []
+        except Exception:
+            types = []
+        trigger = "+".join(types) if types else "—"
+        ts = r[13]
+        try:
+            setup_dt = datetime.fromisoformat(ts)
+            if setup_dt.tzinfo is None:
+                setup_dt = setup_dt.replace(tzinfo=timezone.utc)
+            elapsed_h = round((now - setup_dt).total_seconds() / 3600, 1)
+        except Exception:
+            elapsed_h = 0
+        result.append({
+            "asset": r[0], "direction": r[1], "session": r[2],
+            "entry": r[3], "sl": r[4], "tp1": r[5], "tp2": r[6],
+            "quality": r[7], "quality_score": r[8],
+            "trigger": trigger,
+            "mae": r[10], "mfe": r[11], "tp1_hit": bool(r[12]),
+            "ts": ts, "elapsed_h": elapsed_h,
+            "source": r[14] or "N/A", "target": r[15] or "N/A",
+            "em": r[16],
+        })
+    return result
+
+
+def fmt_price(v):
+    if v is None: return "—"
+    if v > 1000: return f"{v:,.2f}"
+    return f"{v:.4f}"
+
+
+def open_signal_rows(rows):
+    if not rows:
+        return '<tr><td colspan="10" style="text-align:center;color:var(--dim);padding:20px">Nessun segnale in monitoraggio</td></tr>'
+    h = ""
+    for r in rows:
+        dc = "buy" if r["direction"] == "BUY" else "sell"
+        ql = r["quality"] or "—"
+        ql_cls = f"ql-{ql.lower()}" if ql in ("HIGH", "MEDIUM", "LOW") else "dim"
+        a = r["asset"].replace("_USDT", "")
+        mae_str = f"{r['mae']:.1f}" if r["mae"] is not None else "—"
+        mfe_str = f"{r['mfe']:.1f}" if r["mfe"] is not None else "—"
+        tp1b = '<span class="badge tp1">TP1</span>' if r["tp1_hit"] else ""
+        em_str = f"{r['em']:.0f}pt" if r["em"] is not None else "—"
+        elapsed = f"{r['elapsed_h']}h"
+        h += f"""<tr>
+  <td><strong>{a}</strong></td>
+  <td class="{dc}">{r["direction"]}</td>
+  <td class="mono">{fmt_price(r["entry"])}</td>
+  <td class="mono neg">{fmt_price(r["sl"])}</td>
+  <td class="mono">{fmt_price(r["tp1"])} {tp1b}</td>
+  <td class="mono">{fmt_price(r["tp2"])}</td>
+  <td><span class="{ql_cls}">{ql}</span> <span class="dim">({r["quality_score"]}/12)</span></td>
+  <td class="mono neg">{mae_str}</td>
+  <td class="mono pos">{mfe_str}</td>
+  <td class="mono dim">{elapsed}</td>
+</tr>"""
+    return h
+
+
 def fw_kpi(s, label, color_var):
     wr_cls  = "neg" if s["wr"] < 40 else ("pos" if s["wr"] >= 55 else "")
     exp_cls = "neg" if s["exp_r"] < 0 else "pos"
@@ -139,8 +211,8 @@ def breakdown_table(rows, key_fn, keys, title):
 
 
 def outcome_badge(o):
-    if o == "TP":      return '<span class="badge win">TP2</span>'
-    if o == "SL":      return '<span class="badge loss">SL</span>'
+    if o == "TP":  return '<span class="badge win">TP2</span>'
+    if o == "SL":  return '<span class="badge loss">SL</span>'
     return '<span class="badge exp">EXP</span>'
 
 
@@ -171,6 +243,7 @@ def generate():
     v3  = load_v3(conn)
     v4  = load_v4(conn)
     v41 = load_v41(conn)
+    v41_open = load_v41_open(conn)
 
     sv3  = stats(v3)
     sv4  = stats(v4)
@@ -190,6 +263,8 @@ def generate():
         if "BOS"   in t: return "BOS"
         if "CHOCH" in t: return "CHOCH"
         return "OTHER"
+
+    open_rows_html = open_signal_rows(v41_open)
 
     html = f"""<!DOCTYPE html>
 <html lang="it">
@@ -221,6 +296,9 @@ header .meta{{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--d
 .fw-grid .lbl{{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);display:block;margin-top:2px}}
 .card{{background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px}}
 .ch{{padding:10px 16px;border-bottom:1px solid var(--border);font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}}
+.ch.live{{color:var(--accent)}}
+.pulse{{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent);margin-right:6px;animation:pulse 2s infinite}}
+@keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.3}}}}
 .tabs{{display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--border)}}
 .tab{{padding:8px 20px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;border-bottom:2px solid transparent;color:var(--dim);transition:.15s;margin-bottom:-1px}}
 .tab.active.t-v41{{color:var(--v41);border-color:var(--v41)}}
@@ -272,6 +350,19 @@ tr:last-child td{{border-bottom:none}} tr:hover td{{background:rgba(255,255,255,
   </div>
 
   <div id="tab-v41" class="tab-content active">
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="ch live"><span class="pulse"></span>Segnali in monitoraggio — V4.1 ({open_v41} aperti)</div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr>
+          <th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th>
+          <th>TP1</th><th>TP2</th><th>Quality</th>
+          <th>MAE</th><th>MFE</th><th>Aperto</th>
+        </tr></thead>
+        <tbody>{open_rows_html}</tbody>
+      </table></div>
+    </div>
+
     <div class="grid-2">
       {breakdown_table(v41, lambda r: r["quality"], ["HIGH","MEDIUM","LOW"], "Per Quality Score")}
       {breakdown_table(v41, lambda r: r["session"], ["LONDON","OVERLAP","NEW_YORK","ASIA"], "Per Sessione")}
@@ -281,7 +372,7 @@ tr:last-child td{{border-bottom:none}} tr:hover td{{background:rgba(255,255,255,
       {breakdown_table(v41, trigger_key, ["BOS","CHOCH","BOS+CHOCH"], "Per Trigger")}
     </div>
     <div class="card">
-      <div class="ch">Segnali recenti — V4.1</div>
+      <div class="ch">Segnali chiusi — V4.1</div>
       <div style="overflow-x:auto"><table>
         <thead><tr><th>Timestamp</th><th>Asset</th><th>Dir</th><th>Trigger</th><th>Quality</th><th>Sessione</th><th>Outcome</th></tr></thead>
         <tbody>{signal_rows(v41)}</tbody>
@@ -332,7 +423,7 @@ function showTab(id, el) {{
     os.makedirs("docs", exist_ok=True)
     with open(OUT_PATH, "w") as f:
         f.write(html)
-    print(f"Dashboard unificata generata: {OUT_PATH} ({len(v3)+len(v4)+len(v41)} segnali totali)")
+    print(f"Dashboard unificata generata: {OUT_PATH} ({len(v3)+len(v4)+len(v41)} segnali chiusi, {len(v41_open)} aperti)")
 
 
 if __name__ == "__main__":
