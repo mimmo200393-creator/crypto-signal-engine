@@ -102,23 +102,19 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 v41p1_scanner_runner.py
-      - name: Commit V3/V3D/V4/V41/V41P1 Scanner database
+      - name: Commit database e dashboard
         run: |
           git config user.name "signal-engine-bot"
           git config user.email "actions@github.com"
           git add data/signals.db
-          git diff --staged --quiet || git commit -m "V3/V3D/V4/V4.1/V4.1P1 Scanner $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          git push
-      - name: Generate and commit dashboard (only if DB changed)
-        run: |
-          git config user.name "signal-engine-bot"
-          git config user.email "actions@github.com"
-          if git diff HEAD~1 --name-only 2>/dev/null | grep -q "data/signals.db"; then
+          DB_CHANGED=false
+          git diff --staged --quiet || DB_CHANGED=true
+          if [ "$DB_CHANGED" = "true" ]; then
             python3 generate_dashboard.py
             python3 generate_unified_dashboard.py
-            git add docs/index.html docs/unified_dashboard.html
-            git diff --staged --quiet || git commit -m "Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            git add data/signals.db docs/index.html docs/unified_dashboard.html
+            git commit -m "Scanner + Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
             git push
           else
-            echo "DB non cambiato, dashboard non rigenerata"
+            echo "DB non cambiato, nessun commit"
           fi
