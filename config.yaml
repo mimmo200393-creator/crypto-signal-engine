@@ -156,3 +156,14 @@ V41_SCANNER:
   assets:
     - PAXG_USDT
     - BTC_USDT
+
+# ============================================================
+# Institutional Scanner V4.1 Phase 1 — Money Flow & Intraday Edge
+# Money Flow Map con Priority Score, Watchlist Alert arricchiti,
+# tracking separato su v41p1_signals per confronto statistico.
+# ============================================================
+V41P1_SCANNER:
+  enabled: true
+  assets:
+    - PAXG_USDT
+    - BTC_USDT
