@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Crypto Signal Engine — Analytics Lab</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
+:root{
+  --bg:#0d0f14;--surface:#141720;--border:#1e2330;
+  --accent:#4fffb0;--accent2:#ff6b6b;--text:#e2e8f0;--dim:#5a6478;
+  --buy:#4fffb0;--sell:#ff6b6b;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans',sans-serif;font-size:14px;line-height:1.6}
+header{border-bottom:1px solid var(--border);padding:18px 32px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+header h1{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+header .meta{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dim)}
+header a{color:var(--accent);text-decoration:none;font-family:'IBM Plex Mono',monospace;font-size:11px}
+.container{max-width:1320px;margin:0 auto;padding:24px 32px}
+.fw-summary{background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px}
+.fw-summary-label{padding:12px 16px;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;border-bottom:1px solid var(--border)}
+.fw-summary-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:1px;background:var(--border)}
+.fw-summary-grid>div{background:var(--surface);padding:14px 8px;text-align:center}
+.fw-summary-grid .big{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;color:var(--text)}
+.fw-summary-grid .big.pos{color:var(--buy)} .fw-summary-grid .big.neg{color:var(--sell)}
+.fw-summary-grid .lbl{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);display:block;margin-top:3px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px}
+.ch{padding:10px 16px;border-bottom:1px solid var(--border);font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.card-note{padding:10px 16px;font-size:11px;color:var(--dim);border-top:1px solid var(--border);font-style:italic}
+table{width:100%;border-collapse:collapse}
+th{font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);padding:9px 14px;text-align:left;border-bottom:1px solid var(--border)}
+td{padding:8px 14px;border-bottom:1px solid var(--border);font-size:13px}
+tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02)}
+tr.row-highlight td{background:rgba(79,255,176,.06)}
+.mono{font-family:'IBM Plex Mono',monospace;font-size:12px}
+.pos{color:var(--buy);font-weight:600} .neg{color:var(--sell)}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.section-divider{margin:32px 0 20px;padding-top:8px;border-top:2px dashed var(--border)}
+@media(max-width:900px){.grid-2{grid-template-columns:1fr}.fw-summary-grid{grid-template-columns:repeat(4,1fr)}.container{padding:12px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Crypto Signal Engine — Analytics Lab</h1>
+  <div class="meta">
+    2026-06-20 17:31 UTC &nbsp;|&nbsp;
+    <a href="unified_dashboard.html">&larr; Torna alla Dashboard</a>
+  </div>
+</header>
+<div class="container">
+
+  
+  <div class="fw-summary" style="border-top:2px solid #4fffb0">
+    <div class="fw-summary-label" style="color:#4fffb0">V4.1 — Intraday Wave</div>
+    <div class="fw-summary-grid">
+      <div><span class="big">47</span><br><span class="lbl">Segnali chiusi</span></div>
+      <div><span class="big neg">14.9%</span><br><span class="lbl">Win Rate</span></div>
+      <div><span class="big">23.4%</span><br><span class="lbl">TP1 Hit</span></div>
+      <div><span class="big">14.9%</span><br><span class="lbl">TP2 Hit</span></div>
+      <div><span class="big neg">-0.32R</span><br><span class="lbl">Expectancy</span></div>
+      <div><span class="big neg">327.4</span><br><span class="lbl">MAE medio</span></div>
+      <div><span class="big pos">197.3</span><br><span class="lbl">MFE medio</span></div>
+      <div><span class="big">0</span><br><span class="lbl">Expected Move medio</span></div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+  <div class="ch">Performance per Trigger</div>
+  <table><thead><tr><th>Trigger</th><th>N</th><th>Win%</th><th>TP1%</th><th>TP2%</th><th>Expectancy</th></tr></thead>
+  <tbody><tr class="">
+  <td><strong>BOS</strong></td>
+  <td class="mono">27</td>
+  <td class="mono neg">14.8%</td>
+  <td class="mono">22.2%</td>
+  <td class="mono">14.8%</td>
+  <td class="mono neg">-0.15R</td>
+</tr><tr class="">
+  <td><strong>CHOCH</strong></td>
+  <td class="mono">20</td>
+  <td class="mono neg">15.0%</td>
+  <td class="mono">25.0%</td>
+  <td class="mono">15.0%</td>
+  <td class="mono neg">-0.55R</td>
+</tr></tbody></table></div>
+    <div class="card">
+  <div class="ch">Performance per Asset</div>
+  <table><thead><tr><th>Asset</th><th>N</th><th>Win%</th><th>TP1%</th><th>TP2%</th><th>Expectancy</th></tr></thead>
+  <tbody><tr class="">
+  <td><strong>BTC</strong></td>
+  <td class="mono">32</td>
+  <td class="mono neg">15.6%</td>
+  <td class="mono">28.1%</td>
+  <td class="mono">15.6%</td>
+  <td class="mono neg">-0.50R</td>
+</tr><tr class="">
+  <td><strong>PAXG</strong></td>
+  <td class="mono">15</td>
+  <td class="mono neg">13.3%</td>
+  <td class="mono">13.3%</td>
+  <td class="mono">13.3%</td>
+  <td class="mono pos">+0.07R</td>
+</tr></tbody></table></div>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+  <div class="ch">Performance per Sessione</div>
+  <table><thead><tr><th>Sessione</th><th>N</th><th>Win%</th><th>TP1%</th><th>TP2%</th><th>Expectancy</th></tr></thead>
+  <tbody><tr class="">
+  <td><strong>ASIA</strong></td>
+  <td class="mono">29</td>
+  <td class="mono neg">10.3%</td>
+  <td class="mono">20.7%</td>
+  <td class="mono">10.3%</td>
+  <td class="mono neg">-0.41R</td>
+</tr><tr class="row-highlight">
+  <td><strong>LONDON</strong></td>
+  <td class="mono">7</td>
+  <td class="mono pos">42.9%</td>
+  <td class="mono">57.1%</td>
+  <td class="mono">42.9%</td>
+  <td class="mono pos">+0.29R</td>
+</tr><tr class="">
+  <td><strong>OVERLAP</strong></td>
+  <td class="mono">5</td>
+  <td class="mono neg">0.0%</td>
+  <td class="mono">0.0%</td>
+  <td class="mono">0.0%</td>
+  <td class="mono neg">-0.80R</td>
+</tr><tr class="">
+  <td><strong>NEW_YORK</strong></td>
+  <td class="mono">6</td>
+  <td class="mono neg">16.7%</td>
+  <td class="mono">16.7%</td>
+  <td class="mono">16.7%</td>
+  <td class="mono neg">-0.17R</td>
+</tr></tbody></table></div>
+    <div class="card">
+  <div class="ch">Expected Move Analysis</div>
+  <table><thead><tr><th>Expected Move</th><th>N</th><th>Win%</th><th>TP1%</th><th>TP2%</th><th>Expectancy</th></tr></thead>
+  <tbody><tr><td colspan="6" style="text-align:center;color:var(--dim);padding:16px">Nessun dato</td></tr></tbody></table>
+  <div class="card-note">Bucket con almeno 3 segnali e Win% piu' alto evidenziato in verde.</div>
+  </div>
+  </div>
+  <div class="card">
+  <div class="ch">Liquidity Target Analysis</div>
+  <table><thead><tr><th>Target</th><th>N</th><th>Win%</th><th>TP1%</th><th>TP2%</th><th>Expectancy</th></tr></thead>
+  <tbody><tr>
+  <td><strong>Weekly Low</strong></td>
+  <td class="mono">9</td>
+  <td class="mono neg">0.0%</td>
+  <td class="mono">0.0%</td>
+  <td class="mono">0.0%</td>
+  <td class="mono neg">-0.67R</td>
+</tr><tr>
+  <td><strong>Daily High</strong></td>
+  <td class="mono">13</td>
+  <td class="mono ">15.4%</td>
+  <td class="mono">30.8%</td>
+  <td class="mono">15.4%</td>
+  <td class="mono neg">-0.54R</td>
+</tr><tr>
+  <td><strong>Daily Low</strong></td>
+  <td class="mono">2</td>
+  <td class="mono pos">50.0%</td>
+  <td class="mono">100.0%</td>
+  <td class="mono">50.0%</td>
+  <td class="mono pos">+0.50R</td>
+</tr><tr>
+  <td><strong>Daily High (prev)</strong></td>
+  <td class="mono">3</td>
+  <td class="mono ">33.3%</td>
+  <td class="mono">33.3%</td>
+  <td class="mono">33.3%</td>
+  <td class="mono neg">+0.00R</td>
+</tr><tr>
+  <td><strong>Equal Lows</strong></td>
+  <td class="mono">6</td>
+  <td class="mono ">16.7%</td>
+  <td class="mono">33.3%</td>
+  <td class="mono">16.7%</td>
+  <td class="mono neg">-0.50R</td>
+</tr><tr>
+  <td><strong>H4 Swing High</strong></td>
+  <td class="mono">4</td>
+  <td class="mono neg">0.0%</td>
+  <td class="mono">0.0%</td>
+  <td class="mono">0.0%</td>
+  <td class="mono neg">-1.00R</td>
+</tr><tr>
+  <td><strong>H4 Swing Low</strong></td>
+  <td class="mono">7</td>
+  <td class="mono neg">0.0%</td>
+  <td class="mono">0.0%</td>
+  <td class="mono">0.0%</td>
+  <td class="mono neg">+0.00R</td>
+</tr></tbody></table>
+  <div class="card-note">Target sessione (Asia High, Asia Low, London High, London Low, NY High, NY Low) non ancora presenti nei segnali storici: saranno popolati dai prossimi segnali generati dopo l'estensione della Liquidity Map.</div>
+  </div>
+
+
+  <div class="section-divider"></div>
+
+  
+  <div class="fw-summary" style="border-top:2px solid #ffd166">
+    <div class="fw-summary-label" style="color:#ffd166">V4.1 Phase 1 — Money Flow</div>
+    <div class="fw-summary-grid">
+      <div><span class="big">23</span><br><span class="lbl">Segnali chiusi</span></div>
+      <div><span class="big pos">34.8%</span><br><span class="lbl">Win Rate</span></div>
+      <div><span class="big">52.2%</span><br><span class="lbl">TP1 Hit</span></div>
+      <div><span class="big">34.8%</span><br><span class="lbl">TP2 Hit</span></div>
+      <div><span class="big pos">+0.13R</span><br><span class="lbl">Expectancy</span></div>
+      <div><span class="big neg">259.9</span><br><span class="lbl">MAE medio</span></div>
+      <div><span class="big pos">271.2</span><br><span class="lbl">MFE medio</span></div>
+      <div><span class="big">681.6</span><br><span class="lbl">Expected Move medio</span></div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+  <div class="ch">Performance per Trigger</div>
+  <table><thead><tr><th>Trigger</th><th>N</th><th>Win%</th><th>TP1%</th><th>TP2%</th><th>Expectancy</th></tr></thead>
+  <tbody><tr class="">
+  <td><strong>BOS</strong></td>
+  <td class="mono">12</td>
+  <td class="mono ">33.3%</td>
+  <td class="mono">41.7%</td>
+  <td class="mono">33.3%</td>
+  <td class="mono pos">+0.08R</td>
+</tr><tr class="">
+  <td><strong>CHOCH</strong></td>
+  <td class="mono">11</td>
+  <td class="mono ">36.4%</td>
+  <td class="mono">63.6%</td>
+  <td class="mono">36.4%</td>
+  <td class="mono pos">+0.18R</td>
+</tr></tbody></table></div>
+    <div class="card">
+  <div class="ch">Performance per Asset</div>
+  <table><thead><tr><th>Asset</th><th>N</th><th>Win%</th><th>TP1%</th><th>TP2%</th><th>Expectancy</th></tr></thead>
+  <tbody><tr class="">
+  <td><strong>BTC</strong></td>
+  <td class="mono">20</td>
+  <td class="mono ">35.0%</td>
+  <td class="mono">55.0%</td>
+  <td class="mono">35.0%</td>
+  <td class="mono pos">+0.10R</td>
+</tr><tr class="">
+  <td><strong>PAXG</strong></td>
+  <td class="mono">3</td>
+  <td class="mono ">33.3%</td>
+  <td class="mono">33.3%</td>
+  <td class="mono">33.3%</td>
+  <td class="mono pos">+0.33R</td>
+</tr></tbody></table></div>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+  <div class="ch">Performance per Sessione</div>
+  <table><thead><tr><th>Sessione</th><th>N</th><th>Win%</th><th>TP1%</th><th>TP2%</th><th>Expectancy</th></tr></thead>
+  <tbody><tr class="">
+  <td><strong>ASIA</strong></td>
+  <td class="mono">7</td>
+  <td class="mono ">28.6%</td>
+  <td class="mono">57.1%</td>
+  <td class="mono">28.6%</td>
+  <td class="mono neg">-0.14R</td>
+</tr><tr class="row-highlight">
+  <td><strong>LONDON</strong></td>
+  <td class="mono">9</td>
+  <td class="mono pos">55.6%</td>
+  <td class="mono">66.7%</td>
+  <td class="mono">55.6%</td>
+  <td class="mono pos">+0.67R</td>
+</tr><tr class="">
+  <td><strong>OVERLAP</strong></td>
+  <td class="mono">2</td>
+  <td class="mono neg">0.0%</td>
+  <td class="mono">50.0%</td>
+  <td class="mono">0.0%</td>
+  <td class="mono neg">+0.00R</td>
+</tr><tr class="">
+  <td><strong>NEW_YORK</strong></td>
+  <td class="mono">5</td>
+  <td class="mono ">20.0%</td>
+  <td class="mono">20.0%</td>
+  <td class="mono">20.0%</td>
+  <td class="mono neg">-0.40R</td>
+</tr></tbody></table></div>
+    <div class="card">
+  <div class="ch">Expected Move Analysis</div>
+  <table><thead><tr><th>Expected Move</th><th>N</th><th>Win%</th><th>TP1%</th><th>TP2%</th><th>Expectancy</th></tr></thead>
+  <tbody><tr class="">
+  <td><strong>0-100 pt</strong></td>
+  <td class="mono">6</td>
+  <td class="mono neg">0.0%</td>
+  <td class="mono">33.3%</td>
+  <td class="mono">0.0%</td>
+  <td class="mono neg">-1.00R</td>
+</tr><tr class="">
+  <td><strong>100-200 pt</strong></td>
+  <td class="mono">4</td>
+  <td class="mono ">25.0%</td>
+  <td class="mono">25.0%</td>
+  <td class="mono">25.0%</td>
+  <td class="mono neg">-0.25R</td>
+</tr><tr class="row-highlight">
+  <td><strong>300+ pt</strong></td>
+  <td class="mono">11</td>
+  <td class="mono pos">54.5%</td>
+  <td class="mono">72.7%</td>
+  <td class="mono">54.5%</td>
+  <td class="mono pos">+0.73R</td>
+</tr></tbody></table>
+  <div class="card-note">Bucket con almeno 3 segnali e Win% piu' alto evidenziato in verde.</div>
+  </div>
+  </div>
+  <div class="card">
+  <div class="ch">Liquidity Target Analysis</div>
+  <table><thead><tr><th>Target</th><th>N</th><th>Win%</th><th>TP1%</th><th>TP2%</th><th>Expectancy</th></tr></thead>
+  <tbody><tr>
+  <td><strong>Weekly High</strong></td>
+  <td class="mono">2</td>
+  <td class="mono neg">0.0%</td>
+  <td class="mono">0.0%</td>
+  <td class="mono">0.0%</td>
+  <td class="mono neg">-1.00R</td>
+</tr><tr>
+  <td><strong>Weekly Low</strong></td>
+  <td class="mono">8</td>
+  <td class="mono ">25.0%</td>
+  <td class="mono">37.5%</td>
+  <td class="mono">25.0%</td>
+  <td class="mono neg">-0.25R</td>
+</tr><tr>
+  <td><strong>Daily High</strong></td>
+  <td class="mono">6</td>
+  <td class="mono pos">50.0%</td>
+  <td class="mono">83.3%</td>
+  <td class="mono">50.0%</td>
+  <td class="mono pos">+0.50R</td>
+</tr><tr>
+  <td><strong>Daily High (prev)</strong></td>
+  <td class="mono">3</td>
+  <td class="mono ">33.3%</td>
+  <td class="mono">66.7%</td>
+  <td class="mono">33.3%</td>
+  <td class="mono pos">+0.33R</td>
+</tr><tr>
+  <td><strong>Equal Lows</strong></td>
+  <td class="mono">1</td>
+  <td class="mono pos">100.0%</td>
+  <td class="mono">100.0%</td>
+  <td class="mono">100.0%</td>
+  <td class="mono pos">+2.00R</td>
+</tr><tr>
+  <td><strong>H4 Swing Low</strong></td>
+  <td class="mono">1</td>
+  <td class="mono neg">0.0%</td>
+  <td class="mono">0.0%</td>
+  <td class="mono">0.0%</td>
+  <td class="mono neg">-1.00R</td>
+</tr></tbody></table>
+  <div class="card-note">Target sessione (Asia High, Asia Low, London High, London Low, NY High, NY Low) non ancora presenti nei segnali storici: saranno popolati dai prossimi segnali generati dopo l'estensione della Liquidity Map.</div>
+  </div>
+
+
+</div>
+</body>
+</html>
