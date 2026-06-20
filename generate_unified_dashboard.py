@@ -322,6 +322,8 @@ tr:last-child td{{border-bottom:none}} tr:hover td{{background:rgba(255,255,255,
 .b{{height:4px;background:var(--accent);border-radius:2px}}
 .grid-2{{display:grid;grid-template-columns:1fr 1fr;gap:16px}}
 .open-pill{{display:inline-block;padding:2px 8px;background:rgba(79,255,176,.08);border:1px solid rgba(79,255,176,.2);border-radius:12px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--accent);margin-left:4px}}
+.lab-link{{color:var(--accent);text-decoration:none;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.05em}}
+.lab-link:hover{{text-decoration:underline}}
 @media(max-width:900px){{.fw-row,.grid-2{{grid-template-columns:1fr}}.container{{padding:12px}}}}
 </style>
 </head>
@@ -333,6 +335,8 @@ tr:last-child td{{border-bottom:none}} tr:hover td{{background:rgba(255,255,255,
     Open: V3<span class="open-pill">{open_v3}</span>
     V4<span class="open-pill">{open_v4}</span>
     V4.1<span class="open-pill">{open_v41}</span>
+    &nbsp;|&nbsp;
+    <a href="analytics_dashboard.html" class="lab-link">Analytics Lab &rarr;</a>
   </div>
 </header>
 <div class="container">
