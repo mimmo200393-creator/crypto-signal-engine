@@ -1,7 +1,5 @@
 name: Crypto Signal Engine V2.1 - Scan
 on:
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       send_test_alert:
@@ -61,7 +59,6 @@ jobs:
           git diff --staged --quiet || git commit -m "Scan V2.1 $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           git push
       - name: Daily Brief (08:00 UTC)
-        if: ${{ github.event_name == 'schedule' }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
