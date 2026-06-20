@@ -109,7 +109,8 @@ jobs:
           if [ "$DB_CHANGED" = "true" ]; then
             python3 generate_dashboard.py
             python3 generate_unified_dashboard.py
-            git add data/signals.db docs/index.html docs/unified_dashboard.html
+            python3 generate_analytics_dashboard.py
+            git add data/signals.db docs/index.html docs/unified_dashboard.html docs/analytics_dashboard.html
             git commit -m "Scanner + Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
             git push
           else
