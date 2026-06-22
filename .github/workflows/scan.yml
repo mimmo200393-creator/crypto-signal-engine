@@ -18,7 +18,7 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15                          # ← era 10
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -99,6 +99,14 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 v41p1_scanner_runner.py
+      # ── NUOVO ────────────────────────────────────────────────
+      - name: Institutional Edge Lab — OTE-SC (BTC_USDT + PAXG_USDT)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 edge_lab_runner.py
+      # ─────────────────────────────────────────────────────────
       - name: Commit database e dashboard
         run: |
           git config user.name "signal-engine-bot"
@@ -110,7 +118,12 @@ jobs:
             python3 generate_dashboard.py
             python3 generate_unified_dashboard.py
             python3 generate_analytics_dashboard.py
-            git add data/signals.db docs/index.html docs/unified_dashboard.html docs/analytics_dashboard.html
+            python3 generate_edge_lab_dashboard.py                        # ← NUOVO
+            git add data/signals.db \
+                    docs/index.html \
+                    docs/unified_dashboard.html \
+                    docs/analytics_dashboard.html \
+                    docs/edge_lab_dashboard.html                           # ← NUOVO
             git commit -m "Scanner + Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
             git push
           else
