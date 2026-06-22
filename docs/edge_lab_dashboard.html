@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Edge Lab — OTE-SC Analytics</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
+:root{
+  --bg:#0d0f14;--surface:#141720;--border:#1e2330;
+  --accent:#4fffb0;--accent2:#ff6b6b;--accent3:#ffd166;
+  --text:#e2e8f0;--dim:#5a6478;
+  --buy:#4fffb0;--sell:#ff6b6b;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans',sans-serif;font-size:14px;line-height:1.6}
+header{border-bottom:1px solid var(--border);padding:18px 32px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+header h1{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+header .meta{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dim)}
+header a{color:var(--accent);text-decoration:none;font-family:'IBM Plex Mono',monospace;font-size:11px}
+.container{max-width:1320px;margin:0 auto;padding:24px 32px}
+.summary-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:20px}
+.summary-grid>div{background:var(--surface);padding:16px 10px;text-align:center}
+.big{font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600}
+.big.pos{color:var(--buy)} .big.neg{color:var(--sell)} .big.warn{color:var(--accent3)}
+.lbl{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);display:block;margin-top:3px}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px}
+.ch{padding:10px 16px;border-bottom:1px solid var(--border);font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+table{width:100%;border-collapse:collapse}
+th{font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);padding:9px 14px;text-align:left;border-bottom:1px solid var(--border)}
+td{padding:8px 14px;border-bottom:1px solid var(--border);font-size:13px}
+tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02)}
+tr.hl td{background:rgba(79,255,176,.06)}
+.mono{font-family:'IBM Plex Mono',monospace;font-size:12px}
+.pos{color:var(--buy);font-weight:600} .neg{color:var(--sell)} .warn{color:var(--accent3)}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:600}
+.b-buy{background:rgba(79,255,176,.15);color:var(--buy)}
+.b-sell{background:rgba(255,107,107,.15);color:var(--sell)}
+.b-tp{background:rgba(79,255,176,.15);color:var(--buy)}
+.b-sl{background:rgba(255,107,107,.15);color:var(--sell)}
+.b-exp{background:rgba(90,100,120,.2);color:var(--dim)}
+.b-high{background:rgba(79,255,176,.15);color:var(--buy)}
+.b-med{background:rgba(255,209,102,.15);color:var(--accent3)}
+.b-low{background:rgba(90,100,120,.2);color:var(--dim)}
+.section-title{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin:28px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.empty{text-align:center;padding:32px;color:var(--dim);font-size:13px}
+@media(max-width:900px){.grid-2,.grid-3{grid-template-columns:1fr}.summary-grid{grid-template-columns:repeat(4,1fr)}.container{padding:12px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>⚡ Institutional Edge Lab — OTE-SC Analytics</h1>
+  <div class="meta">
+    2026-06-22 23:45 UTC &nbsp;|&nbsp;
+    <a href="unified_dashboard.html">&larr; Dashboard</a> &nbsp;|&nbsp;
+    <a href="analytics_dashboard.html">V4.1 Analytics</a>
+  </div>
+</header>
+<div class="container">
+
+
+<div class="card" style="border-color:var(--accent3)">
+  <div class="ch" style="color:var(--accent3)">Dati non ancora disponibili</div>
+  <div style="padding:20px;color:var(--dim)">
+    L'Edge Lab ha appena iniziato. Le sezioni analitiche si popoleranno
+    dopo i primi segnali chiusi (TP / SL / EXPIRED).
+  </div>
+</div>
+
+<div class="section-title">Overview Globale</div>
+<div class="summary-grid">
+  <div><span class="big">0</span><span class="lbl">Segnali chiusi</span></div>
+  <div><span class="big neg">0%</span><span class="lbl">Win Rate</span></div>
+  <div><span class="big neg">0%</span><span class="lbl">SL Rate</span></div>
+  <div><span class="big neg">+0.00R</span><span class="lbl">Expectancy</span></div>
+  <div><span class="big">0.00</span><span class="lbl">Avg R/R</span></div>
+  <div><span class="big neg">0.0</span><span class="lbl">Avg MAE</span></div>
+  <div><span class="big pos">0.0</span><span class="lbl">Avg MFE</span></div>
+  <div><span class="big">0</span><span class="lbl">Avg Bars</span></div>
+</div>
+
+<div class="grid-2">
+  <div>
+    <div class="section-title">BTC_USDT</div>
+    <div class="card"><div style="color:var(--dim);padding:16px">Nessun segnale chiuso per BTC_USDT</div></div>
+  </div>
+  <div>
+    <div class="section-title">PAXG_USDT</div>
+    <div class="card"><div style="color:var(--dim);padding:16px">Nessun segnale chiuso per PAXG_USDT</div></div>
+  </div>
+</div>
+
+<div class="section-title">Performance per Dimensione</div>
+<div class="grid-2">
+  <div class="card">
+  <div class="ch">Per Asset</div>
+  <table><thead><tr>
+    <th>Asset</th><th>N</th><th>Win%</th><th>SL%</th>
+    <th>Expectancy</th><th>Avg R/R</th><th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="8" class="empty">Nessun dato</td></tr></tbody></table>
+</div>
+  <div class="card">
+  <div class="ch">Per Direzione</div>
+  <table><thead><tr>
+    <th>Direzione</th><th>N</th><th>Win%</th><th>SL%</th>
+    <th>Expectancy</th><th>Avg R/R</th><th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="8" class="empty">Nessun dato</td></tr></tbody></table>
+</div>
+</div>
+<div class="grid-2">
+  <div class="card">
+  <div class="ch">Per Quality Label</div>
+  <table><thead><tr>
+    <th>Quality</th><th>N</th><th>Win%</th><th>SL%</th>
+    <th>Expectancy</th><th>Avg R/R</th><th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="8" class="empty">Nessun dato</td></tr></tbody></table>
+</div>
+  <div class="card">
+  <div class="ch">Per Trend Combined</div>
+  <table><thead><tr>
+    <th>Trend</th><th>N</th><th>Win%</th><th>SL%</th>
+    <th>Expectancy</th><th>Avg R/R</th><th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="8" class="empty">Nessun dato</td></tr></tbody></table>
+</div>
+</div>
+
+<div class="section-title">Analisi Sessione</div>
+<div class="grid-2">
+  <div class="card">
+  <div class="ch">Per Sessione Corrente</div>
+  <table><thead><tr>
+    <th>Sessione</th><th>N</th><th>Win%</th><th>SL%</th>
+    <th>Expectancy</th><th>Avg R/R</th><th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="8" class="empty">Nessun dato</td></tr></tbody></table>
+</div>
+  <div class="card">
+  <div class="ch">Per Sessione Riferimento</div>
+  <table><thead><tr>
+    <th>Ref. Session</th><th>N</th><th>Win%</th><th>SL%</th>
+    <th>Expectancy</th><th>Avg R/R</th><th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="8" class="empty">Nessun dato</td></tr></tbody></table>
+</div>
+</div>
+
+<div class="section-title">Liquidity Target Analysis</div>
+<div class="card">
+  <div class="ch">Performance per Target</div>
+  <table><thead><tr>
+    <th>Target</th><th>N</th><th>Win%</th><th>SL%</th>
+    <th>Expectancy</th><th>Avg R/R</th><th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="8" class="empty">Nessun dato</td></tr></tbody></table>
+</div>
+
+<div class="section-title">Market Context Heatmap</div>
+<div class="card">
+  <div class="ch">Market Context Heatmap (top 20 combinazioni)</div>
+  <table><thead><tr>
+    <th>Trend</th><th>Sessione</th><th>Volatilità M15</th><th>N Scan</th><th>Tradeable%</th>
+  </tr></thead><tbody><tr>
+  <td class="mono">NEUTRAL</td>
+  <td class="mono">ASIA</td>
+  <td class="mono">NORMAL</td>
+  <td class="mono">2</td>
+  <td class="mono neg">0%</td>
+</tr></tbody></table>
+</div>
+
+<div class="section-title">Segnali Recenti</div>
+<div class="card"><div class="empty">Nessun segnale ancora.</div></div>
+
+</div>
+</body>
+</html>
