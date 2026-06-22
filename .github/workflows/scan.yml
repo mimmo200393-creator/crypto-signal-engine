@@ -18,7 +18,7 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 15                          # ← era 10
+    timeout-minutes: 15
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -69,24 +69,13 @@ jobs:
           if [ "$HOUR" = "08" ] && [ "$MINUTE" -lt "20" ]; then
             python3 daily_brief_runner.py
           fi
-      - name: Institutional Scanner V3.2 Frozen (PAXG_USDT + BTC_USDT)
+      - name: Fetch candele M15/D1 + V3.2 Frozen (PAXG_USDT + BTC_USDT)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 v3_scanner_runner.py
-      - name: Institutional Scanner V3.2 Dynamic (PAXG_USDT + BTC_USDT)
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: python3 v3d_scanner_runner.py
-      - name: Institutional Scanner V4.0 Daily Edition (PAXG_USDT + BTC_USDT)
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: python3 v4_scanner_runner.py
+      # ── RIMOSSI: v3d_scanner_runner.py e v4_scanner_runner.py ──
       - name: Institutional Scanner V4.1 Intraday Wave (PAXG_USDT + BTC_USDT)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -99,14 +88,12 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 v41p1_scanner_runner.py
-      # ── NUOVO ────────────────────────────────────────────────
       - name: Institutional Edge Lab — OTE-SC (BTC_USDT + PAXG_USDT)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 edge_lab_runner.py
-      # ─────────────────────────────────────────────────────────
       - name: Commit database e dashboard
         run: |
           git config user.name "signal-engine-bot"
@@ -118,12 +105,10 @@ jobs:
             python3 generate_dashboard.py
             python3 generate_unified_dashboard.py
             python3 generate_analytics_dashboard.py
-            python3 generate_edge_lab_dashboard.py                        # ← NUOVO
             git add data/signals.db \
                     docs/index.html \
                     docs/unified_dashboard.html \
-                    docs/analytics_dashboard.html \
-                    docs/edge_lab_dashboard.html                           # ← NUOVO
+                    docs/analytics_dashboard.html
             git commit -m "Scanner + Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
             git push
           else
