@@ -213,6 +213,8 @@ def build_market_context(
         hard_blocks.append(f"MACRO_BLACKOUT_{ev.get('type','?')}")
     if combined in ("NEUTRAL", "TRANSITION"):
         hard_blocks.append(f"TREND_{combined}")
+    if current_session == "OVERLAP":                          # ← AGGIUNGI
+        hard_blocks.append("SESSION_OVERLAP_EXCLUDED")        # ← AGGIUNGI
 
     ctx["is_tradeable"]  = len(hard_blocks) == 0
     ctx["block_reasons"] = hard_blocks
