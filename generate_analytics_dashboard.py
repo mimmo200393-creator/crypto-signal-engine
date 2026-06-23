@@ -4,8 +4,7 @@ Crypto Signal Engine — Analytics Lab (unificato)
 
 Struttura:
     SEZIONE 1 — Institutional Edge Lab / OTE-SC (framework attivo)
-    SEZIONE 2 — V4.1 Intraday Wave        (benchmark storico)
-    SEZIONE 3 — V4.1 Phase 1 Money Flow   (benchmark storico)
+    SEZIONE 2 — V4.1 Phase 1 Money Flow   (benchmark storico)
 
 Genera docs/analytics_dashboard.html
 Eseguito dal workflow GitHub Actions ad ogni scan oppure
@@ -20,10 +19,6 @@ from datetime import datetime, timezone
 DB_PATH  = os.environ.get("DB_PATH", "data/signals.db")
 OUT_PATH = "docs/analytics_dashboard.html"
 
-
-# ============================================================
-# Helpers query
-# ============================================================
 
 def q(conn, sql, params=()):
     return conn.execute(sql, params).fetchall()
@@ -91,16 +86,16 @@ def load_el_recent(conn, limit=20):
 
 
 # ============================================================
-# V4.1 data (invariato dal legacy)
+# V4.1 Phase 1 data
 # ============================================================
 
-def load_v41_signals(conn, table):
+def load_v41p1_signals(conn):
     try:
-        rows = q(conn, f"""
+        rows = q(conn, """
             SELECT asset, session, final_outcome, mae, mfe, tp1_hit, tp2_hit,
                    trigger_types, quality_label, expected_move_points,
                    liquidity_target, timestamp_setup
-            FROM {table}
+            FROM v41p1_signals
             WHERE final_outcome != 'OPEN'
             ORDER BY timestamp_setup DESC
         """)
@@ -140,9 +135,9 @@ def stats_el(rows):
         "win":      round(wins/n*100, 1),
         "sl":       round(sls/n*100,  1),
         "exp_r":    round((wins*2-sls)/n, 2),
-        "avg_mae":  round(sum(r["mae"]      for r in rows)/n, 1),
-        "avg_mfe":  round(sum(r["mfe"]      for r in rows)/n, 1),
-        "avg_rr":   round(sum(r["rr"]       for r in rows)/n, 2),
+        "avg_mae":  round(sum(r["mae"]       for r in rows)/n, 1),
+        "avg_mfe":  round(sum(r["mfe"]       for r in rows)/n, 1),
+        "avg_rr":   round(sum(r["rr"]        for r in rows)/n, 2),
         "avg_bars": round(sum(r["bars_open"] for r in rows)/n, 1),
     }
 
@@ -174,7 +169,7 @@ def breakdown(rows, key_fn, keys, stat_fn):
 
 
 # ============================================================
-# CSS condiviso
+# CSS
 # ============================================================
 
 CSS = """
@@ -204,7 +199,6 @@ header a{color:var(--accent);text-decoration:none;font-family:'IBM Plex Mono',mo
 .lbl{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);display:block;margin-top:3px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px}
 .ch{padding:10px 16px;border-bottom:1px solid var(--border);font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
-.card-note{padding:10px 16px;font-size:11px;color:var(--dim);border-top:1px solid var(--border);font-style:italic}
 table{width:100%;border-collapse:collapse}
 th{font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);padding:9px 14px;text-align:left;border-bottom:1px solid var(--border)}
 td{padding:8px 14px;border-bottom:1px solid var(--border);font-size:13px}
@@ -258,7 +252,7 @@ def fmt_p(v):
     return f"{v:,.2f}" if v > 1000 else f"{v:.4f}"
 
 
-# ── Edge Lab tables ──────────────────────────────────────────
+# ── Edge Lab ─────────────────────────────────────────────────
 
 def el_summary_boxes(s):
     wc = "pos" if s["win"]>=40 else ("neg" if s["win"]<25 else "warn")
@@ -303,7 +297,7 @@ def el_perf_table(title, d, keys, key_label):
 
 def el_recent_table(rows):
     if not rows:
-        return '<div class="card"><div class="empty">Nessun segnale ancora — il primo arriverà quando H4 e H1 si allineano.</div></div>'
+        return '<div class="card"><div class="empty">Nessun segnale ancora — il primo arriverà quando il trend H1 si definisce.</div></div>'
     body = ""
     for r in rows:
         sid,asset,direction,entry,sl,tp,rr,qs,ql,sess,ref,liq,trend,outcome,mae,mfe,bars,ts = r
@@ -330,12 +324,61 @@ def el_recent_table(rows):
 </div>"""
 
 
-# ── V4.1 tables (invariate dal legacy) ──────────────────────
+def section_edge_lab(rows, recent):
+    s = stats_el(rows)
+    asset_keys   = ["BTC_USDT","PAXG_USDT"]
+    dir_keys     = ["BUY","SELL"]
+    sess_keys    = ["ASIA","LONDON","NEW_YORK"]
+    ref_keys     = ["ASIA","LONDON","NEW_YORK","EUROPEAN_COMPOSITE"]
+    quality_keys = ["HIGH","MEDIUM","LOW"]
+    liq_keys     = sorted({r["liq_target"] for r in rows if r["liq_target"]!="N/A"})
+
+    bd_asset   = breakdown(rows, lambda r: r["asset"],         asset_keys,   stats_el)
+    bd_dir     = breakdown(rows, lambda r: r["direction"],     dir_keys,     stats_el)
+    bd_sess    = breakdown(rows, lambda r: r["session"],       sess_keys,    stats_el)
+    bd_ref     = breakdown(rows, lambda r: r["ref_session"],   ref_keys,     stats_el)
+    bd_quality = breakdown(rows, lambda r: r["quality_label"], quality_keys, stats_el)
+    bd_liq     = breakdown(rows, lambda r: r["liq_target"],    liq_keys,     stats_el)
+
+    no_data = "" if rows else """<div class="card" style="border-color:var(--accent3)">
+  <div class="ch" style="color:var(--accent3)">In attesa del primo segnale</div>
+  <div style="padding:16px;color:var(--dim)">
+    OTE-SC entra quando H1 è BULLISH o BEARISH e il prezzo tocca la zona OTE.
+    Il sistema sta scansionando ogni 5 minuti.
+  </div>
+</div>"""
+
+    return f"""
+<div class="card" style="border-top:2px solid var(--accent)">
+  <div class="fw-header" style="color:var(--accent)">
+    ⚡ Institutional Edge Lab — OTE-SC
+    <span class="fw-tag tag-active">ATTIVO</span>
+    <span style="color:var(--dim);font-size:11px;margin-left:auto">Phase 1A · BTC_USDT · PAXG_USDT</span>
+  </div>
+  {el_summary_boxes(s)}
+  {no_data}
+  <div class="grid-2">
+    {el_perf_table("Per Asset", bd_asset, asset_keys, "Asset")}
+    {el_perf_table("Per Direzione", bd_dir, dir_keys, "Dir")}
+  </div>
+  <div class="grid-2">
+    {el_perf_table("Per Quality Label", bd_quality, quality_keys, "Quality")}
+    {el_perf_table("Per Sessione Corrente", bd_sess, sess_keys, "Sessione")}
+  </div>
+  <div class="grid-2">
+    {el_perf_table("Per Sessione Riferimento", bd_ref, ref_keys, "Ref Session")}
+    {el_perf_table("Per Liquidity Target", bd_liq, liq_keys, "Target")}
+  </div>
+  {el_recent_table(recent)}
+</div>"""
+
+
+# ── V4.1 Phase 1 ─────────────────────────────────────────────
 
 def v41_summary_boxes(s, color):
     wc = "pos" if s["win"]>=30 else "neg"
     ec = "pos" if s["exp_r"]>0 else "neg"
-    return f"""<div class="summary-grid cols5" style="border-top:2px solid {color};border:1px solid var(--border);border-top:2px solid {color};border-radius:6px;overflow:hidden;margin-bottom:16px">
+    return f"""<div class="summary-grid cols5" style="border:1px solid var(--border);border-top:2px solid {color};border-radius:6px;overflow:hidden;margin-bottom:16px">
   <div><span class="big">{s['n']}</span><span class="lbl">Segnali chiusi</span></div>
   <div><span class="big {wc}">{s['win']}%</span><span class="lbl">Win Rate</span></div>
   <div><span class="big">{s['tp1']}%</span><span class="lbl">TP1 Hit</span></div>
@@ -369,69 +412,17 @@ def v41_perf_table(title, d, keys, key_label, highlight=40):
 </div>"""
 
 
-# ============================================================
-# Sezioni complete
-# ============================================================
-
-def section_edge_lab(rows, recent):
-    s = stats_el(rows)
-    asset_keys   = ["BTC_USDT","PAXG_USDT"]
-    dir_keys     = ["BUY","SELL"]
-    sess_keys    = ["ASIA","LONDON","OVERLAP","NEW_YORK"]
-    ref_keys     = ["ASIA","LONDON","OVERLAP","NEW_YORK","EUROPEAN_COMPOSITE"]
-    quality_keys = ["HIGH","MEDIUM","LOW"]
-    liq_keys     = sorted({r["liq_target"] for r in rows if r["liq_target"]!="N/A"})
-
-    bd_asset   = breakdown(rows, lambda r: r["asset"],       asset_keys,   stats_el)
-    bd_dir     = breakdown(rows, lambda r: r["direction"],   dir_keys,     stats_el)
-    bd_sess    = breakdown(rows, lambda r: r["session"],     sess_keys,    stats_el)
-    bd_ref     = breakdown(rows, lambda r: r["ref_session"], ref_keys,     stats_el)
-    bd_quality = breakdown(rows, lambda r: r["quality_label"], quality_keys, stats_el)
-    bd_liq     = breakdown(rows, lambda r: r["liq_target"],  liq_keys,     stats_el)
-
-    no_data = "" if rows else """<div class="card" style="border-color:var(--accent3)">
-  <div class="ch" style="color:var(--accent3)">In attesa del primo segnale</div>
-  <div style="padding:16px;color:var(--dim)">
-    OTE-SC entra solo quando H4 e H1 sono allineati (BULLISH o BEARISH).
-    Il sistema sta scansionando e raccogliendo contesto ad ogni ciclo.
-  </div>
-</div>"""
-
-    return f"""
-<div class="card" style="border-top:2px solid var(--accent)">
-  <div class="fw-header" style="color:var(--accent)">
-    ⚡ Institutional Edge Lab — OTE-SC
-    <span class="fw-tag tag-active">ATTIVO</span>
-    <span style="color:var(--dim);font-size:11px;margin-left:auto">Phase 1A · BTC_USDT · PAXG_USDT</span>
-  </div>
-  {el_summary_boxes(s)}
-  {no_data}
-  <div class="grid-2" style="padding:0 0 0 0">
-    {el_perf_table("Per Asset", bd_asset, asset_keys, "Asset")}
-    {el_perf_table("Per Direzione", bd_dir, dir_keys, "Dir")}
-  </div>
-  <div class="grid-2">
-    {el_perf_table("Per Quality Label", bd_quality, quality_keys, "Quality")}
-    {el_perf_table("Per Sessione Corrente", bd_sess, sess_keys, "Sessione")}
-  </div>
-  <div class="grid-2">
-    {el_perf_table("Per Sessione Riferimento", bd_ref, ref_keys, "Ref Session")}
-    {el_perf_table("Per Liquidity Target", bd_liq, liq_keys, "Target")}
-  </div>
-  {el_recent_table(recent)}
-</div>"""
-
-
-def section_v41(rows, fw_name, color):
+def section_v41p1(rows):
     s = stats_v41(rows)
-    bd_trigger = breakdown(rows, lambda r: r["trigger"],                    ["BOS","CHOCH","BOS+CHOCH"], stats_v41)
-    bd_asset   = breakdown(rows, lambda r: r["asset"].replace("_USDT",""),  ["BTC","PAXG"],              stats_v41)
-    bd_sess    = breakdown(rows, lambda r: r["session"] or "N/A",           ["ASIA","LONDON","OVERLAP","NEW_YORK"], stats_v41)
+    color = "#ffd166"
+    bd_trigger = breakdown(rows, lambda r: r["trigger"],                   ["BOS","CHOCH","BOS+CHOCH"], stats_v41)
+    bd_asset   = breakdown(rows, lambda r: r["asset"].replace("_USDT",""), ["BTC","PAXG"],              stats_v41)
+    bd_sess    = breakdown(rows, lambda r: r["session"] or "N/A",          ["ASIA","LONDON","NEW_YORK"], stats_v41)
 
     return f"""
 <div class="card" style="border-top:2px solid {color}">
   <div class="fw-header" style="color:{color}">
-    {fw_name}
+    V4.1 Phase 1 — Money Flow
     <span class="fw-tag tag-benchmark">BENCHMARK STORICO</span>
   </div>
   {v41_summary_boxes(s, color)}
@@ -439,7 +430,7 @@ def section_v41(rows, fw_name, color):
     {v41_perf_table("Per Trigger", bd_trigger, ["BOS","CHOCH","BOS+CHOCH"], "Trigger")}
     {v41_perf_table("Per Asset",   bd_asset,   ["BTC","PAXG"],              "Asset")}
   </div>
-  {v41_perf_table("Per Sessione", bd_sess, ["ASIA","LONDON","OVERLAP","NEW_YORK"], "Sessione")}
+  {v41_perf_table("Per Sessione", bd_sess, ["ASIA","LONDON","NEW_YORK"], "Sessione")}
 </div>"""
 
 
@@ -449,15 +440,9 @@ def section_v41(rows, fw_name, color):
 
 def generate():
     conn = sqlite3.connect(DB_PATH)
-
-    el_rows   = load_el_signals(conn)
-    el_recent = load_el_recent(conn, 20)
-    v41_rows  = load_v41_signals(conn, "v41_signals")
-    try:
-        v41p1_rows = load_v41_signals(conn, "v41p1_signals")
-    except sqlite3.OperationalError:
-        v41p1_rows = []
-
+    el_rows    = load_el_signals(conn)
+    el_recent  = load_el_recent(conn, 20)
+    v41p1_rows = load_v41p1_signals(conn)
     conn.close()
 
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -484,12 +469,11 @@ def generate():
 
   <div class="section-divider">
     <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">
-      Benchmark Storici
+      Benchmark Storico
     </span>
   </div>
 
-  {section_v41(v41_rows,  "V4.1 — Intraday Wave",       "#4fffb0")}
-  {section_v41(v41p1_rows,"V4.1 Phase 1 — Money Flow",  "#ffd166")}
+  {section_v41p1(v41p1_rows)}
 
 </div>
 </body>
@@ -501,8 +485,7 @@ def generate():
 
     print(
         f"Analytics dashboard generata: {OUT_PATH} "
-        f"(Edge Lab: {len(el_rows)} chiusi | "
-        f"V4.1: {len(v41_rows)} | V4.1P1: {len(v41p1_rows)})"
+        f"(Edge Lab: {len(el_rows)} chiusi | V4.1P1: {len(v41p1_rows)})"
     )
 
 
