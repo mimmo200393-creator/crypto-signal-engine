@@ -31,7 +31,6 @@ header a{color:var(--accent);text-decoration:none;font-family:'IBM Plex Mono',mo
 .lbl{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);display:block;margin-top:3px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px}
 .ch{padding:10px 16px;border-bottom:1px solid var(--border);font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
-.card-note{padding:10px 16px;font-size:11px;color:var(--dim);border-top:1px solid var(--border);font-style:italic}
 table{width:100%;border-collapse:collapse}
 th{font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);padding:9px 14px;text-align:left;border-bottom:1px solid var(--border)}
 td{padding:8px 14px;border-bottom:1px solid var(--border);font-size:13px}
@@ -56,7 +55,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
 <header>
   <h1>Crypto Signal Engine — Analytics Lab</h1>
   <div class="meta">
-    2026-06-23 16:36 UTC &nbsp;|&nbsp;
+    2026-06-23 16:45 UTC &nbsp;|&nbsp;
     <a href="unified_dashboard.html">&larr; Dashboard</a>
   </div>
 </header>
@@ -82,11 +81,11 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <div class="card" style="border-color:var(--accent3)">
   <div class="ch" style="color:var(--accent3)">In attesa del primo segnale</div>
   <div style="padding:16px;color:var(--dim)">
-    OTE-SC entra solo quando H4 e H1 sono allineati (BULLISH o BEARISH).
-    Il sistema sta scansionando e raccogliendo contesto ad ogni ciclo.
+    OTE-SC entra quando H1 è BULLISH o BEARISH e il prezzo tocca la zona OTE.
+    Il sistema sta scansionando ogni 5 minuti.
   </div>
 </div>
-  <div class="grid-2" style="padding:0 0 0 0">
+  <div class="grid-2">
     <div class="card">
   <div class="ch">Per Asset</div>
   <table><thead><tr>
@@ -134,112 +133,22 @@ tr.hl td{background:rgba(79,255,176,.06)}
   </tr></thead><tbody><tr><td colspan="7" class="empty">Nessun dato</td></tr></tbody></table>
 </div>
   </div>
-  <div class="card"><div class="empty">Nessun segnale ancora — il primo arriverà quando H4 e H1 si allineano.</div></div>
+  <div class="card"><div class="empty">Nessun segnale ancora — il primo arriverà quando il trend H1 si definisce.</div></div>
 </div>
 
   <div class="section-divider">
     <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">
-      Benchmark Storici
+      Benchmark Storico
     </span>
   </div>
 
-  
-<div class="card" style="border-top:2px solid #4fffb0">
-  <div class="fw-header" style="color:#4fffb0">
-    V4.1 — Intraday Wave
-    <span class="fw-tag tag-benchmark">BENCHMARK STORICO</span>
-  </div>
-  <div class="summary-grid cols5" style="border-top:2px solid #4fffb0;border:1px solid var(--border);border-top:2px solid #4fffb0;border-radius:6px;overflow:hidden;margin-bottom:16px">
-  <div><span class="big">64</span><span class="lbl">Segnali chiusi</span></div>
-  <div><span class="big neg">21.9%</span><span class="lbl">Win Rate</span></div>
-  <div><span class="big">29.7%</span><span class="lbl">TP1 Hit</span></div>
-  <div><span class="big neg">-0.16R</span><span class="lbl">Expectancy</span></div>
-  <div><span class="big neg">292.8</span><span class="lbl">MAE medio</span></div>
-</div>
-  <div class="grid-2">
-    <div class="card">
-  <div class="ch">Per Trigger</div>
-  <table><thead><tr>
-    <th>Trigger</th><th>N</th><th>Win%</th><th>TP1%</th><th>TP2%</th><th>Expectancy</th>
-  </tr></thead><tbody><tr class="">
-  <td><strong>BOS</strong></td>
-  <td class="mono">35</td>
-  <td class="mono ">22.9%</td>
-  <td class="mono">28.6%</td>
-  <td class="mono">22.9%</td>
-  <td class="mono neg">+0.00R</td>
-</tr><tr class="">
-  <td><strong>CHOCH</strong></td>
-  <td class="mono">29</td>
-  <td class="mono ">20.7%</td>
-  <td class="mono">31.0%</td>
-  <td class="mono">20.7%</td>
-  <td class="mono neg">-0.34R</td>
-</tr></tbody></table>
-</div>
-    <div class="card">
-  <div class="ch">Per Asset</div>
-  <table><thead><tr>
-    <th>Asset</th><th>N</th><th>Win%</th><th>TP1%</th><th>TP2%</th><th>Expectancy</th>
-  </tr></thead><tbody><tr class="">
-  <td><strong>BTC</strong></td>
-  <td class="mono">45</td>
-  <td class="mono ">22.2%</td>
-  <td class="mono">33.3%</td>
-  <td class="mono">22.2%</td>
-  <td class="mono neg">-0.29R</td>
-</tr><tr class="">
-  <td><strong>PAXG</strong></td>
-  <td class="mono">19</td>
-  <td class="mono ">21.1%</td>
-  <td class="mono">21.1%</td>
-  <td class="mono">21.1%</td>
-  <td class="mono pos">+0.16R</td>
-</tr></tbody></table>
-</div>
-  </div>
-  <div class="card">
-  <div class="ch">Per Sessione</div>
-  <table><thead><tr>
-    <th>Sessione</th><th>N</th><th>Win%</th><th>TP1%</th><th>TP2%</th><th>Expectancy</th>
-  </tr></thead><tbody><tr class="">
-  <td><strong>ASIA</strong></td>
-  <td class="mono">35</td>
-  <td class="mono neg">17.1%</td>
-  <td class="mono">25.7%</td>
-  <td class="mono">17.1%</td>
-  <td class="mono neg">-0.26R</td>
-</tr><tr class="hl">
-  <td><strong>LONDON</strong></td>
-  <td class="mono">7</td>
-  <td class="mono pos">42.9%</td>
-  <td class="mono">57.1%</td>
-  <td class="mono">42.9%</td>
-  <td class="mono pos">+0.29R</td>
-</tr><tr class="">
-  <td><strong>OVERLAP</strong></td>
-  <td class="mono">9</td>
-  <td class="mono neg">0.0%</td>
-  <td class="mono">11.1%</td>
-  <td class="mono">0.0%</td>
-  <td class="mono neg">-0.78R</td>
-</tr><tr class="">
-  <td><strong>NEW_YORK</strong></td>
-  <td class="mono">13</td>
-  <td class="mono ">38.5%</td>
-  <td class="mono">38.5%</td>
-  <td class="mono">38.5%</td>
-  <td class="mono pos">+0.31R</td>
-</tr></tbody></table>
-</div>
-</div>
   
 <div class="card" style="border-top:2px solid #ffd166">
   <div class="fw-header" style="color:#ffd166">
     V4.1 Phase 1 — Money Flow
     <span class="fw-tag tag-benchmark">BENCHMARK STORICO</span>
   </div>
-  <div class="summary-grid cols5" style="border-top:2px solid #ffd166;border:1px solid var(--border);border-top:2px solid #ffd166;border-radius:6px;overflow:hidden;margin-bottom:16px">
+  <div class="summary-grid cols5" style="border:1px solid var(--border);border-top:2px solid #ffd166;border-radius:6px;overflow:hidden;margin-bottom:16px">
   <div><span class="big">41</span><span class="lbl">Segnali chiusi</span></div>
   <div><span class="big pos">36.6%</span><span class="lbl">Win Rate</span></div>
   <div><span class="big">48.8%</span><span class="lbl">TP1 Hit</span></div>
@@ -306,13 +215,6 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">66.7%</td>
   <td class="mono">55.6%</td>
   <td class="mono pos">+0.67R</td>
-</tr><tr class="">
-  <td><strong>OVERLAP</strong></td>
-  <td class="mono">7</td>
-  <td class="mono neg">0.0%</td>
-  <td class="mono">28.6%</td>
-  <td class="mono">0.0%</td>
-  <td class="mono neg">-0.57R</td>
 </tr><tr class="hl">
   <td><strong>NEW_YORK</strong></td>
   <td class="mono">12</td>
