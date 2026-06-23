@@ -4,7 +4,7 @@ Crypto Signal Engine — Homepage Operativa
 
 Mostra lo stato in tempo reale di:
     - Edge Lab OTE-SC (segnali aperti + ultimi chiusi)
-    - V4.1 Intraday Wave (benchmark attivo, segnali aperti)
+    - V4.1 Phase 1 Money Flow (benchmark attivo, segnali aperti)
 
 Genera docs/unified_dashboard.html
 """
@@ -102,7 +102,7 @@ def load_el_stats(conn):
             WHERE final_outcome != 'OPEN'
             GROUP BY final_outcome
         """)
-        d = {r[0]: r[1] for r in rows}
+        d    = {r[0]: r[1] for r in rows}
         n    = sum(d.values())
         wins = d.get("TP", 0)
         sls  = d.get("SL", 0)
@@ -116,14 +116,14 @@ def load_el_stats(conn):
         return {"n": 0, "open": 0, "win": 0, "exp_r": 0}
 
 
-def load_v41_open(conn):
+def load_v41p1_open(conn):
     try:
         rows = q(conn, """
             SELECT asset, direction, entry, stop_loss, tp1, tp2,
                    quality_label, quality_score, trigger_types,
                    mae, mfe, tp1_hit, liquidity_source, liquidity_target,
                    expected_move_points, timestamp_setup
-            FROM v41_signals WHERE final_outcome = 'OPEN'
+            FROM v41p1_signals WHERE final_outcome = 'OPEN'
             ORDER BY timestamp_setup DESC
         """)
     except sqlite3.OperationalError:
@@ -132,7 +132,7 @@ def load_v41_open(conn):
     result = []
     for r in rows:
         try:
-            types = json.loads(r[8]) if r[8] else []
+            types   = json.loads(r[8]) if r[8] else []
             trigger = "+".join(types) if types else "—"
         except Exception:
             trigger = "—"
@@ -154,12 +154,12 @@ def load_v41_open(conn):
     return result
 
 
-def load_v41_stats(conn):
+def load_v41p1_stats(conn):
     try:
-        n    = q(conn, "SELECT COUNT(*) FROM v41_signals WHERE final_outcome!='OPEN'")[0][0]
-        wins = q(conn, "SELECT COUNT(*) FROM v41_signals WHERE final_outcome='TP'")[0][0]
-        sls  = q(conn, "SELECT COUNT(*) FROM v41_signals WHERE final_outcome='SL'")[0][0]
-        opn  = q(conn, "SELECT COUNT(*) FROM v41_signals WHERE final_outcome='OPEN'")[0][0]
+        n    = q(conn, "SELECT COUNT(*) FROM v41p1_signals WHERE final_outcome!='OPEN'")[0][0]
+        wins = q(conn, "SELECT COUNT(*) FROM v41p1_signals WHERE final_outcome='TP'")[0][0]
+        sls  = q(conn, "SELECT COUNT(*) FROM v41p1_signals WHERE final_outcome='SL'")[0][0]
+        opn  = q(conn, "SELECT COUNT(*) FROM v41p1_signals WHERE final_outcome='OPEN'")[0][0]
         return {
             "n":     n,
             "open":  opn,
@@ -219,7 +219,7 @@ header h1{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;l
 .container{max-width:1320px;margin:0 auto;padding:24px 32px}
 .section-title{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;margin:28px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--border)}
 .section-title.el{color:var(--accent)}
-.section-title.v41{color:#4fffb0;opacity:.6}
+.section-title.v41p1{color:var(--accent3);opacity:.8}
 .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:20px}
 .kpi-row>div{background:var(--surface);padding:16px 12px;text-align:center}
 .big{font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:600}
@@ -265,13 +265,15 @@ def el_open_table(rows):
     Nessun segnale aperto. Il sistema sta scansionando ogni 5 minuti.
   </td></tr></tbody></table>
 </div>"""
-
     body = ""
     for r in rows:
         asset = r["asset"].replace("_USDT", "")
         mae_c = "neg" if r["mae"] and r["mae"] > 0 else ""
         mfe_c = "pos" if r["mfe"] and r["mfe"] > 0 else ""
-        flags_str = " ".join(f'<span style="color:var(--accent3);font-size:11px">⚠ {f}</span>' for f in r["flags"]) if r["flags"] else ""
+        flags_str = " ".join(
+            f'<span style="color:var(--accent3);font-size:11px">⚠ {f}</span>'
+            for f in r["flags"]
+        ) if r["flags"] else ""
         body += f"""<tr>
   <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(r['ts'])}</td>
   <td><strong>{asset}</strong></td>
@@ -290,7 +292,6 @@ def el_open_table(rows):
     {flags_str}
   </td>
 </tr>"""
-
     return f"""<div class="card">
   <div class="ch"><span class="pulse"></span>Segnali Aperti — OTE-SC ({len(rows)})</div>
   <div style="overflow-x:auto"><table><thead><tr>
@@ -304,11 +305,10 @@ def el_closed_table(rows):
     if not rows:
         return """<div class="card">
   <div class="ch">Ultimi Segnali Chiusi — OTE-SC</div>
-  <table><tbody><tr class="empty-row"><td colspan="10">
-    Nessun segnale chiuso ancora. Il primo arriverà quando H4 e H1 si allineano.
+  <table><tbody><tr class="empty-row"><td colspan="12">
+    Nessun segnale chiuso ancora.
   </td></tr></tbody></table>
 </div>"""
-
     body = ""
     for r in rows:
         asset,direction,entry,sl,tp,rr,ql,sess,ref,target,outcome,mae,mfe,bars,ts = r
@@ -326,7 +326,6 @@ def el_closed_table(rows):
   <td>{outcome_badge(outcome)}</td>
   <td class="mono" style="color:var(--dim)">{int(bars or 0)}</td>
 </tr>"""
-
     return f"""<div class="card">
   <div class="ch">Ultimi Segnali Chiusi — OTE-SC</div>
   <div style="overflow-x:auto"><table><thead><tr>
@@ -336,16 +335,15 @@ def el_closed_table(rows):
 </div>"""
 
 
-def v41_open_table(rows):
+def v41p1_open_table(rows):
     if not rows:
         return """<div class="card">
-  <div class="ch">Segnali Aperti — V4.1 Intraday Wave</div>
-  <table><tbody><tr class="empty-row"><td colspan="10">Nessun segnale aperto.</td></tr></tbody></table>
+  <div class="ch">Segnali Aperti — V4.1 Phase 1 Money Flow</div>
+  <table><tbody><tr class="empty-row"><td colspan="11">Nessun segnale aperto.</td></tr></tbody></table>
 </div>"""
-
     body = ""
     for r in rows:
-        asset = r["asset"].replace("_USDT", "")
+        asset     = r["asset"].replace("_USDT", "")
         tp1_badge = '<span class="badge b-tp" style="font-size:10px">TP1✓</span>' if r["tp1_hit"] else ""
         body += f"""<tr>
   <td><strong>{asset}</strong></td>
@@ -360,9 +358,8 @@ def v41_open_table(rows):
   <td class="mono pos">{fp(r['mfe'])}</td>
   <td class="mono" style="color:var(--dim)">{r['elapsed_h']}h</td>
 </tr>"""
-
     return f"""<div class="card">
-  <div class="ch">Segnali Aperti — V4.1 Intraday Wave ({len(rows)})</div>
+  <div class="ch">Segnali Aperti — V4.1 Phase 1 Money Flow ({len(rows)})</div>
   <div style="overflow-x:auto"><table><thead><tr>
     <th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP1</th><th>TP2</th>
     <th>Quality</th><th>Trigger</th><th>MAE</th><th>MFE</th><th>Aperto</th>
@@ -370,7 +367,7 @@ def v41_open_table(rows):
 </div>"""
 
 
-def kpi_row(s, label, color):
+def kpi_row(s, color):
     wc = "pos" if s["win"] >= 40 else ("neg" if s["win"] < 25 else "warn")
     ec = "pos" if s["exp_r"] > 0 else "neg"
     return f"""<div class="kpi-row" style="border-top:2px solid {color};margin-bottom:16px">
@@ -388,11 +385,11 @@ def kpi_row(s, label, color):
 def generate():
     conn = sqlite3.connect(DB_PATH)
 
-    el_open   = load_el_open(conn)
-    el_closed = load_el_recent_closed(conn, 10)
-    el_stats  = load_el_stats(conn)
-    v41_open  = load_v41_open(conn)
-    v41_stats = load_v41_stats(conn)
+    el_open    = load_el_open(conn)
+    el_closed  = load_el_recent_closed(conn, 10)
+    el_stats   = load_el_stats(conn)
+    v41p1_open  = load_v41p1_open(conn)
+    v41p1_stats = load_v41p1_stats(conn)
 
     conn.close()
 
@@ -417,15 +414,15 @@ def generate():
 <div class="container">
 
   <div class="section-title el">⚡ Institutional Edge Lab — OTE-SC</div>
-  {kpi_row(el_stats, "OTE-SC", "var(--accent)")}
+  {kpi_row(el_stats, "var(--accent)")}
   {el_open_table(el_open)}
   {el_closed_table(el_closed)}
 
   <div class="divider"></div>
 
-  <div class="section-title v41">V4.1 Intraday Wave — Benchmark</div>
-  {kpi_row(v41_stats, "V4.1", "#4fffb0")}
-  {v41_open_table(v41_open)}
+  <div class="section-title v41p1">V4.1 Phase 1 — Money Flow Benchmark</div>
+  {kpi_row(v41p1_stats, "var(--accent3)")}
+  {v41p1_open_table(v41p1_open)}
 
 </div>
 </body>
@@ -437,7 +434,7 @@ def generate():
     print(
         f"Dashboard unificata generata: {OUT_PATH} "
         f"(EL aperti={el_stats['open']} chiusi={el_stats['n']} | "
-        f"V4.1 aperti={v41_stats['open']} chiusi={v41_stats['n']})"
+        f"V4.1P1 aperti={v41p1_stats['open']} chiusi={v41p1_stats['n']})"
     )
 
 
