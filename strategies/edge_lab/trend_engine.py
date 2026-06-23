@@ -70,19 +70,9 @@ def _ema_alignment(df: pd.DataFrame, periods: list) -> str:
     return "NEUTRAL"
 
 
-def _combine_dow_ema(dow: str, ema: str) -> str:
-    matrix = {
-        ("BULLISH","BULLISH"): "BULLISH",
-        ("BEARISH","BEARISH"): "BEARISH",
-        ("BULLISH","NEUTRAL"): "BULLISH",
-        ("BEARISH","NEUTRAL"): "BEARISH",
-        ("NEUTRAL","BULLISH"): "NEUTRAL",
-        ("NEUTRAL","BEARISH"): "NEUTRAL",
-        ("NEUTRAL","NEUTRAL"): "NEUTRAL",
-        ("BULLISH","BEARISH"): "TRANSITION",
-        ("BEARISH","BULLISH"): "TRANSITION",
-    }
-    return matrix.get((dow, ema), "NEUTRAL")
+def combine_trends(h4_direction: str, h1_direction: str) -> str:
+    """H1 guida la direzione. H4 è contesto informativo."""
+    return h1_direction
 
 
 def compute_ema_slope(df: pd.DataFrame, period: int = 50, lookback: int = MOMENTUM_LOOKBACK) -> str:
