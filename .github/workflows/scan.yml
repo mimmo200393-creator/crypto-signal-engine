@@ -1,13 +1,9 @@
-name: Crypto Signal Engine V2.1 - Scan
+name: Crypto Signal Engine — Scan
 on:
   workflow_dispatch:
     inputs:
       send_test_alert:
         description: "Invia alert di TEST con dati finti (non fa scan)"
-        type: boolean
-        default: false
-      test_low_threshold:
-        description: "Scan reale con soglia Final Score abbassata a 5 (test pipeline)"
         type: boolean
         default: false
 permissions:
@@ -24,40 +20,24 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+
       - name: Install dependencies
         run: pip install -r requirements.txt --break-system-packages || pip install -r requirements.txt
-      - name: Set threshold override
-        id: threshold
-        run: |
-          if [ "${{ github.event.inputs.test_low_threshold }}" = "true" ]; then
-            echo "value=5" >> $GITHUB_OUTPUT
-          else
-            echo "value=" >> $GITHUB_OUTPUT
-          fi
-      - name: Run scan cycle
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          SEND_TEST_ALERT: ${{ github.event.inputs.send_test_alert }}
-          TELEGRAM_SCORE_THRESHOLD_OVERRIDE: ${{ steps.threshold.outputs.value }}
-        run: python3 main.py
-      - name: Commit database e log
-        run: |
-          git config user.name "signal-engine-bot"
-          git config user.email "actions@github.com"
-          git add data/signals.db logs/engine.log
-          git diff --staged --quiet || git commit -m "Scan V2.1 $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          git push
+
+      - name: Fetch candele H4/H1 (BTC_USDT + PAXG_USDT)
+        run: python3 candles_runner.py
+
       - name: Daily Brief (08:00 UTC)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -69,31 +49,35 @@ jobs:
           if [ "$HOUR" = "08" ] && [ "$MINUTE" -lt "20" ]; then
             python3 daily_brief_runner.py
           fi
-      - name: Fetch candele M15/D1 + V3.2 Frozen (PAXG_USDT + BTC_USDT)
+
+      - name: Fetch candele M15/D1 (BTC_USDT + PAXG_USDT)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 v3_scanner_runner.py
-      # ── RIMOSSI: v3d_scanner_runner.py e v4_scanner_runner.py ──
+
       - name: Institutional Scanner V4.1 Intraday Wave (PAXG_USDT + BTC_USDT)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 v41_scanner_runner.py
+
       - name: Institutional Scanner V4.1 Phase 1 (PAXG_USDT + BTC_USDT)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 v41p1_scanner_runner.py
+
       - name: Institutional Edge Lab — OTE-SC (BTC_USDT + PAXG_USDT)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 edge_lab_runner.py
+
       - name: Commit database e dashboard
         run: |
           git config user.name "signal-engine-bot"
@@ -102,11 +86,9 @@ jobs:
           DB_CHANGED=false
           git diff --staged --quiet || DB_CHANGED=true
           if [ "$DB_CHANGED" = "true" ]; then
-            python3 generate_dashboard.py
             python3 generate_unified_dashboard.py
             python3 generate_analytics_dashboard.py
             git add data/signals.db \
-                    docs/index.html \
                     docs/unified_dashboard.html \
                     docs/analytics_dashboard.html
             git commit -m "Scanner + Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
