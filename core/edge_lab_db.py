@@ -5,8 +5,6 @@ Edge Lab — Layer accesso dati (Step 1 + Step 10)
 Opera su due tabelle isolate:
     market_context_snapshots  → una riga per asset per scan (Layer 1)
     edge_lab_signals          → tutti i segnali con strategy_name (Layer 3)
-
-Schema SQL: storage/edge_lab_schema.sql
 """
 
 from __future__ import annotations
@@ -30,55 +28,39 @@ CREATE TABLE IF NOT EXISTS market_context_snapshots (
     asset                TEXT NOT NULL,
     timestamp_snapshot   DATETIME NOT NULL,
     current_price        REAL,
-
-    -- Trend
     trend_h4             TEXT,
     trend_h1             TEXT,
     trend_combined       TEXT,
     ema_slope_h4         TEXT,
     ema_slope_h1         TEXT,
-
-    -- Session
     current_session      TEXT,
     reference_session    TEXT,
     ref_high             REAL,
     ref_low              REAL,
     ref_range            REAL,
-
-    -- OTE / Fibonacci
     ote_low              REAL,
     ote_high             REAL,
     fib_618              REAL,
     fib_786              REAL,
-
-    -- Liquidity
     nearest_above_label  TEXT,
     nearest_above_price  REAL,
     nearest_below_label  TEXT,
     nearest_below_price  REAL,
-
-    -- S/R
     sr_score_buy         REAL,
     sr_score_sell        REAL,
     sr_reaction_buy      BOOLEAN DEFAULT 0,
     sr_reaction_sell     BOOLEAN DEFAULT 0,
-
-    -- Volatility
     vol_regime_m15       TEXT,
     vol_regime_h1        TEXT,
     atr_m15              REAL,
     atr_h1               REAL,
     is_high_vol_window   BOOLEAN DEFAULT 0,
-
-    -- Macro
     macro_risk           TEXT,
     macro_is_blackout    BOOLEAN DEFAULT 0,
     macro_event_type     TEXT,
     macro_minutes_to_event INTEGER,
-
-    -- Tradeability
     is_tradeable         BOOLEAN DEFAULT 1,
-    block_reasons        TEXT    -- JSON list
+    block_reasons        TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_el_ctx_asset_ts
@@ -92,24 +74,16 @@ CREATE TABLE IF NOT EXISTS edge_lab_signals (
     direction            TEXT NOT NULL CHECK(direction IN ('BUY','SELL')),
     timestamp_setup      DATETIME NOT NULL,
     timestamp_closed     DATETIME,
-
-    -- Prezzi
     entry                REAL NOT NULL,
     stop_loss            REAL NOT NULL,
     tp                   REAL,
     rr                   REAL,
-
-    -- OTE
     ote_low              REAL,
     ote_high             REAL,
-
-    -- Liquidity target
     liquidity_target          TEXT,
     liquidity_target_price    REAL,
     liquidity_target_priority TEXT,
     liquidity_target_score    REAL,
-
-    -- Contesto
     session              TEXT,
     ref_session          TEXT,
     trend_h4             TEXT,
@@ -118,15 +92,9 @@ CREATE TABLE IF NOT EXISTS edge_lab_signals (
     vol_regime_m15       TEXT,
     sr_reaction          BOOLEAN DEFAULT 0,
     sr_score             REAL,
-
-    -- Quality
     quality_score        INTEGER,
     quality_label        TEXT CHECK(quality_label IN ('HIGH','MEDIUM','LOW')),
-
-    -- Flag informativi
-    tradeability_flags   TEXT,  -- JSON list
-
-    -- Tracking
+    tradeability_flags   TEXT,
     final_outcome        TEXT DEFAULT 'OPEN'
         CHECK(final_outcome IN ('OPEN','TP','SL','EXPIRED')),
     mae                  REAL,
@@ -145,7 +113,6 @@ CREATE INDEX IF NOT EXISTS idx_el_signals_timestamp
 
 
 def init_edge_lab_schema(conn: sqlite3.Connection):
-    """Crea le tabelle Edge Lab se non esistono (idempotente)."""
     conn.executescript(SCHEMA_SQL)
     conn.commit()
 
@@ -155,10 +122,6 @@ def init_edge_lab_schema(conn: sqlite3.Connection):
 # ============================================================
 
 def insert_market_context(conn: sqlite3.Connection, snapshot: dict) -> str:
-    """
-    Inserisce uno snapshot di market context.
-    snapshot: output di serialize_for_db() dal Market Context Engine.
-    """
     snapshot_id = str(uuid.uuid4())
     conn.execute(
         """
@@ -226,11 +189,7 @@ def insert_market_context(conn: sqlite3.Connection, snapshot: dict) -> str:
 # ============================================================
 
 def insert_el_signal(conn: sqlite3.Connection, signal: dict) -> str:
-    """
-    Inserisce un segnale Edge Lab.
-    signal: output di generate_ote_sc_signal()["signal"].
-    """
-    signal_id = signal.get("signal_id") or str(uuid.uuid4())
+    signal_id  = signal.get("signal_id") or str(uuid.uuid4())
     flags_json = json.dumps(signal.get("tradeability_flags", []))
 
     conn.execute(
@@ -339,15 +298,6 @@ def monitor_open_el_signals(
     current_low: float,
     now_iso: str,
 ) -> list[dict]:
-    """
-    Monitora i segnali aperti per un asset usando high/low dell'ultima candela M15.
-    Aggiorna MAE/MFE, bars_open; chiude TP/SL/EXPIRED.
-
-    Regola SL/TP stessa candela: SL ha sempre priorità su TP.
-    EXPIRED: bars_open >= expiry_bars.
-
-    Ritorna lista di dict con gli esiti aggiornati in questo ciclo.
-    """
     rows = conn.execute(
         """
         SELECT signal_id, direction, entry, stop_loss, tp,
@@ -368,7 +318,6 @@ def monitor_open_el_signals(
 
         bars_open = (bars_open or 0) + 1
 
-        # MAE / MFE
         if direction == "BUY":
             adverse   = max(float(entry) - current_low,  0.0)
             favorable = max(current_high - float(entry), 0.0)
@@ -379,7 +328,6 @@ def monitor_open_el_signals(
         new_mae = max(float(mae or 0), adverse)
         new_mfe = max(float(mfe or 0), favorable)
 
-        # TP / SL hit
         if direction == "BUY":
             sl_hit = current_low  <= float(sl)
             tp_hit = tp is not None and current_high >= float(tp)
@@ -387,7 +335,7 @@ def monitor_open_el_signals(
             sl_hit = current_high >= float(sl)
             tp_hit = tp is not None and current_low  <= float(tp)
 
-        # SL priorità su TP; poi EXPIRED
+        # SL priorità su TP
         if sl_hit:
             outcome = "SL"
         elif tp_hit:
@@ -403,8 +351,10 @@ def monitor_open_el_signals(
                 timestamp_closed=now_iso,
                 mae=new_mae, mfe=new_mfe, bars_open=bars_open,
             )
-            updated.append({"signal_id": sid, "outcome": outcome,
-                             "mae": new_mae, "mfe": new_mfe, "bars_open": bars_open})
+            updated.append({
+                "signal_id": sid, "outcome": outcome,
+                "mae": new_mae, "mfe": new_mfe, "bars_open": bars_open,
+            })
         else:
             update_el_signal_outcome(
                 conn, sid, "OPEN",
@@ -427,5 +377,33 @@ def has_open_el_signal(
         LIMIT 1
         """,
         (asset, direction, strategy_name),
+    ).fetchone()
+    return row is not None
+
+
+def has_recent_el_signal(
+    conn: sqlite3.Connection,
+    asset: str,
+    direction: str,
+    strategy_name: str = "OTE-SC",
+    hours: int = 2,
+) -> bool:
+    """
+    Ritorna True se esiste già un segnale (OPEN o chiuso) generato
+    nelle ultime N ore con stesso asset, direzione e strategia.
+    Previene la creazione di segnali duplicati quando il setup
+    non è ancora cambiato tra un scan e l'altro.
+    """
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(hours=hours)
+    ).isoformat()
+    row = conn.execute(
+        """
+        SELECT 1 FROM edge_lab_signals
+        WHERE asset=? AND direction=? AND strategy_name=?
+        AND timestamp_setup >= ?
+        LIMIT 1
+        """,
+        (asset, direction, strategy_name, cutoff),
     ).fetchone()
     return row is not None
