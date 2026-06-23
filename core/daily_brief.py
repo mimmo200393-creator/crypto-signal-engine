@@ -21,7 +21,7 @@ from notifications import telegram_bot, ntfy_bot
 
 logger = logging.getLogger("daily_brief")
 
-ZONE_ASSETS = ["BTC_USDT", "ETH_USDT", "PAXG_USDT"]
+ZONE_ASSETS = ["BTC_USDT", "PAXG_USDT"]
 ZONE_LOOKBACK_H4 = 20
 ZONE_MIN_TOUCHES = 2
 ZONE_CLUSTER_ATR = 0.5
