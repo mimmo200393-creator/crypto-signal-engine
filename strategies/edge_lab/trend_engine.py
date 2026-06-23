@@ -1,18 +1,13 @@
 """
 strategies/edge_lab/trend_engine.py
-Edge Lab — Step 2: Trend Engine (già consegnato, ricostruito per questa sessione)
+Edge Lab — Step 2: Trend Engine
 
 Dow Theory: HH+HL=BULLISH, LH+LL=BEARISH, misto=NEUTRAL
 EMA Status: allineamento EMA21>50>100>200 (senza prezzo)
 EMA slope: EMA50 corrente vs 5 candele fa
 H4 e H1 calcolati indipendentemente.
 
-Matrice combinazione:
-  BULLISH+BULLISH=BULLISH, BEARISH+BEARISH=BEARISH
-  BULLISH+NEUTRAL=BULLISH, BEARISH+NEUTRAL=BEARISH
-  NEUTRAL+BULLISH=NEUTRAL, NEUTRAL+BEARISH=NEUTRAL
-  NEUTRAL+NEUTRAL=NEUTRAL
-  BULLISH+BEARISH=TRANSITION, BEARISH+BULLISH=TRANSITION
+combine_trends: H1 guida la direzione, H4 è contesto informativo.
 """
 
 from __future__ import annotations
@@ -70,6 +65,21 @@ def _ema_alignment(df: pd.DataFrame, periods: list) -> str:
     return "NEUTRAL"
 
 
+def _combine_dow_ema(dow: str, ema: str) -> str:
+    matrix = {
+        ("BULLISH","BULLISH"): "BULLISH",
+        ("BEARISH","BEARISH"): "BEARISH",
+        ("BULLISH","NEUTRAL"): "BULLISH",
+        ("BEARISH","NEUTRAL"): "BEARISH",
+        ("NEUTRAL","BULLISH"): "NEUTRAL",
+        ("NEUTRAL","BEARISH"): "NEUTRAL",
+        ("NEUTRAL","NEUTRAL"): "NEUTRAL",
+        ("BULLISH","BEARISH"): "TRANSITION",
+        ("BEARISH","BULLISH"): "TRANSITION",
+    }
+    return matrix.get((dow, ema), "NEUTRAL")
+
+
 def combine_trends(h4_direction: str, h1_direction: str) -> str:
     """H1 guida la direzione. H4 è contesto informativo."""
     return h1_direction
@@ -108,18 +118,3 @@ def compute_trend_h1(df_h1: pd.DataFrame, ema_periods: list, momentum_lookback: 
     direction = _combine_dow_ema(dow, ema)
     slope = compute_ema_slope(df_h1, 50, momentum_lookback)
     return {"direction": direction, "dow": dow, "ema": ema, "ema_slope": slope}
-
-
-def combine_trends(h4_direction: str, h1_direction: str) -> str:
-    matrix = {
-        ("BULLISH","BULLISH"): "BULLISH",
-        ("BEARISH","BEARISH"): "BEARISH",
-        ("BULLISH","NEUTRAL"): "BULLISH",
-        ("BEARISH","NEUTRAL"): "BEARISH",
-        ("NEUTRAL","BULLISH"): "NEUTRAL",
-        ("NEUTRAL","BEARISH"): "NEUTRAL",
-        ("NEUTRAL","NEUTRAL"): "NEUTRAL",
-        ("BULLISH","BEARISH"): "TRANSITION",
-        ("BEARISH","BULLISH"): "TRANSITION",
-    }
-    return matrix.get((h4_direction, h1_direction), "NEUTRAL")
