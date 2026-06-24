@@ -1,15 +1,13 @@
 """
 core/edge_lab_runner.py
-Edge Lab — Runner (Step 10)
+Edge Lab — Runner (Step 10) + NMC Trend Rider Balanced
 
-Orchestratore chiamato dal workflow GitHub Actions.
-Per ogni asset (BTC_USDT, PAXG_USDT):
-    1. Carica candele H4/H1 da candles_cache, M15/D1 da v3_candles_cache
-    2. Calcola indicatori (EMA/ATR)
-    3. Monitora segnali aperti (TP/SL/EXPIRED)
-    4. Costruisce Market Context (Step 8) → salva snapshot
-    5. Valuta OTE-SC (Step 9) per BUY e SELL
-    6. Se segnale valido e nessun duplicato → inserisce e notifica
+Per ogni asset:
+    1. Carica candele
+    2. Monitora segnali aperti OTE-SC
+    3. Costruisce Market Context
+    4. Valuta OTE-SC
+    5. Valuta TRB (riusa stesso Market Context)
 """
 
 from __future__ import annotations
@@ -21,6 +19,7 @@ from storage import db as core_db
 from core import indicators, macro
 from core import v3_db
 from core import edge_lab_db
+from core import trend_rider_runner
 from strategies.edge_lab.market_context_engine import (
     build_market_context,
     serialize_for_db,
@@ -55,19 +54,16 @@ def _prepare_dataframes(conn, asset: str, config: dict):
     return df_h4, df_h1, df_m15, df_d1
 
 
-def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime):
+def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
     logger.info("Edge Lab: inizio ciclo per %s", asset)
 
     df_h4, df_h1, df_m15, df_d1 = _prepare_dataframes(conn, asset, config)
 
     if len(df_h4) < 15 or len(df_h1) < 20 or len(df_m15) < 25:
-        logger.warning(
-            "Edge Lab [%s]: dati insufficienti (h4=%d h1=%d m15=%d), skip.",
-            asset, len(df_h4), len(df_h1), len(df_m15),
-        )
+        logger.warning("Edge Lab [%s]: dati insufficienti, skip.", asset)
         return
 
-    # ── Monitoraggio segnali aperti ──────────────────────────
+    # Monitoraggio OTE-SC
     try:
         last_m15 = df_m15.iloc[-1]
         updated  = edge_lab_db.monitor_open_el_signals(
@@ -78,21 +74,18 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
         )
         for upd in updated:
             logger.info(
-                "Edge Lab Monitor [%s]: %s → outcome=%s bars=%d mae=%.4f mfe=%.4f",
-                asset, upd["signal_id"][:8], upd["outcome"],
-                upd["bars_open"], upd["mae"], upd["mfe"],
+                "Edge Lab Monitor [%s]: %s → outcome=%s bars=%d",
+                asset, upd["signal_id"][:8], upd["outcome"], upd["bars_open"],
             )
     except Exception as e:
         logger.error("Edge Lab Monitor [%s]: errore: %s", asset, e)
 
-    # ── Market Context Engine ─────────────────────────────────
+    # Market Context
     try:
         market_ctx = build_market_context(
             asset=asset,
             df_h4=df_h4, df_h1=df_h1, df_m15=df_m15, df_d1=df_d1,
-            now=now,
-            macro_provider=macro_provider,
-            config=config,
+            now=now, macro_provider=macro_provider, config=config,
         )
     except Exception as e:
         logger.error("Edge Lab [%s]: errore Market Context: %s", asset, e)
@@ -102,87 +95,65 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
     try:
         edge_lab_db.insert_market_context(conn, serialize_for_db(market_ctx))
     except Exception as e:
-        logger.warning("Edge Lab [%s]: errore salvataggio snapshot: %s", asset, e)
+        logger.warning("Edge Lab [%s]: errore snapshot: %s", asset, e)
 
+    # Salva context per TRB
+    market_contexts[asset] = market_ctx
+
+    # OTE-SC
     if not market_ctx.get("is_tradeable", False):
         logger.info(
             "Edge Lab [%s]: market NOT tradeable — blocks=%s",
             asset, market_ctx.get("block_reasons", []),
         )
-        return
+    else:
+        for direction in ("BUY", "SELL"):
+            if edge_lab_db.has_open_el_signal(conn, asset, direction, "OTE-SC"):
+                continue
+            if edge_lab_db.has_recent_el_signal(conn, asset, direction, "OTE-SC", hours=2):
+                logger.info("Edge Lab [%s %s]: segnale recente 2h, skip.", asset, direction)
+                continue
 
-    # ── OTE-SC: valuta BUY e SELL ───────────────────────────
-    for direction in ("BUY", "SELL"):
+            try:
+                result = generate_ote_sc_signal(market_ctx, df_m15, direction)
+            except Exception as e:
+                logger.error("Edge Lab [%s %s]: errore OTE-SC: %s", asset, direction, e)
+                continue
 
-        # Check 1: segnale già OPEN sulla stessa direzione
-        if edge_lab_db.has_open_el_signal(conn, asset, direction, "OTE-SC"):
-            logger.debug(
-                "Edge Lab [%s %s]: segnale OPEN già presente, skip.",
-                asset, direction,
-            )
-            continue
+            signal = result["signal"]
+            diag   = result["diagnostics"]
 
-        # Check 2: segnale identico generato nelle ultime 2 ore
-        # Evita duplicati quando il TP viene colpito in 1 bar e il setup
-        # è ancora attivo al prossimo scan
-        if edge_lab_db.has_recent_el_signal(conn, asset, direction, "OTE-SC", hours=2):
+            if signal is None:
+                logger.info("Edge Lab [%s %s]: no signal — %s",
+                    asset, direction, diag.get("rejection","UNKNOWN"))
+                continue
+
+            try:
+                signal_id = edge_lab_db.insert_el_signal(conn, signal)
+            except Exception as e:
+                logger.error("Edge Lab [%s %s]: errore insert: %s", asset, direction, e)
+                continue
+
             logger.info(
-                "Edge Lab [%s %s]: segnale già generato nelle ultime 2h, skip.",
+                "Edge Lab [%s %s]: SEGNALE entry=%.4f sl=%.4f tp=%.4f rr=%.2f "
+                "quality=%d/%s (id=%s)",
                 asset, direction,
+                signal["entry"], signal["stop_loss"], signal["tp"], signal["rr"],
+                signal["quality_score"], signal["quality_label"], signal_id,
             )
-            continue
-
-        try:
-            result = generate_ote_sc_signal(market_ctx, df_m15, direction)
-        except Exception as e:
-            logger.error("Edge Lab [%s %s]: errore OTE-SC: %s", asset, direction, e)
-            continue
-
-        signal = result["signal"]
-        diag   = result["diagnostics"]
-
-        if signal is None:
-            logger.info(
-                "Edge Lab [%s %s]: no signal — %s",
-                asset, direction, diag.get("rejection", "UNKNOWN"),
-            )
-            continue
-
-        try:
-            signal_id = edge_lab_db.insert_el_signal(conn, signal)
-        except Exception as e:
-            logger.error(
-                "Edge Lab [%s %s]: errore inserimento segnale: %s",
-                asset, direction, e,
-            )
-            continue
-
-        logger.info(
-            "Edge Lab [%s %s]: SEGNALE entry=%.4f sl=%.4f tp=%.4f rr=%.2f "
-            "quality=%d/%s session=%s ref=%s target=%s flags=%s (id=%s)",
-            asset, direction,
-            signal["entry"], signal["stop_loss"], signal["tp"], signal["rr"],
-            signal["quality_score"], signal["quality_label"],
-            signal.get("session"), signal.get("ref_session"),
-            signal.get("liquidity_target"),
-            signal.get("tradeability_flags", []),
-            signal_id,
-        )
-
-        _notify(signal, config)
+            _notify_otesc(signal, config)
 
 
-def _notify(signal: dict, config: dict):
+def _notify_otesc(signal: dict, config: dict):
     try:
         from notifications import telegram_bot, ntfy_bot
-
         direction = signal["direction"]
         asset     = signal["asset"]
         emoji     = "🟢" if direction == "BUY" else "🔴"
 
         def fp(v):
             if v is None: return "N/A"
-            return f"{v:,.2f}" if v > 1000 else f"{v:.4f}"
+            return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
 
         text = (
             f"{emoji} *EDGE LAB — OTE-SC*\n\n"
@@ -194,48 +165,48 @@ def _notify(signal: dict, config: dict):
             f"R/R: *{signal.get('rr',0):.2f}*\n\n"
             f"Quality: *{signal['quality_score']}/10* ({signal['quality_label']})\n"
             f"Session: {signal.get('session','N/A')} → Ref: {signal.get('ref_session','N/A')}\n"
-            f"Target: {signal.get('liquidity_target','N/A')} "
-            f"({signal.get('liquidity_target_priority','?')})\n"
-            f"OTE: `{fp(signal.get('ote_low'))} – {fp(signal.get('ote_high'))}`\n"
+            f"Target: {signal.get('liquidity_target','N/A')}\n"
             f"Trend: {signal.get('trend_combined','N/A')}"
         )
-
         if signal.get("tradeability_flags"):
-            text += f"\n⚠️ Flags: {', '.join(signal['tradeability_flags'])}"
+            text += f"\n⚠️ {', '.join(signal['tradeability_flags'])}"
 
-        bot_token  = config.get("TELEGRAM_BOT_TOKEN", "")
-        chat_id    = config.get("TELEGRAM_CHAT_ID", "")
-        ntfy_topic = config.get("NTFY_TOPIC", "")
+        bot_token  = config.get("TELEGRAM_BOT_TOKEN","")
+        chat_id    = config.get("TELEGRAM_CHAT_ID","")
+        ntfy_topic = config.get("NTFY_TOPIC","")
 
         if bot_token and chat_id:
-            sent = telegram_bot.send_message(bot_token, chat_id, text)
-            logger.info("Edge Lab [%s %s]: Telegram inviato=%s", asset, direction, sent)
-
+            telegram_bot.send_message(bot_token, chat_id, text)
         if ntfy_topic:
             title = f"OTE-SC {asset.replace('_',' ')} {direction} | Q{signal['quality_score']}/10"
-            plain = text.replace("*","").replace("`","")
-            ntfy_bot.send_message(ntfy_topic, title, plain)
-            logger.info("Edge Lab [%s %s]: ntfy inviato", asset, direction)
-
+            ntfy_bot.send_message(ntfy_topic, title, text.replace("*","").replace("`",""))
     except Exception as e:
-        logger.warning("Edge Lab _notify: errore notifica: %s", e)
+        logger.warning("OTE-SC _notify: %s", e)
 
 
 def run_edge_lab_scan(config: dict):
     conn = core_db.get_connection(config["DB_PATH"])
     edge_lab_db.init_edge_lab_schema(conn)
 
-    macro_provider = macro.get_provider(config)
-    now    = datetime.now(timezone.utc)
-    assets = config.get("EDGE_LAB", {}).get("assets", EDGE_LAB_ASSETS)
+    macro_provider  = macro.get_provider(config)
+    now             = datetime.now(timezone.utc)
+    assets          = config.get("EDGE_LAB", {}).get("assets", EDGE_LAB_ASSETS)
+    market_contexts = {}
 
     logger.info("=== Edge Lab Scanner: inizio ciclo (%s) ===", ", ".join(assets))
 
     for asset in assets:
         try:
-            _run_for_asset(conn, asset, config, macro_provider, now)
+            _run_for_asset(conn, asset, config, macro_provider, now, market_contexts)
         except Exception as e:
             logger.error("Edge Lab [%s]: errore non gestito: %s", asset, e)
 
     conn.close()
+
+    # TRB usa gli stessi market_contexts già calcolati
+    try:
+        trend_rider_runner.run_trb_scan(config, market_contexts)
+    except Exception as e:
+        logger.error("TRB Scanner: errore non gestito: %s", e)
+
     logger.info("=== Edge Lab Scanner: fine ciclo ===")
