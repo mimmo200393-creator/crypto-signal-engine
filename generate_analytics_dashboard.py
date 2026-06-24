@@ -286,7 +286,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
 .b-sell{background:rgba(255,107,107,.15);color:var(--sell)}
 .b-premium{background:rgba(167,139,250,.15);color:var(--accent4)}
 .empty{text-align:center;padding:24px;color:var(--dim);font-size:13px}
-@media(max-width:900px){.grid-2{grid-template-columns:1fr}.summary-grid.cols8,.summary-grid.cols6{grid-template-columns:repeat(3,1fr)}.container{padding:12px}}
+@media(max-width:900px){.grid-2{grid-template-columns:1fr}.summary-grid.cols8,.summary-grid.cols6{grid-template-columns:repeat(3,1fr)}.container{padding:12px}.card table{min-width:600px}}
 """
 
 
