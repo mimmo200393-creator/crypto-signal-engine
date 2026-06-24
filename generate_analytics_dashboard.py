@@ -4,11 +4,10 @@ Crypto Signal Engine — Analytics Lab (unificato)
 
 Struttura:
     SEZIONE 1 — Institutional Edge Lab / OTE-SC (framework attivo)
-    SEZIONE 2 — V4.1 Phase 1 Money Flow   (benchmark storico)
+    SEZIONE 2 — NMC Trend Rider Balanced v1.0   (framework attivo)
+    SEZIONE 3 — V4.1 Phase 1 Money Flow          (benchmark storico)
 
 Genera docs/analytics_dashboard.html
-Eseguito dal workflow GitHub Actions ad ogni scan oppure
-manualmente: python3 generate_analytics_dashboard.py
 """
 
 import sqlite3
@@ -50,23 +49,15 @@ def load_el_signals(conn):
         except Exception:
             flags = []
         result.append({
-            "asset":         r[0],
-            "direction":     r[1],
-            "session":       r[2] or "N/A",
-            "ref_session":   r[3] or "N/A",
-            "trend":         r[4] or "N/A",
-            "vol":           r[5] or "N/A",
-            "quality_label": r[6] or "N/A",
-            "quality_score": r[7] or 0,
-            "liq_target":    r[8] or "N/A",
-            "liq_priority":  r[9] or "N/A",
-            "outcome":       r[10],
-            "mae":           float(r[11] or 0),
-            "mfe":           float(r[12] or 0),
-            "rr":            float(r[13] or 0),
-            "bars_open":     int(r[14] or 0),
-            "flags":         flags,
-            "ts":            r[16] or "",
+            "asset": r[0], "direction": r[1],
+            "session": r[2] or "N/A", "ref_session": r[3] or "N/A",
+            "trend": r[4] or "N/A", "vol": r[5] or "N/A",
+            "quality_label": r[6] or "N/A", "quality_score": r[7] or 0,
+            "liq_target": r[8] or "N/A", "liq_priority": r[9] or "N/A",
+            "outcome": r[10],
+            "mae": float(r[11] or 0), "mfe": float(r[12] or 0),
+            "rr": float(r[13] or 0), "bars_open": int(r[14] or 0),
+            "flags": flags, "ts": r[16] or "",
         })
     return result
 
@@ -79,6 +70,63 @@ def load_el_recent(conn, limit=20):
                    liquidity_target, trend_combined, final_outcome,
                    mae, mfe, bars_open, timestamp_setup
             FROM edge_lab_signals
+            ORDER BY timestamp_setup DESC LIMIT {limit}
+        """)
+    except sqlite3.OperationalError:
+        return []
+
+
+# ============================================================
+# TRB data
+# ============================================================
+
+def load_trb_signals(conn):
+    try:
+        rows = q(conn, """
+            SELECT asset, direction, session,
+                   trend_h1, trend_h4, adx,
+                   quality_label, quality_score,
+                   liquidity_target,
+                   final_outcome, mae, mfe, rr1, rr2, bars_open,
+                   new_24h_extreme, timestamp_setup
+            FROM trb_signals
+            WHERE final_outcome NOT IN ('OPEN')
+            ORDER BY timestamp_setup DESC
+        """)
+    except sqlite3.OperationalError:
+        return []
+    result = []
+    for r in rows:
+        result.append({
+            "asset":         r[0],
+            "direction":     r[1],
+            "session":       r[2] or "N/A",
+            "trend_h1":      r[3] or "N/A",
+            "trend_h4":      r[4] or "N/A",
+            "adx":           float(r[5] or 0),
+            "quality_label": r[6] or "N/A",
+            "quality_score": r[7] or 0,
+            "liq_target":    r[8] or "N/A",
+            "outcome":       r[9],
+            "mae":           float(r[10] or 0),
+            "mfe":           float(r[11] or 0),
+            "rr1":           float(r[12] or 0),
+            "rr2":           float(r[13] or 0),
+            "bars_open":     int(r[14] or 0),
+            "new_extreme":   bool(r[15]),
+            "ts":            r[16] or "",
+        })
+    return result
+
+
+def load_trb_recent(conn, limit=20):
+    try:
+        return q(conn, f"""
+            SELECT signal_id, asset, direction, entry, stop_loss, tp1, tp2,
+                   quality_score, quality_label, adx, trend_h1, trend_h4,
+                   liquidity_target, final_outcome, mae, mfe, bars_open,
+                   timestamp_setup
+            FROM trb_signals
             ORDER BY timestamp_setup DESC LIMIT {limit}
         """)
     except sqlite3.OperationalError:
@@ -114,8 +162,7 @@ def load_v41p1_signals(conn):
             "mae": r[3] or 0, "mfe": r[4] or 0,
             "tp1_hit": bool(r[5]), "tp2_hit": bool(r[6]),
             "trigger": trigger, "quality": r[8],
-            "em": r[9], "liquidity_target": r[10] or "N/A",
-            "ts": r[11],
+            "em": r[9], "liquidity_target": r[10] or "N/A", "ts": r[11],
         })
     return result
 
@@ -139,6 +186,26 @@ def stats_el(rows):
         "avg_mfe":  round(sum(r["mfe"]       for r in rows)/n, 1),
         "avg_rr":   round(sum(r["rr"]        for r in rows)/n, 2),
         "avg_bars": round(sum(r["bars_open"] for r in rows)/n, 1),
+    }
+
+
+def stats_trb(rows):
+    n = len(rows)
+    if n == 0:
+        return {"n":0,"win":0,"tp1":0,"tp2":0,"sl":0,"exp_r":0,"avg_mae":0,"avg_mfe":0,"avg_adx":0}
+    wins = sum(1 for r in rows if r["outcome"] in ("TP1_HIT","TP2_HIT"))
+    tp2  = sum(1 for r in rows if r["outcome"] == "TP2_HIT")
+    sls  = sum(1 for r in rows if r["outcome"] == "SL_HIT")
+    adxs = [r["adx"] for r in rows if r["adx"] > 0]
+    return {
+        "n":       n,
+        "win":     round(wins/n*100, 1),
+        "tp2":     round(tp2/n*100,  1),
+        "sl":      round(sls/n*100,  1),
+        "exp_r":   round((wins*2-sls)/n, 2),
+        "avg_mae": round(sum(r["mae"] for r in rows)/n, 1),
+        "avg_mfe": round(sum(r["mfe"] for r in rows)/n, 1),
+        "avg_adx": round(sum(adxs)/len(adxs), 1) if adxs else 0,
     }
 
 
@@ -176,7 +243,7 @@ CSS = """
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
 :root{
   --bg:#0d0f14;--surface:#141720;--border:#1e2330;
-  --accent:#4fffb0;--accent2:#ff6b6b;--accent3:#ffd166;
+  --accent:#4fffb0;--accent2:#ff6b6b;--accent3:#ffd166;--accent4:#a78bfa;
   --text:#e2e8f0;--dim:#5a6478;--buy:#4fffb0;--sell:#ff6b6b;
 }
 *{box-sizing:border-box;margin:0;padding:0}
@@ -189,9 +256,11 @@ header a{color:var(--accent);text-decoration:none;font-family:'IBM Plex Mono',mo
 .fw-header{padding:14px 20px;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
 .fw-tag{font-size:10px;padding:2px 8px;border-radius:4px;font-weight:600}
 .tag-active{background:rgba(79,255,176,.15);color:var(--buy)}
+.tag-active-purple{background:rgba(167,139,250,.15);color:var(--accent4)}
 .tag-benchmark{background:rgba(90,100,120,.2);color:var(--dim)}
 .summary-grid{display:grid;gap:1px;background:var(--border)}
 .summary-grid.cols8{grid-template-columns:repeat(8,1fr)}
+.summary-grid.cols6{grid-template-columns:repeat(6,1fr)}
 .summary-grid.cols5{grid-template-columns:repeat(5,1fr)}
 .summary-grid>div{background:var(--surface);padding:14px 8px;text-align:center}
 .big{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600}
@@ -215,8 +284,9 @@ tr.hl td{background:rgba(79,255,176,.06)}
 .b-open{background:rgba(255,209,102,.15);color:var(--accent3)}
 .b-buy{background:rgba(79,255,176,.15);color:var(--buy)}
 .b-sell{background:rgba(255,107,107,.15);color:var(--sell)}
+.b-premium{background:rgba(167,139,250,.15);color:var(--accent4)}
 .empty{text-align:center;padding:24px;color:var(--dim);font-size:13px}
-@media(max-width:900px){.grid-2{grid-template-columns:1fr}.summary-grid.cols8{grid-template-columns:repeat(4,1fr)}.container{padding:12px}}
+@media(max-width:900px){.grid-2{grid-template-columns:1fr}.summary-grid.cols8,.summary-grid.cols6{grid-template-columns:repeat(3,1fr)}.container{padding:12px}}
 """
 
 
@@ -229,7 +299,10 @@ def _empty_row(cols):
 
 
 def outcome_badge(o):
-    cls = {"TP":"b-tp","SL":"b-sl","EXPIRED":"b-exp","OPEN":"b-open"}.get(o,"b-exp")
+    cls = {
+        "TP":"b-tp","SL":"b-sl","EXPIRED":"b-exp","OPEN":"b-open",
+        "TP1_HIT":"b-tp","TP2_HIT":"b-tp","SL_HIT":"b-sl",
+    }.get(o,"b-exp")
     return f'<span class="badge {cls}">{o}</span>'
 
 
@@ -258,14 +331,14 @@ def el_summary_boxes(s):
     wc = "pos" if s["win"]>=40 else ("neg" if s["win"]<25 else "warn")
     ec = "pos" if s["exp_r"]>0 else "neg"
     return f"""<div class="summary-grid cols8" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
-  <div><span class="big">{s['n']}</span><span class="lbl">Segnali chiusi</span></div>
+  <div><span class="big">{s['n']}</span><span class="lbl">Chiusi</span></div>
   <div><span class="big {wc}">{s['win']}%</span><span class="lbl">Win Rate</span></div>
   <div><span class="big neg">{s['sl']}%</span><span class="lbl">SL Rate</span></div>
   <div><span class="big {ec}">{s['exp_r']:+.2f}R</span><span class="lbl">Expectancy</span></div>
   <div><span class="big">{s['avg_rr']:.2f}</span><span class="lbl">Avg R/R</span></div>
   <div><span class="big neg">{s['avg_mae']:.1f}</span><span class="lbl">Avg MAE</span></div>
   <div><span class="big pos">{s['avg_mfe']:.1f}</span><span class="lbl">Avg MFE</span></div>
-  <div><span class="big">{s['avg_bars']:.0f}</span><span class="lbl">Avg Bars M15</span></div>
+  <div><span class="big">{s['avg_bars']:.0f}</span><span class="lbl">Avg Bars</span></div>
 </div>"""
 
 
@@ -297,7 +370,7 @@ def el_perf_table(title, d, keys, key_label):
 
 def el_recent_table(rows):
     if not rows:
-        return '<div class="card"><div class="empty">Nessun segnale ancora — il primo arriverà quando il trend H1 si definisce.</div></div>'
+        return '<div class="card"><div class="empty">Nessun segnale ancora.</div></div>'
     body = ""
     for r in rows:
         sid,asset,direction,entry,sl,tp,rr,qs,ql,sess,ref,liq,trend,outcome,mae,mfe,bars,ts = r
@@ -342,10 +415,7 @@ def section_edge_lab(rows, recent):
 
     no_data = "" if rows else """<div class="card" style="border-color:var(--accent3)">
   <div class="ch" style="color:var(--accent3)">In attesa del primo segnale</div>
-  <div style="padding:16px;color:var(--dim)">
-    OTE-SC entra quando H1 è BULLISH o BEARISH e il prezzo tocca la zona OTE.
-    Il sistema sta scansionando ogni 5 minuti.
-  </div>
+  <div style="padding:16px;color:var(--dim)">OTE-SC entra quando H1 è BULLISH o BEARISH e il prezzo tocca la zona OTE.</div>
 </div>"""
 
     return f"""
@@ -373,13 +443,139 @@ def section_edge_lab(rows, recent):
 </div>"""
 
 
+# ── TRB ──────────────────────────────────────────────────────
+
+def trb_summary_boxes(s):
+    wc = "pos" if s["win"]>=40 else ("neg" if s["win"]<25 else "warn")
+    ec = "pos" if s["exp_r"]>0 else "neg"
+    return f"""<div class="summary-grid cols6" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
+  <div><span class="big">{s['n']}</span><span class="lbl">Chiusi</span></div>
+  <div><span class="big {wc}">{s['win']}%</span><span class="lbl">Win Rate</span></div>
+  <div><span class="big">{s['tp2']}%</span><span class="lbl">TP2 Hit</span></div>
+  <div><span class="big neg">{s['sl']}%</span><span class="lbl">SL Rate</span></div>
+  <div><span class="big {ec}">{s['exp_r']:+.2f}R</span><span class="lbl">Expectancy</span></div>
+  <div><span class="big">{s['avg_adx']:.1f}</span><span class="lbl">Avg ADX</span></div>
+</div>"""
+
+
+def trb_perf_table(title, d, keys, key_label):
+    body = ""
+    for k in keys:
+        v = d.get(k, stats_trb([]))
+        if v["n"] == 0: continue
+        wc = "pos" if v["win"]>=40 else ("neg" if v["win"]<25 else "warn")
+        ec = "pos" if v["exp_r"]>0 else "neg"
+        body += f"""<tr>
+  <td><strong>{k}</strong></td>
+  <td class="mono">{v['n']}</td>
+  <td class="mono {wc}">{v['win']}%</td>
+  <td class="mono">{v['tp2']}%</td>
+  <td class="mono {ec}">{v['exp_r']:+.2f}R</td>
+  <td class="mono neg">{v['avg_mae']:.1f}</td>
+  <td class="mono pos">{v['avg_mfe']:.1f}</td>
+</tr>"""
+    if not body: body = _empty_row(7)
+    return f"""<div class="card">
+  <div class="ch">{title}</div>
+  <table><thead><tr>
+    <th>{key_label}</th><th>N</th><th>Win%</th><th>TP2%</th>
+    <th>Expectancy</th><th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody>{body}</tbody></table>
+</div>"""
+
+
+def trb_recent_table(rows):
+    if not rows:
+        return '<div class="card"><div class="empty">Nessun segnale ancora — in attesa di pullback verso EMA20 H1.</div></div>'
+    body = ""
+    for r in rows:
+        sid,asset,direction,entry,sl,tp1,tp2,qs,ql,adx,h1,h4,target,outcome,mae,mfe,bars,ts = r
+        oc = {
+            "TP1_HIT":"b-tp","TP2_HIT":"b-tp","SL_HIT":"b-sl",
+            "EXPIRED":"b-exp","OPEN":"b-open",
+        }.get(outcome,"b-exp")
+        ql_cls = {"HIGH":"","MEDIUM":"warn","PREMIUM":"b-premium"}.get(ql,"")
+        body += f"""<tr>
+  <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(ts)}</td>
+  <td><strong>{asset.replace('_USDT','')}</strong></td>
+  <td>{direction_badge(direction)}</td>
+  <td class="mono">{fmt_p(entry)}</td>
+  <td class="mono">{fmt_p(sl)}</td>
+  <td class="mono">{fmt_p(tp1)}</td>
+  <td class="mono">{fmt_p(tp2)}</td>
+  <td class="mono" style="color:var(--dim)">{float(adx or 0):.1f}</td>
+  <td style="font-size:12px;color:var(--dim)">{h1 or '—'} / {h4 or '—'}</td>
+  <td style="font-size:12px;color:var(--dim)">{target or '—'}</td>
+  <td><span class="badge {oc}">{outcome}</span></td>
+</tr>"""
+    return f"""<div class="card">
+  <div class="ch">Segnali Recenti TRB</div>
+  <table><thead><tr>
+    <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP1</th><th>TP2</th>
+    <th>ADX</th><th>H1/H4</th><th>Target</th><th>Esito</th>
+  </tr></thead><tbody>{body}</tbody></table>
+</div>"""
+
+
+def section_trb(rows, recent):
+    s = stats_trb(rows)
+    asset_keys   = ["BTC_USDT","PAXG_USDT"]
+    dir_keys     = ["BUY","SELL"]
+    sess_keys    = ["ASIA","LONDON","NEW_YORK"]
+    quality_keys = ["PREMIUM","HIGH","MEDIUM"]
+    h1_keys      = ["BULLISH","BEARISH"]
+
+    bd_asset   = breakdown(rows, lambda r: r["asset"],         asset_keys,   stats_trb)
+    bd_dir     = breakdown(rows, lambda r: r["direction"],     dir_keys,     stats_trb)
+    bd_sess    = breakdown(rows, lambda r: r["session"],       sess_keys,    stats_trb)
+    bd_quality = breakdown(rows, lambda r: r["quality_label"], quality_keys, stats_trb)
+    bd_h1      = breakdown(rows, lambda r: r["trend_h1"],      h1_keys,      stats_trb)
+
+    # ADX bucket
+    def adx_bucket(r):
+        adx = r["adx"]
+        if adx >= 30: return "ADX>30"
+        if adx >= 25: return "ADX 25-30"
+        return "ADX 20-25"
+    bd_adx = breakdown(rows, adx_bucket, ["ADX>30","ADX 25-30","ADX 20-25"], stats_trb)
+
+    no_data = "" if rows else """<div class="card" style="border-color:var(--accent4)">
+  <div class="ch" style="color:var(--accent4)">In attesa del primo segnale</div>
+  <div style="padding:16px;color:var(--dim)">TRB entra quando EMA20 > EMA50 H1 (BUY) o EMA20 < EMA50 H1 (SELL), ADX > 20 e il prezzo fa pullback verso EMA20.</div>
+</div>"""
+
+    return f"""
+<div class="card" style="border-top:2px solid var(--accent4)">
+  <div class="fw-header" style="color:var(--accent4)">
+    🎯 NMC Trend Rider Balanced v1.0
+    <span class="fw-tag tag-active-purple">ATTIVO</span>
+    <span style="color:var(--dim);font-size:11px;margin-left:auto">BTC_USDT · PAXG_USDT</span>
+  </div>
+  {trb_summary_boxes(s)}
+  {no_data}
+  <div class="grid-2">
+    {trb_perf_table("Per Asset", bd_asset, asset_keys, "Asset")}
+    {trb_perf_table("Per Direzione", bd_dir, dir_keys, "Dir")}
+  </div>
+  <div class="grid-2">
+    {trb_perf_table("Per Quality Label", bd_quality, quality_keys, "Quality")}
+    {trb_perf_table("Per Sessione", bd_sess, sess_keys, "Sessione")}
+  </div>
+  <div class="grid-2">
+    {trb_perf_table("Per Trend H1", bd_h1, h1_keys, "Trend H1")}
+    {trb_perf_table("Per ADX Bucket", bd_adx, ["ADX>30","ADX 25-30","ADX 20-25"], "ADX")}
+  </div>
+  {trb_recent_table(recent)}
+</div>"""
+
+
 # ── V4.1 Phase 1 ─────────────────────────────────────────────
 
 def v41_summary_boxes(s, color):
     wc = "pos" if s["win"]>=30 else "neg"
     ec = "pos" if s["exp_r"]>0 else "neg"
     return f"""<div class="summary-grid cols5" style="border:1px solid var(--border);border-top:2px solid {color};border-radius:6px;overflow:hidden;margin-bottom:16px">
-  <div><span class="big">{s['n']}</span><span class="lbl">Segnali chiusi</span></div>
+  <div><span class="big">{s['n']}</span><span class="lbl">Chiusi</span></div>
   <div><span class="big {wc}">{s['win']}%</span><span class="lbl">Win Rate</span></div>
   <div><span class="big">{s['tp1']}%</span><span class="lbl">TP1 Hit</span></div>
   <div><span class="big {ec}">{s['exp_r']:+.2f}R</span><span class="lbl">Expectancy</span></div>
@@ -442,6 +638,8 @@ def generate():
     conn = sqlite3.connect(DB_PATH)
     el_rows    = load_el_signals(conn)
     el_recent  = load_el_recent(conn, 20)
+    trb_rows   = load_trb_signals(conn)
+    trb_recent = load_trb_recent(conn, 20)
     v41p1_rows = load_v41p1_signals(conn)
     conn.close()
 
@@ -469,6 +667,14 @@ def generate():
 
   <div class="section-divider">
     <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">
+      Strategie Attive
+    </span>
+  </div>
+
+  {section_trb(trb_rows, trb_recent)}
+
+  <div class="section-divider">
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">
       Benchmark Storico
     </span>
   </div>
@@ -485,7 +691,7 @@ def generate():
 
     print(
         f"Analytics dashboard generata: {OUT_PATH} "
-        f"(Edge Lab: {len(el_rows)} chiusi | V4.1P1: {len(v41p1_rows)})"
+        f"(Edge Lab: {len(el_rows)} chiusi | TRB: {len(trb_rows)} chiusi | V4.1P1: {len(v41p1_rows)})"
     )
 
 
