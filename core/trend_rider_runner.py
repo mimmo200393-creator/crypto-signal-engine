@@ -1,0 +1,189 @@
+"""
+core/trend_rider_runner.py
+NMC Trend Rider Balanced — Runner
+
+Per ogni asset (BTC_USDT, PAXG_USDT):
+    1. Carica candele H4/H1 da candles_cache, M15 da v3_candles_cache
+    2. Monitora segnali aperti (TP1/TP2/SL/EXPIRED)
+    3. Genera segnale TRB per BUY e SELL
+    4. Se segnale valido e nessun duplicato → inserisce e notifica
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+
+from storage import db as core_db
+from core import v3_db
+from core import trend_rider_db
+from strategies.edge_lab.trend_rider import generate_trb_signal
+
+logger = logging.getLogger("trend_rider.runner")
+
+TRB_ASSETS      = ["BTC_USDT", "PAXG_USDT"]
+TRB_TIMEFRAMES  = {"H4": "4h", "H1": "1h", "M15": "15m"}
+
+
+def _prepare_dataframes(conn, asset: str, config: dict):
+    limit = config.get("BOOTSTRAP_TARGET_CANDLES", 300)
+
+    df_h4  = core_db.get_candles_df(conn, asset, TRB_TIMEFRAMES["H4"],  limit=limit)
+    df_h1  = core_db.get_candles_df(conn, asset, TRB_TIMEFRAMES["H1"],  limit=limit)
+    df_m15 = v3_db.get_v3_candles_df(conn, asset, TRB_TIMEFRAMES["M15"], limit=limit)
+
+    return df_h4, df_h1, df_m15
+
+
+def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: datetime):
+    logger.info("TRB Runner: inizio ciclo per %s", asset)
+
+    df_h4, df_h1, df_m15 = _prepare_dataframes(conn, asset, config)
+
+    if len(df_h1) < 60 or len(df_m15) < 25:
+        logger.warning(
+            "TRB Runner [%s]: dati insufficienti (h1=%d m15=%d), skip.",
+            asset, len(df_h1), len(df_m15),
+        )
+        return
+
+    # ── Monitoraggio segnali aperti ──────────────────────────
+    try:
+        last_m15 = df_m15.iloc[-1]
+        updated  = trend_rider_db.monitor_open_trb_signals(
+            conn, asset,
+            current_high=float(last_m15["high"]),
+            current_low=float(last_m15["low"]),
+            now_iso=now.isoformat(),
+        )
+        for upd in updated:
+            logger.info(
+                "TRB Monitor [%s]: %s → outcome=%s bars=%d",
+                asset, upd["signal_id"][:8], upd["outcome"], upd["bars_open"],
+            )
+    except Exception as e:
+        logger.error("TRB Monitor [%s]: errore: %s", asset, e)
+
+    # ── Genera segnale BUY e SELL ────────────────────────────
+    for direction in ("BUY", "SELL"):
+
+        if trend_rider_db.has_open_trb_signal(conn, asset, direction):
+            logger.debug("TRB [%s %s]: segnale OPEN già presente, skip.", asset, direction)
+            continue
+
+        if trend_rider_db.has_recent_trb_signal(conn, asset, direction, hours=2):
+            logger.info("TRB [%s %s]: segnale già generato nelle ultime 2h, skip.", asset, direction)
+            continue
+
+        try:
+            result = generate_trb_signal(market_ctx, df_h4, df_h1, df_m15, direction)
+        except Exception as e:
+            logger.error("TRB [%s %s]: errore generazione: %s", asset, direction, e)
+            continue
+
+        signal = result["signal"]
+        diag   = result["diagnostics"]
+
+        if signal is None:
+            logger.info(
+                "TRB [%s %s]: no signal — %s",
+                asset, direction, diag.get("rejection", "UNKNOWN"),
+            )
+            continue
+
+        try:
+            signal_id = trend_rider_db.insert_trb_signal(conn, signal)
+        except Exception as e:
+            logger.error("TRB [%s %s]: errore inserimento: %s", asset, direction, e)
+            continue
+
+        logger.info(
+            "TRB [%s %s]: SEGNALE entry=%.4f sl=%.4f tp1=%.4f tp2=%.4f "
+            "score=%d (%s) adx=%.1f (id=%s)",
+            asset, direction,
+            signal["entry"], signal["stop_loss"], signal["tp1"], signal["tp2"],
+            signal["quality_score"], signal["quality_label"],
+            signal["adx"], signal_id,
+        )
+
+        _notify(signal, config)
+
+
+def _notify(signal: dict, config: dict):
+    """Invia notifiche Telegram e ntfy. Solo MEDIUM, HIGH, PREMIUM."""
+    try:
+        from notifications import telegram_bot, ntfy_bot
+
+        quality = signal["quality_label"]
+        if quality == "LOW":
+            return
+
+        direction = signal["direction"]
+        asset     = signal["asset"]
+        emoji     = "🟢" if direction == "BUY" else "🔴"
+
+        def fp(v):
+            if v is None: return "N/A"
+            return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
+
+        text = (
+            f"{emoji} *TREND RIDER BALANCED v1.0*\n\n"
+            f"*{asset.replace('_',' ')}* — {direction}\n\n"
+            f"Score: *{signal['quality_score']}* ({quality})\n"
+            f"Trend H1: {signal['trend_h1']} | H4: {signal.get('trend_h4','N/A')}\n"
+            f"ADX: {signal['adx']:.1f} | Pullback: ✓\n\n"
+            f"Entry:  `{fp(signal['entry'])}`\n"
+            f"SL:     `{fp(signal['stop_loss'])}`\n"
+            f"TP1:    `{fp(signal['tp1'])}` (1R)\n"
+            f"TP2:    `{fp(signal['tp2'])}` ({signal.get('rr2',0):.2f}R)\n\n"
+            f"Target: {signal.get('liquidity_target','N/A')}\n"
+            f"Session: {signal.get('session','N/A')}"
+        )
+
+        if signal.get("new_24h_extreme"):
+            text += "\n🚀 Nuovo estremo 24h"
+
+        bot_token  = config.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id    = config.get("TELEGRAM_CHAT_ID", "")
+        ntfy_topic = config.get("NTFY_TOPIC", "")
+
+        if bot_token and chat_id:
+            telegram_bot.send_message(bot_token, chat_id, text)
+
+        if ntfy_topic:
+            title = f"TRB {asset.replace('_',' ')} {direction} | {quality} {signal['quality_score']}"
+            plain = text.replace("*","").replace("`","")
+            ntfy_bot.send_message(ntfy_topic, title, plain)
+
+    except Exception as e:
+        logger.warning("TRB _notify: errore: %s", e)
+
+
+def run_trb_scan(config: dict, market_contexts: dict):
+    """
+    Entry point principale.
+
+    Args:
+        config:          config.yaml
+        market_contexts: dict {asset: market_ctx} già calcolati da Edge Lab runner
+    """
+    conn = core_db.get_connection(config["DB_PATH"])
+    trend_rider_db.init_trb_schema(conn)
+
+    now    = datetime.now(timezone.utc)
+    assets = config.get("EDGE_LAB", {}).get("assets", TRB_ASSETS)
+
+    logger.info("=== TRB Scanner: inizio ciclo (%s) ===", ", ".join(assets))
+
+    for asset in assets:
+        market_ctx = market_contexts.get(asset)
+        if market_ctx is None:
+            logger.warning("TRB [%s]: market context non disponibile, skip.", asset)
+            continue
+        try:
+            _run_for_asset(conn, asset, config, market_ctx, now)
+        except Exception as e:
+            logger.error("TRB [%s]: errore non gestito: %s", asset, e)
+
+    conn.close()
+    logger.info("=== TRB Scanner: fine ciclo ===")
