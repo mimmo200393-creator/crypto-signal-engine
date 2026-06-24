@@ -4,7 +4,8 @@ Crypto Signal Engine — Homepage Operativa
 
 Mostra lo stato in tempo reale di:
     - Edge Lab OTE-SC (segnali aperti + ultimi chiusi)
-    - V4.1 Phase 1 Money Flow (benchmark attivo, segnali aperti)
+    - NMC Trend Rider Balanced v1.0 (segnali aperti)
+    - V4.1 Phase 1 Money Flow (benchmark, segnali aperti)
 
 Genera docs/unified_dashboard.html
 """
@@ -23,7 +24,7 @@ def q(conn, sql, params=()):
 
 
 # ============================================================
-# Data loading
+# Data loading — OTE-SC
 # ============================================================
 
 def load_el_open(conn):
@@ -56,26 +57,12 @@ def load_el_open(conn):
         except Exception:
             flags = []
         result.append({
-            "signal_id":   r[0],
-            "asset":       r[1],
-            "direction":   r[2],
-            "entry":       r[3],
-            "sl":          r[4],
-            "tp":          r[5],
-            "rr":          r[6],
-            "qs":          r[7],
-            "ql":          r[8],
-            "session":     r[9],
-            "ref_session": r[10],
-            "target":      r[11],
-            "trend":       r[12],
-            "mae":         r[13],
-            "mfe":         r[14],
-            "bars_open":   r[15],
-            "bars_pct":    bars_pct,
-            "flags":       flags,
-            "ts":          r[17],
-            "elapsed_h":   elapsed_h,
+            "signal_id": r[0], "asset": r[1], "direction": r[2],
+            "entry": r[3], "sl": r[4], "tp": r[5], "rr": r[6],
+            "qs": r[7], "ql": r[8], "session": r[9], "ref_session": r[10],
+            "target": r[11], "trend": r[12], "mae": r[13], "mfe": r[14],
+            "bars_open": r[15], "bars_pct": bars_pct, "flags": flags,
+            "ts": r[17], "elapsed_h": elapsed_h,
         })
     return result
 
@@ -98,12 +85,11 @@ def load_el_stats(conn):
     try:
         rows = q(conn, """
             SELECT final_outcome, COUNT(*) as n
-            FROM edge_lab_signals
-            WHERE final_outcome != 'OPEN'
+            FROM edge_lab_signals WHERE final_outcome != 'OPEN'
             GROUP BY final_outcome
         """)
-        d    = {r[0]: r[1] for r in rows}
-        n    = sum(d.values())
+        d = {r[0]: r[1] for r in rows}
+        n = sum(d.values())
         wins = d.get("TP", 0)
         sls  = d.get("SL", 0)
         return {
@@ -115,6 +101,70 @@ def load_el_stats(conn):
     except sqlite3.OperationalError:
         return {"n": 0, "open": 0, "win": 0, "exp_r": 0}
 
+
+# ============================================================
+# Data loading — TRB
+# ============================================================
+
+def load_trb_open(conn):
+    try:
+        rows = q(conn, """
+            SELECT asset, direction, entry, stop_loss, tp1, tp2,
+                   quality_label, quality_score, adx,
+                   mae, mfe, tp1_hit, liquidity_target,
+                   trend_h1, trend_h4, session, timestamp_setup
+            FROM trb_signals WHERE final_outcome = 'OPEN'
+            ORDER BY timestamp_setup DESC
+        """)
+    except sqlite3.OperationalError:
+        return []
+    now = datetime.now(timezone.utc)
+    result = []
+    for r in rows:
+        try:
+            setup_dt = datetime.fromisoformat(r[16])
+            if setup_dt.tzinfo is None:
+                setup_dt = setup_dt.replace(tzinfo=timezone.utc)
+            elapsed_h = round((now - setup_dt).total_seconds() / 3600, 1)
+        except Exception:
+            elapsed_h = 0
+        result.append({
+            "asset": r[0], "direction": r[1], "entry": r[2],
+            "sl": r[3], "tp1": r[4], "tp2": r[5],
+            "ql": r[6], "qs": r[7], "adx": r[8],
+            "mae": r[9], "mfe": r[10], "tp1_hit": bool(r[11]),
+            "target": r[12] or "N/A",
+            "trend_h1": r[13], "trend_h4": r[14],
+            "session": r[15], "elapsed_h": elapsed_h,
+            "ts": r[16],
+        })
+    return result
+
+
+def load_trb_stats(conn):
+    try:
+        rows = q(conn, """
+            SELECT final_outcome, COUNT(*) FROM trb_signals
+            WHERE final_outcome != 'OPEN' GROUP BY final_outcome
+        """)
+        d    = {r[0]: r[1] for r in rows}
+        n    = sum(d.values())
+        wins = d.get("TP2_HIT", 0) + d.get("TP1_HIT", 0)
+        sls  = d.get("SL_HIT", 0)
+        opn  = q(conn, "SELECT COUNT(*) FROM trb_signals WHERE final_outcome='OPEN'")[0][0]
+        return {
+            "n":     n,
+            "open":  opn,
+            "win":   round(wins/n*100, 1) if n > 0 else 0,
+            "exp_r": round((wins*2-sls)/n, 2) if n > 0 else 0,
+        }
+    except sqlite3.OperationalError:
+        return {"n": 0, "open": 0, "win": 0, "exp_r": 0}
+
+
+# ============================================================
+# Data loading — V4.1 Phase 1
+# ============================================================
 
 def load_v41p1_open(conn):
     try:
@@ -161,8 +211,7 @@ def load_v41p1_stats(conn):
         sls  = q(conn, "SELECT COUNT(*) FROM v41p1_signals WHERE final_outcome='SL'")[0][0]
         opn  = q(conn, "SELECT COUNT(*) FROM v41p1_signals WHERE final_outcome='OPEN'")[0][0]
         return {
-            "n":     n,
-            "open":  opn,
+            "n": n, "open": opn,
             "win":   round(wins/n*100, 1) if n > 0 else 0,
             "exp_r": round((wins*2-sls)/n, 2) if n > 0 else 0,
         }
@@ -190,7 +239,8 @@ def fmt_ts(ts):
 
 
 def outcome_badge(o):
-    cls = {"TP": "b-tp", "SL": "b-sl", "EXPIRED": "b-exp"}.get(o, "b-exp")
+    cls = {"TP": "b-tp", "SL": "b-sl", "EXPIRED": "b-exp",
+           "TP1_HIT": "b-tp", "TP2_HIT": "b-tp", "SL_HIT": "b-sl"}.get(o, "b-exp")
     return f'<span class="badge {cls}">{o}</span>'
 
 
@@ -199,7 +249,8 @@ def direction_badge(d):
 
 
 def ql_badge(ql):
-    cls = {"HIGH": "b-high", "MEDIUM": "b-med", "LOW": "b-low"}.get(ql, "b-low")
+    cls = {"HIGH": "b-high", "MEDIUM": "b-med", "LOW": "b-low",
+           "PREMIUM": "b-premium"}.get(ql, "b-low")
     return f'<span class="badge {cls}">{ql or "—"}</span>'
 
 
@@ -207,7 +258,7 @@ CSS = """
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
 :root{
   --bg:#0d0f14;--surface:#141720;--border:#1e2330;
-  --accent:#4fffb0;--accent2:#ff6b6b;--accent3:#ffd166;
+  --accent:#4fffb0;--accent2:#ff6b6b;--accent3:#ffd166;--accent4:#a78bfa;
   --text:#e2e8f0;--dim:#5a6478;--buy:#4fffb0;--sell:#ff6b6b;
 }
 *{box-sizing:border-box;margin:0;padding:0}
@@ -219,6 +270,7 @@ header h1{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;l
 .container{max-width:1320px;margin:0 auto;padding:24px 32px}
 .section-title{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;margin:28px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--border)}
 .section-title.el{color:var(--accent)}
+.section-title.trb{color:var(--accent4)}
 .section-title.v41p1{color:var(--accent3);opacity:.8}
 .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:20px}
 .kpi-row>div{background:var(--surface);padding:16px 12px;text-align:center}
@@ -228,6 +280,7 @@ header h1{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;l
 .card{background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px}
 .ch{padding:10px 16px;border-bottom:1px solid var(--border);font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);display:flex;align-items:center;gap:8px}
 .pulse{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent);animation:pulse 2s infinite;flex-shrink:0}
+.pulse-trb{background:var(--accent4)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 table{width:100%;border-collapse:collapse}
 th{font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);padding:9px 14px;text-align:left;border-bottom:1px solid var(--border)}
@@ -244,6 +297,7 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
 .b-high{background:rgba(79,255,176,.15);color:var(--buy)}
 .b-med{background:rgba(255,209,102,.15);color:var(--accent3)}
 .b-low{background:rgba(90,100,120,.2);color:var(--dim)}
+.b-premium{background:rgba(167,139,250,.15);color:var(--accent4)}
 .b-open{background:rgba(255,209,102,.12);color:var(--accent3)}
 .progress-bar{height:3px;background:var(--border);border-radius:2px;margin-top:4px;width:80px}
 .progress-fill{height:3px;background:var(--accent3);border-radius:2px}
@@ -256,6 +310,17 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
 # ============================================================
 # Componenti HTML
 # ============================================================
+
+def kpi_row(s, color):
+    wc = "pos" if s["win"] >= 40 else ("neg" if s["win"] < 25 else "warn")
+    ec = "pos" if s["exp_r"] > 0 else "neg"
+    return f"""<div class="kpi-row" style="border-top:2px solid {color};margin-bottom:16px">
+  <div><span class="big">{s['open']}</span><span class="lbl">Aperti ora</span></div>
+  <div><span class="big">{s['n']}</span><span class="lbl">Chiusi totale</span></div>
+  <div><span class="big {wc}">{s['win']}%</span><span class="lbl">Win Rate</span></div>
+  <div><span class="big {ec}">{s['exp_r']:+.2f}R</span><span class="lbl">Expectancy</span></div>
+</div>"""
+
 
 def el_open_table(rows):
     if not rows:
@@ -296,7 +361,7 @@ def el_open_table(rows):
   <div class="ch"><span class="pulse"></span>Segnali Aperti — OTE-SC ({len(rows)})</div>
   <div style="overflow-x:auto"><table><thead><tr>
     <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP</th>
-    <th>R/R</th><th>Quality</th><th>Sessione → Ref</th><th>MAE</th><th>MFE</th><th>Bars / Flag</th>
+    <th>R/R</th><th>Quality</th><th>Sessione → Ref</th><th>MAE</th><th>MFE</th><th>Bars</th>
   </tr></thead><tbody>{body}</tbody></table></div>
 </div>"""
 
@@ -305,9 +370,7 @@ def el_closed_table(rows):
     if not rows:
         return """<div class="card">
   <div class="ch">Ultimi Segnali Chiusi — OTE-SC</div>
-  <table><tbody><tr class="empty-row"><td colspan="12">
-    Nessun segnale chiuso ancora.
-  </td></tr></tbody></table>
+  <table><tbody><tr class="empty-row"><td colspan="12">Nessun segnale chiuso ancora.</td></tr></tbody></table>
 </div>"""
     body = ""
     for r in rows:
@@ -331,6 +394,42 @@ def el_closed_table(rows):
   <div style="overflow-x:auto"><table><thead><tr>
     <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP</th>
     <th>R/R</th><th>Quality</th><th>Sessione → Ref</th><th>Target</th><th>Esito</th><th>Bars</th>
+  </tr></thead><tbody>{body}</tbody></table></div>
+</div>"""
+
+
+def trb_open_table(rows):
+    if not rows:
+        return """<div class="card">
+  <div class="ch"><span class="pulse pulse-trb"></span>Segnali Aperti — Trend Rider Balanced</div>
+  <table><tbody><tr class="empty-row"><td colspan="11">
+    Nessun segnale aperto. In attesa di pullback verso EMA20 H1.
+  </td></tr></tbody></table>
+</div>"""
+    body = ""
+    for r in rows:
+        asset     = r["asset"].replace("_USDT", "")
+        tp1_badge = '<span class="badge b-tp" style="font-size:10px">TP1✓</span>' if r["tp1_hit"] else ""
+        h4_str    = f"H4:{r['trend_h4']}" if r["trend_h4"] else ""
+        body += f"""<tr>
+  <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(r['ts'])}</td>
+  <td><strong>{asset}</strong></td>
+  <td>{direction_badge(r['direction'])}</td>
+  <td class="mono">{fp(r['entry'])}</td>
+  <td class="mono neg">{fp(r['sl'])}</td>
+  <td class="mono">{fp(r['tp1'])} {tp1_badge}</td>
+  <td class="mono">{fp(r['tp2'])}</td>
+  <td>{ql_badge(r['ql'])} <span style="color:var(--dim);font-size:11px">{r['qs']}</span></td>
+  <td class="mono" style="color:var(--dim)">{r['adx']:.1f if r['adx'] else '—'}</td>
+  <td style="font-size:12px;color:var(--dim)">{r['trend_h1']} {h4_str}</td>
+  <td style="font-size:12px;color:var(--dim)">{r['target']}</td>
+  <td class="mono" style="color:var(--dim)">{r['elapsed_h']}h</td>
+</tr>"""
+    return f"""<div class="card">
+  <div class="ch"><span class="pulse pulse-trb"></span>Segnali Aperti — Trend Rider Balanced ({len(rows)})</div>
+  <div style="overflow-x:auto"><table><thead><tr>
+    <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP1</th><th>TP2</th>
+    <th>Quality</th><th>ADX</th><th>Trend</th><th>Target</th><th>Aperto</th>
   </tr></thead><tbody>{body}</tbody></table></div>
 </div>"""
 
@@ -367,17 +466,6 @@ def v41p1_open_table(rows):
 </div>"""
 
 
-def kpi_row(s, color):
-    wc = "pos" if s["win"] >= 40 else ("neg" if s["win"] < 25 else "warn")
-    ec = "pos" if s["exp_r"] > 0 else "neg"
-    return f"""<div class="kpi-row" style="border-top:2px solid {color};margin-bottom:16px">
-  <div><span class="big">{s['open']}</span><span class="lbl">Aperti ora</span></div>
-  <div><span class="big">{s['n']}</span><span class="lbl">Chiusi totale</span></div>
-  <div><span class="big {wc}">{s['win']}%</span><span class="lbl">Win Rate</span></div>
-  <div><span class="big {ec}">{s['exp_r']:+.2f}R</span><span class="lbl">Expectancy</span></div>
-</div>"""
-
-
 # ============================================================
 # Generate
 # ============================================================
@@ -385,9 +473,11 @@ def kpi_row(s, color):
 def generate():
     conn = sqlite3.connect(DB_PATH)
 
-    el_open    = load_el_open(conn)
-    el_closed  = load_el_recent_closed(conn, 10)
-    el_stats   = load_el_stats(conn)
+    el_open     = load_el_open(conn)
+    el_closed   = load_el_recent_closed(conn, 10)
+    el_stats    = load_el_stats(conn)
+    trb_open    = load_trb_open(conn)
+    trb_stats   = load_trb_stats(conn)
     v41p1_open  = load_v41p1_open(conn)
     v41p1_stats = load_v41p1_stats(conn)
 
@@ -420,6 +510,12 @@ def generate():
 
   <div class="divider"></div>
 
+  <div class="section-title trb">🎯 NMC Trend Rider Balanced v1.0</div>
+  {kpi_row(trb_stats, "var(--accent4)")}
+  {trb_open_table(trb_open)}
+
+  <div class="divider"></div>
+
   <div class="section-title v41p1">V4.1 Phase 1 — Money Flow Benchmark</div>
   {kpi_row(v41p1_stats, "var(--accent3)")}
   {v41p1_open_table(v41p1_open)}
@@ -434,6 +530,7 @@ def generate():
     print(
         f"Dashboard unificata generata: {OUT_PATH} "
         f"(EL aperti={el_stats['open']} chiusi={el_stats['n']} | "
+        f"TRB aperti={trb_stats['open']} chiusi={trb_stats['n']} | "
         f"V4.1P1 aperti={v41p1_stats['open']} chiusi={v41p1_stats['n']})"
     )
 
