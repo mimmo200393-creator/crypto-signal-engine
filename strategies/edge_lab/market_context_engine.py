@@ -157,6 +157,8 @@ def build_market_context(
 
     if fib_buy:
         logger.info("%s | %s", asset, format_fibonacci_summary(fib_buy, current_price))
+    if fib_sell:
+        logger.info("%s | %s", asset, format_fibonacci_summary(fib_sell, current_price))
 
     # ── Step 4: Liquidity Engine ─────────────────────────────
     liq_map = _safe(build_el_liquidity_map, df_h4, df_d1, df_m15, current_price, now)
