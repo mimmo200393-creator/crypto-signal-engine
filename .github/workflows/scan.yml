@@ -21,23 +21,32 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Cleanup Edge Lab (ONE TIME - RIMUOVERE DOPO)
+        run: |
+          python3 -c "
+          import sqlite3, os
+          db = os.environ.get('DB_PATH', 'data/signals.db')
+          conn = sqlite3.connect(db)
+          n1 = conn.execute('DELETE FROM edge_lab_signals').rowcount
+          n2 = conn.execute('DELETE FROM market_context_snapshots').rowcount
+          conn.commit()
+          conn.close()
+          print(f'Cleanup completato: {n1} segnali edge_lab eliminati, {n2} snapshot eliminati')
+          "
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-
       - name: Install dependencies
         run: pip install -r requirements.txt --break-system-packages || pip install -r requirements.txt
-
       - name: Fetch candele H4/H1 (BTC_USDT + PAXG_USDT)
         run: python3 candles_runner.py
-
       - name: Daily Brief (08:00 UTC)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -49,35 +58,30 @@ jobs:
           if [ "$HOUR" = "08" ] && [ "$MINUTE" -lt "20" ]; then
             python3 daily_brief_runner.py
           fi
-
       - name: Fetch candele M15/D1 (BTC_USDT + PAXG_USDT)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 v3_scanner_runner.py
-
       - name: Institutional Scanner V4.1 Intraday Wave (PAXG_USDT + BTC_USDT)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 v41_scanner_runner.py
-
       - name: Institutional Scanner V4.1 Phase 1 (PAXG_USDT + BTC_USDT)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 v41p1_scanner_runner.py
-
       - name: Institutional Edge Lab — OTE-SC (BTC_USDT + PAXG_USDT)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 edge_lab_runner.py
-
       - name: Commit database e dashboard
         run: |
           git config user.name "signal-engine-bot"
@@ -92,7 +96,7 @@ jobs:
                     docs/unified_dashboard.html \
                     docs/analytics_dashboard.html
             git commit -m "Scanner + Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            git push
+            git pull --rebase origin main && git push
           else
             echo "DB non cambiato, nessun commit"
           fi
