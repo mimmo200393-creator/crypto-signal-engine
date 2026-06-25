@@ -63,7 +63,7 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
         logger.warning("Edge Lab [%s]: dati insufficienti, skip.", asset)
         return
 
-    # Monitoraggio OTE-SC
+    # ── Monitoraggio OTE-SC ──────────────────────────────────
     try:
         last_m15 = df_m15.iloc[-1]
         updated  = edge_lab_db.monitor_open_el_signals(
@@ -80,7 +80,7 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
     except Exception as e:
         logger.error("Edge Lab Monitor [%s]: errore: %s", asset, e)
 
-    # Market Context
+    # ── Market Context ───────────────────────────────────────
     try:
         market_ctx = build_market_context(
             asset=asset,
@@ -100,7 +100,7 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
     # Salva context per TRB
     market_contexts[asset] = market_ctx
 
-    # OTE-SC
+    # ── OTE-SC ──────────────────────────────────────────────
     if not market_ctx.get("is_tradeable", False):
         logger.info(
             "Edge Lab [%s]: market NOT tradeable — blocks=%s",
@@ -108,12 +108,13 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
         )
     else:
         for direction in ("BUY", "SELL"):
+
+            # Check 1: segnale già OPEN
             if edge_lab_db.has_open_el_signal(conn, asset, direction, "OTE-SC"):
-                continue
-            if edge_lab_db.has_recent_el_signal(conn, asset, direction, "OTE-SC", hours=2):
-                logger.info("Edge Lab [%s %s]: segnale recente 2h, skip.", asset, direction)
+                logger.debug("Edge Lab [%s %s]: segnale OPEN già presente, skip.", asset, direction)
                 continue
 
+            # Genera il segnale — serve la candela di conferma per il check duplicati
             try:
                 result = generate_ote_sc_signal(market_ctx, df_m15, direction)
             except Exception as e:
@@ -125,9 +126,22 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
 
             if signal is None:
                 logger.info("Edge Lab [%s %s]: no signal — %s",
-                    asset, direction, diag.get("rejection","UNKNOWN"))
+                    asset, direction, diag.get("rejection", "UNKNOWN"))
                 continue
 
+            # Check 2: stessa candela di conferma già usata in precedenza
+            # Una candela di conferma = un solo segnale (prevenzione duplicati strutturali)
+            conf_ts = signal.get("confirmation_candle_ts")
+            if conf_ts and edge_lab_db.has_signal_from_confirmation_candle(
+                conn, asset, direction, conf_ts
+            ):
+                logger.info(
+                    "Edge Lab [%s %s]: SKIP — candela conferma già usata (ts=%d)",
+                    asset, direction, conf_ts,
+                )
+                continue
+
+            # Inserisce il segnale
             try:
                 signal_id = edge_lab_db.insert_el_signal(conn, signal)
             except Exception as e:
@@ -171,9 +185,9 @@ def _notify_otesc(signal: dict, config: dict):
         if signal.get("tradeability_flags"):
             text += f"\n⚠️ {', '.join(signal['tradeability_flags'])}"
 
-        bot_token  = config.get("TELEGRAM_BOT_TOKEN","")
-        chat_id    = config.get("TELEGRAM_CHAT_ID","")
-        ntfy_topic = config.get("NTFY_TOPIC","")
+        bot_token  = config.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id    = config.get("TELEGRAM_CHAT_ID", "")
+        ntfy_topic = config.get("NTFY_TOPIC", "")
 
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
