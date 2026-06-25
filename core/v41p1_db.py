@@ -14,10 +14,8 @@ from typing import Optional
 
 def init_v41p1_schema(conn: sqlite3.Connection,
                        schema_path: str = "storage/v41p1_schema.sql"):
-    with open(schema_path, "r") as f:
-        conn.executescript(f.read())
-
-    # Aggiunge colonne MFM sweep se DB esistente senza di esse
+    # Step 1: aggiunge colonne MFM sweep PRIMA di executescript
+    # (se la tabella esiste già senza queste colonne)
     for col, col_type in [
         ("mfm_sweep_confirmed", "BOOLEAN DEFAULT 0"),
         ("mfm_sweep_level",     "TEXT"),
@@ -28,7 +26,11 @@ def init_v41p1_schema(conn: sqlite3.Connection,
             conn.execute(f"ALTER TABLE v41p1_signals ADD COLUMN {col} {col_type}")
             conn.commit()
         except sqlite3.OperationalError:
-            pass  # colonna già presente
+            pass  # colonna già presente o tabella non esiste ancora
+
+    # Step 2: crea tabelle e indici (IF NOT EXISTS — sicuro su DB esistenti)
+    with open(schema_path, "r") as f:
+        conn.executescript(f.read())
 
     conn.commit()
 
