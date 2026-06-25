@@ -120,6 +120,14 @@ SCORE_MAX = 12
 QUALITY_HIGH_THRESHOLD = 9
 QUALITY_MEDIUM_THRESHOLD = 4
 
+# ============================================================
+# Phase 1.1 — Filtri trend multi-timeframe
+# ============================================================
+# H4 NEUTRAL → no trade (hard gate)
+# H4 + H1 allineati → quality minima = QUALITY_MEDIUM_THRESHOLD (4)
+# H4 + H1 opposti   → quality minima = QUALITY_H1_PULLBACK_THRESHOLD (7)
+QUALITY_H1_PULLBACK_THRESHOLD = 7  # H1 contro H4: pullback valido ma setup più forte
+
 
 # ============================================================
 # EMA Trend
@@ -442,6 +450,11 @@ def generate_v41_signal(market_data: dict) -> dict:
     diagnostics["dow_theory_h4"] = dow_theory_h4
     diagnostics["dominant_h4_structure"] = dominant_h4_structure
 
+    # ── Phase 1.1: Hard gate H4 NEUTRAL ─────────────────────
+    if dominant_h4_structure == "NEUTRAL":
+        diagnostics["rejections"].append("H4_STRUCTURE_NEUTRAL")
+        return {"signal": None, "diagnostics": diagnostics}
+
     bos_direction = None
     if dominant_h4_structure in ("BULLISH", "BEARISH"):
         bos_signal_direction = "BUY" if dominant_h4_structure == "BULLISH" else "SELL"
@@ -538,6 +551,22 @@ def generate_v41_signal(market_data: dict) -> dict:
 
     diagnostics["quality_score"] = score
     diagnostics["quality_label"] = quality_label
+
+    # ── Phase 1.1: Quality minima basata su allineamento H1 ──
+    # H1 allineato con H4 → minimo 4 (MEDIUM)
+    # H1 opposto a H4    → minimo 7 (pullback: richiede setup più forte)
+    h1_aligned_with_h4 = ema_h1_aligned  # True se H1 == structural_direction
+    quality_min = QUALITY_MEDIUM_THRESHOLD if h1_aligned_with_h4 else QUALITY_H1_PULLBACK_THRESHOLD
+
+    diagnostics["h1_aligned_with_h4"] = h1_aligned_with_h4
+    diagnostics["quality_min_required"] = quality_min
+
+    if score < quality_min:
+        reason = "QUALITY_TOO_LOW" if h1_aligned_with_h4 else "QUALITY_TOO_LOW_H1_PULLBACK"
+        diagnostics["rejections"].append(
+            f"{reason} (score={score} < min={quality_min})"
+        )
+        return {"signal": None, "diagnostics": diagnostics}
 
     entry = float(df_m15.iloc[-1]["close"])
 
