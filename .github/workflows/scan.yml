@@ -20,20 +20,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Cleanup Edge Lab (ONE TIME - RIMUOVERE DOPO)
-        run: |
-          python3 -c "
-          import sqlite3, os
-          db = os.environ.get('DB_PATH', 'data/signals.db')
-          conn = sqlite3.connect(db)
-          n1 = conn.execute('DELETE FROM edge_lab_signals').rowcount
-          n2 = conn.execute('DELETE FROM market_context_snapshots').rowcount
-          conn.commit()
-          conn.close()
-          print(f'Cleanup completato: {n1} segnali edge_lab eliminati, {n2} snapshot eliminati')
-          "
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
