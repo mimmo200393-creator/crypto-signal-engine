@@ -16,6 +16,20 @@ def init_v41p1_schema(conn: sqlite3.Connection,
                        schema_path: str = "storage/v41p1_schema.sql"):
     with open(schema_path, "r") as f:
         conn.executescript(f.read())
+
+    # Aggiunge colonne MFM sweep se DB esistente senza di esse
+    for col, col_type in [
+        ("mfm_sweep_confirmed", "BOOLEAN DEFAULT 0"),
+        ("mfm_sweep_level",     "TEXT"),
+        ("mfm_sweep_price",     "REAL"),
+        ("mfm_sweep_priority",  "TEXT"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE v41p1_signals ADD COLUMN {col} {col_type}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # colonna già presente
+
     conn.commit()
 
 
@@ -47,10 +61,12 @@ def insert_v41p1_signal(conn: sqlite3.Connection, signal: dict) -> str:
             ema_h4, ema_h1, dow_theory_h4, momentum, session,
             in_h4_zone, sr_reaction, ote_present,
             ote_entry_low, ote_entry_high,
+            mfm_sweep_confirmed, mfm_sweep_level,
+            mfm_sweep_price, mfm_sweep_priority,
             trader_decision, final_outcome, market_snapshot
         ) VALUES (
             ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-            ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'unknown','OPEN',?
+            ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'unknown','OPEN',?
         )
     """, (
         signal_id,
@@ -100,6 +116,10 @@ def insert_v41p1_signal(conn: sqlite3.Connection, signal: dict) -> str:
         signal.get("ote_present", False),
         signal.get("ote_entry_low"),
         signal.get("ote_entry_high"),
+        bool(signal.get("mfm_sweep_confirmed", False)),
+        signal.get("mfm_sweep_level"),
+        signal.get("mfm_sweep_price"),
+        signal.get("mfm_sweep_priority"),
         snapshot_json,
     ))
     conn.commit()
@@ -139,11 +159,6 @@ def update_v41p1_signal_outcome(conn: sqlite3.Connection, signal_id: str,
 def monitor_open_signals(conn: sqlite3.Connection, asset: str,
                           current_high: float, current_low: float,
                           now_iso: str, expiry_hours: int = 24) -> list:
-    """
-    Monitora i segnali aperti usando high/low dell'ultima candela M15.
-    Logica identica a v41_db.monitor_open_signals con aggiunta di
-    time_to_tp e time_to_sl per le statistiche Phase 1.
-    """
     rows = conn.execute("""
         SELECT signal_id, direction, entry, stop_loss, tp1, tp2,
                mae, mfe, tp1_hit, timestamp_setup
