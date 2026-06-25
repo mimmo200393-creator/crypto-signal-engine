@@ -67,40 +67,41 @@ CREATE INDEX IF NOT EXISTS idx_el_ctx_asset_ts
     ON market_context_snapshots(asset, timestamp_snapshot);
 
 CREATE TABLE IF NOT EXISTS edge_lab_signals (
-    signal_id            TEXT PRIMARY KEY,
-    strategy_name        TEXT NOT NULL,
-    strategy_version     TEXT NOT NULL,
-    asset                TEXT NOT NULL,
-    direction            TEXT NOT NULL CHECK(direction IN ('BUY','SELL')),
-    timestamp_setup      DATETIME NOT NULL,
-    timestamp_closed     DATETIME,
-    entry                REAL NOT NULL,
-    stop_loss            REAL NOT NULL,
-    tp                   REAL,
-    rr                   REAL,
-    ote_low              REAL,
-    ote_high             REAL,
-    liquidity_target          TEXT,
-    liquidity_target_price    REAL,
+    signal_id                TEXT PRIMARY KEY,
+    strategy_name            TEXT NOT NULL,
+    strategy_version         TEXT NOT NULL,
+    asset                    TEXT NOT NULL,
+    direction                TEXT NOT NULL CHECK(direction IN ('BUY','SELL')),
+    timestamp_setup          DATETIME NOT NULL,
+    timestamp_closed         DATETIME,
+    entry                    REAL NOT NULL,
+    stop_loss                REAL NOT NULL,
+    tp                       REAL,
+    rr                       REAL,
+    ote_low                  REAL,
+    ote_high                 REAL,
+    liquidity_target         TEXT,
+    liquidity_target_price   REAL,
     liquidity_target_priority TEXT,
-    liquidity_target_score    REAL,
-    session              TEXT,
-    ref_session          TEXT,
-    trend_h4             TEXT,
-    trend_h1             TEXT,
-    trend_combined       TEXT,
-    vol_regime_m15       TEXT,
-    sr_reaction          BOOLEAN DEFAULT 0,
-    sr_score             REAL,
-    quality_score        INTEGER,
-    quality_label        TEXT CHECK(quality_label IN ('HIGH','MEDIUM','LOW')),
-    tradeability_flags   TEXT,
-    final_outcome        TEXT DEFAULT 'OPEN'
+    liquidity_target_score   REAL,
+    session                  TEXT,
+    ref_session              TEXT,
+    trend_h4                 TEXT,
+    trend_h1                 TEXT,
+    trend_combined           TEXT,
+    vol_regime_m15           TEXT,
+    sr_reaction              BOOLEAN DEFAULT 0,
+    sr_score                 REAL,
+    quality_score            INTEGER,
+    quality_label            TEXT CHECK(quality_label IN ('HIGH','MEDIUM','LOW')),
+    tradeability_flags       TEXT,
+    confirmation_candle_ts   INTEGER,
+    final_outcome            TEXT DEFAULT 'OPEN'
         CHECK(final_outcome IN ('OPEN','TP','SL','EXPIRED')),
-    mae                  REAL,
-    mfe                  REAL,
-    bars_open            INTEGER DEFAULT 0,
-    expiry_bars          INTEGER DEFAULT 96
+    mae                      REAL,
+    mfe                      REAL,
+    bars_open                INTEGER DEFAULT 0,
+    expiry_bars              INTEGER DEFAULT 96
 );
 
 CREATE INDEX IF NOT EXISTS idx_el_signals_asset_outcome
@@ -109,11 +110,19 @@ CREATE INDEX IF NOT EXISTS idx_el_signals_strategy
     ON edge_lab_signals(strategy_name);
 CREATE INDEX IF NOT EXISTS idx_el_signals_timestamp
     ON edge_lab_signals(timestamp_setup);
+CREATE INDEX IF NOT EXISTS idx_el_signals_confirmation_ts
+    ON edge_lab_signals(asset, direction, confirmation_candle_ts);
 """
 
 
 def init_edge_lab_schema(conn: sqlite3.Connection):
     conn.executescript(SCHEMA_SQL)
+    # Aggiunge confirmation_candle_ts se la tabella esiste già senza la colonna
+    try:
+        conn.execute("ALTER TABLE edge_lab_signals ADD COLUMN confirmation_candle_ts INTEGER")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # colonna già presente
     conn.commit()
 
 
@@ -205,9 +214,10 @@ def insert_el_signal(conn: sqlite3.Connection, signal: dict) -> str:
             trend_h4, trend_h1, trend_combined,
             vol_regime_m15, sr_reaction, sr_score,
             quality_score, quality_label,
-            tradeability_flags, final_outcome, expiry_bars
+            tradeability_flags, confirmation_candle_ts,
+            final_outcome, expiry_bars
         ) VALUES (
-            ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+            ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
         )
         """,
         (
@@ -238,12 +248,43 @@ def insert_el_signal(conn: sqlite3.Connection, signal: dict) -> str:
             signal.get("quality_score"),
             signal.get("quality_label"),
             flags_json,
+            signal.get("confirmation_candle_ts"),
             "OPEN",
             signal.get("expiry_bars", 96),
         ),
     )
     conn.commit()
     return signal_id
+
+
+# ============================================================
+# edge_lab_signals — duplicate check per candela conferma
+# ============================================================
+
+def has_signal_from_confirmation_candle(
+    conn: sqlite3.Connection,
+    asset: str,
+    direction: str,
+    confirmation_candle_ts: int,
+) -> bool:
+    """
+    Ritorna True se esiste già un segnale generato dalla stessa
+    candela di conferma (stesso timestamp M15).
+
+    Una candela di conferma = un solo segnale.
+    Previene duplicati strutturali indipendentemente dal tempo.
+    """
+    row = conn.execute(
+        """
+        SELECT 1 FROM edge_lab_signals
+        WHERE asset = ?
+          AND direction = ?
+          AND confirmation_candle_ts = ?
+        LIMIT 1
+        """,
+        (asset, direction, confirmation_candle_ts),
+    ).fetchone()
+    return row is not None
 
 
 # ============================================================
@@ -389,10 +430,9 @@ def has_recent_el_signal(
     hours: int = 2,
 ) -> bool:
     """
-    Ritorna True se esiste già un segnale (OPEN o chiuso) generato
-    nelle ultime N ore con stesso asset, direzione e strategia.
-    Previene la creazione di segnali duplicati quando il setup
-    non è ancora cambiato tra un scan e l'altro.
+    Ritorna True se esiste già un segnale generato nelle ultime N ore
+    con stesso asset, direzione e strategia.
+    Usato come fallback di sicurezza oltre al check per candela.
     """
     cutoff = (
         datetime.now(timezone.utc) - timedelta(hours=hours)
