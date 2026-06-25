@@ -118,15 +118,14 @@ SCORE_SESSION = 1
 SCORE_MAX = 12
 
 QUALITY_HIGH_THRESHOLD = 9
-QUALITY_MEDIUM_THRESHOLD = 4
+QUALITY_MEDIUM_THRESHOLD = 5  # Phase 1.1: alzato da 4 a 5 (dati: +0.27R vs +0.19R)
 
 # ============================================================
-# Phase 1.1 — Filtri trend multi-timeframe
+# Phase 1.1 — Filtri trend
 # ============================================================
 # H4 NEUTRAL → no trade (hard gate)
-# H4 + H1 allineati → quality minima = QUALITY_MEDIUM_THRESHOLD (4)
-# H4 + H1 opposti   → quality minima = QUALITY_H1_PULLBACK_THRESHOLD (7)
-QUALITY_H1_PULLBACK_THRESHOLD = 7  # H1 contro H4: pullback valido ma setup più forte
+# H1 NON è un gate — i dati mostrano che i pullback (H1 opposto)
+# performano meglio di H1 allineato (WR 40.5% vs 31.2%)
 
 
 # ============================================================
@@ -552,19 +551,12 @@ def generate_v41_signal(market_data: dict) -> dict:
     diagnostics["quality_score"] = score
     diagnostics["quality_label"] = quality_label
 
-    # ── Phase 1.1: Quality minima basata su allineamento H1 ──
-    # H1 allineato con H4 → minimo 4 (MEDIUM)
-    # H1 opposto a H4    → minimo 7 (pullback: richiede setup più forte)
-    h1_aligned_with_h4 = ema_h1_aligned  # True se H1 == structural_direction
-    quality_min = QUALITY_MEDIUM_THRESHOLD if h1_aligned_with_h4 else QUALITY_H1_PULLBACK_THRESHOLD
-
-    diagnostics["h1_aligned_with_h4"] = h1_aligned_with_h4
-    diagnostics["quality_min_required"] = quality_min
-
-    if score < quality_min:
-        reason = "QUALITY_TOO_LOW" if h1_aligned_with_h4 else "QUALITY_TOO_LOW_H1_PULLBACK"
+    # ── Phase 1.1: Quality minima >= 5 ──────────────────────
+    # Basato su dati storici: >= 5 → +0.27R expectancy vs +0.19R con >= 4
+    # H1 NON è un gate: i pullback (H1 opposto H4) performano meglio
+    if score < QUALITY_MEDIUM_THRESHOLD:
         diagnostics["rejections"].append(
-            f"{reason} (score={score} < min={quality_min})"
+            f"QUALITY_TOO_LOW (score={score} < min={QUALITY_MEDIUM_THRESHOLD})"
         )
         return {"signal": None, "diagnostics": diagnostics}
 
