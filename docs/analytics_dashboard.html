@@ -58,7 +58,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
 <header>
   <h1>Crypto Signal Engine — Analytics Lab</h1>
   <div class="meta">
-    2026-06-25 10:26 UTC &nbsp;|&nbsp;
+    2026-06-25 10:31 UTC &nbsp;|&nbsp;
     <a href="unified_dashboard.html">&larr; Dashboard</a>
   </div>
 </header>
@@ -381,31 +381,44 @@ tr.hl td{background:rgba(79,255,176,.06)}
     <span style="color:var(--dim);font-size:11px;margin-left:auto">BTC_USDT · PAXG_USDT</span>
   </div>
   <div class="summary-grid cols6" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
-  <div><span class="big">0</span><span class="lbl">Chiusi</span></div>
-  <div><span class="big neg">0%</span><span class="lbl">Win Rate</span></div>
-  <div><span class="big">0%</span><span class="lbl">TP2 Hit</span></div>
-  <div><span class="big neg">0%</span><span class="lbl">SL Rate</span></div>
-  <div><span class="big neg">+0.00R</span><span class="lbl">Expectancy</span></div>
-  <div><span class="big">0.0</span><span class="lbl">Avg ADX</span></div>
+  <div><span class="big">1</span><span class="lbl">Chiusi</span></div>
+  <div><span class="big pos">100.0%</span><span class="lbl">Win Rate</span></div>
+  <div><span class="big">100.0%</span><span class="lbl">TP2 Hit</span></div>
+  <div><span class="big neg">0.0%</span><span class="lbl">SL Rate</span></div>
+  <div><span class="big pos">+2.00R</span><span class="lbl">Expectancy</span></div>
+  <div><span class="big">23.7</span><span class="lbl">Avg ADX</span></div>
 </div>
-  <div class="card" style="border-color:var(--accent4)">
-  <div class="ch" style="color:var(--accent4)">In attesa del primo segnale</div>
-  <div style="padding:16px;color:var(--dim)">TRB entra quando EMA20 > EMA50 H1 (BUY) o EMA20 < EMA50 H1 (SELL), ADX > 20 e il prezzo fa pullback verso EMA20.</div>
-</div>
+  
   <div class="grid-2">
     <div class="card">
   <div class="ch">Per Asset</div>
   <table><thead><tr>
     <th>Asset</th><th>N</th><th>Win%</th><th>TP2%</th>
     <th>Expectancy</th><th>Avg MAE</th><th>Avg MFE</th>
-  </tr></thead><tbody><tr><td colspan="7" class="empty">Nessun dato</td></tr></tbody></table>
+  </tr></thead><tbody><tr>
+  <td><strong>BTC_USDT</strong></td>
+  <td class="mono">1</td>
+  <td class="mono pos">100.0%</td>
+  <td class="mono">100.0%</td>
+  <td class="mono pos">+2.00R</td>
+  <td class="mono neg">0.0</td>
+  <td class="mono pos">214.7</td>
+</tr></tbody></table>
 </div>
     <div class="card">
   <div class="ch">Per Direzione</div>
   <table><thead><tr>
     <th>Dir</th><th>N</th><th>Win%</th><th>TP2%</th>
     <th>Expectancy</th><th>Avg MAE</th><th>Avg MFE</th>
-  </tr></thead><tbody><tr><td colspan="7" class="empty">Nessun dato</td></tr></tbody></table>
+  </tr></thead><tbody><tr>
+  <td><strong>SELL</strong></td>
+  <td class="mono">1</td>
+  <td class="mono pos">100.0%</td>
+  <td class="mono">100.0%</td>
+  <td class="mono pos">+2.00R</td>
+  <td class="mono neg">0.0</td>
+  <td class="mono pos">214.7</td>
+</tr></tbody></table>
 </div>
   </div>
   <div class="grid-2">
@@ -414,14 +427,30 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <table><thead><tr>
     <th>Quality</th><th>N</th><th>Win%</th><th>TP2%</th>
     <th>Expectancy</th><th>Avg MAE</th><th>Avg MFE</th>
-  </tr></thead><tbody><tr><td colspan="7" class="empty">Nessun dato</td></tr></tbody></table>
+  </tr></thead><tbody><tr>
+  <td><strong>PREMIUM</strong></td>
+  <td class="mono">1</td>
+  <td class="mono pos">100.0%</td>
+  <td class="mono">100.0%</td>
+  <td class="mono pos">+2.00R</td>
+  <td class="mono neg">0.0</td>
+  <td class="mono pos">214.7</td>
+</tr></tbody></table>
 </div>
     <div class="card">
   <div class="ch">Per Sessione</div>
   <table><thead><tr>
     <th>Sessione</th><th>N</th><th>Win%</th><th>TP2%</th>
     <th>Expectancy</th><th>Avg MAE</th><th>Avg MFE</th>
-  </tr></thead><tbody><tr><td colspan="7" class="empty">Nessun dato</td></tr></tbody></table>
+  </tr></thead><tbody><tr>
+  <td><strong>LONDON</strong></td>
+  <td class="mono">1</td>
+  <td class="mono pos">100.0%</td>
+  <td class="mono">100.0%</td>
+  <td class="mono pos">+2.00R</td>
+  <td class="mono neg">0.0</td>
+  <td class="mono pos">214.7</td>
+</tr></tbody></table>
 </div>
   </div>
   <div class="grid-2">
@@ -430,14 +459,30 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <table><thead><tr>
     <th>Trend H1</th><th>N</th><th>Win%</th><th>TP2%</th>
     <th>Expectancy</th><th>Avg MAE</th><th>Avg MFE</th>
-  </tr></thead><tbody><tr><td colspan="7" class="empty">Nessun dato</td></tr></tbody></table>
+  </tr></thead><tbody><tr>
+  <td><strong>BEARISH</strong></td>
+  <td class="mono">1</td>
+  <td class="mono pos">100.0%</td>
+  <td class="mono">100.0%</td>
+  <td class="mono pos">+2.00R</td>
+  <td class="mono neg">0.0</td>
+  <td class="mono pos">214.7</td>
+</tr></tbody></table>
 </div>
     <div class="card">
   <div class="ch">Per ADX Bucket</div>
   <table><thead><tr>
     <th>ADX</th><th>N</th><th>Win%</th><th>TP2%</th>
     <th>Expectancy</th><th>Avg MAE</th><th>Avg MFE</th>
-  </tr></thead><tbody><tr><td colspan="7" class="empty">Nessun dato</td></tr></tbody></table>
+  </tr></thead><tbody><tr>
+  <td><strong>ADX 20-25</strong></td>
+  <td class="mono">1</td>
+  <td class="mono pos">100.0%</td>
+  <td class="mono">100.0%</td>
+  <td class="mono pos">+2.00R</td>
+  <td class="mono neg">0.0</td>
+  <td class="mono pos">214.7</td>
+</tr></tbody></table>
 </div>
   </div>
   <div class="card">
@@ -456,7 +501,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono" style="color:var(--dim)">23.7</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH / BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">London Low</td>
-  <td><span class="badge b-open">OPEN</span></td>
+  <td><span class="badge b-tp">TP2_HIT</span></td>
 </tr></tbody></table>
 </div>
 </div>
