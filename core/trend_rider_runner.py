@@ -21,17 +21,15 @@ from strategies.edge_lab.trend_rider import generate_trb_signal
 
 logger = logging.getLogger("trend_rider.runner")
 
-TRB_ASSETS      = ["BTC_USDT", "PAXG_USDT"]
-TRB_TIMEFRAMES  = {"H4": "4h", "H1": "1h", "M15": "15m"}
+TRB_ASSETS     = ["BTC_USDT", "PAXG_USDT"]
+TRB_TIMEFRAMES = {"H4": "4h", "H1": "1h", "M15": "15m"}
 
 
 def _prepare_dataframes(conn, asset: str, config: dict):
-    limit = config.get("BOOTSTRAP_TARGET_CANDLES", 300)
-
+    limit  = config.get("BOOTSTRAP_TARGET_CANDLES", 300)
     df_h4  = core_db.get_candles_df(conn, asset, TRB_TIMEFRAMES["H4"],  limit=limit)
     df_h1  = core_db.get_candles_df(conn, asset, TRB_TIMEFRAMES["H1"],  limit=limit)
     df_m15 = v3_db.get_v3_candles_df(conn, asset, TRB_TIMEFRAMES["M15"], limit=limit)
-
     return df_h4, df_h1, df_m15
 
 
@@ -67,14 +65,12 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
     # ── Genera segnale BUY e SELL ────────────────────────────
     for direction in ("BUY", "SELL"):
 
+        # Check 1: segnale già OPEN sulla stessa direzione
         if trend_rider_db.has_open_trb_signal(conn, asset, direction):
             logger.debug("TRB [%s %s]: segnale OPEN già presente, skip.", asset, direction)
             continue
 
-        if trend_rider_db.has_recent_trb_signal(conn, asset, direction, hours=2):
-            logger.info("TRB [%s %s]: segnale già generato nelle ultime 2h, skip.", asset, direction)
-            continue
-
+        # Genera il segnale prima — serve l'entry per il check duplicati
         try:
             result = generate_trb_signal(market_ctx, df_h4, df_h1, df_m15, direction)
         except Exception as e:
@@ -91,6 +87,17 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
             )
             continue
 
+        # Check 2: duplicato — stesso asset/direzione/entry nelle ultime 4 ore
+        if trend_rider_db.has_recent_trb_signal(
+            conn, asset, direction, signal["entry"], hours=4
+        ):
+            logger.info(
+                "TRB [%s %s]: duplicato (entry=%.4f già presente nelle ultime 4h), skip.",
+                asset, direction, signal["entry"],
+            )
+            continue
+
+        # Inserisce il segnale
         try:
             signal_id = trend_rider_db.insert_trb_signal(conn, signal)
         except Exception as e:
