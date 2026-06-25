@@ -116,13 +116,22 @@ CREATE INDEX IF NOT EXISTS idx_el_signals_confirmation_ts
 
 
 def init_edge_lab_schema(conn: sqlite3.Connection):
-    conn.executescript(SCHEMA_SQL)
-    # Aggiunge confirmation_candle_ts se la tabella esiste già senza la colonna
+    """
+    Inizializza lo schema Edge Lab.
+    Gestisce sia DB nuovi che DB esistenti senza confirmation_candle_ts.
+    """
+    # Step 1: aggiunge confirmation_candle_ts PRIMA di executescript
+    # (se la tabella esiste già senza questa colonna)
     try:
-        conn.execute("ALTER TABLE edge_lab_signals ADD COLUMN confirmation_candle_ts INTEGER")
+        conn.execute(
+            "ALTER TABLE edge_lab_signals ADD COLUMN confirmation_candle_ts INTEGER"
+        )
         conn.commit()
     except sqlite3.OperationalError:
-        pass  # colonna già presente
+        pass  # colonna già presente o tabella non esiste ancora — ok in entrambi i casi
+
+    # Step 2: crea tabelle e indici (IF NOT EXISTS — sicuro su DB esistenti)
+    conn.executescript(SCHEMA_SQL)
     conn.commit()
 
 
@@ -376,7 +385,6 @@ def monitor_open_el_signals(
             sl_hit = current_high >= float(sl)
             tp_hit = tp is not None and current_low  <= float(tp)
 
-        # SL priorità su TP
         if sl_hit:
             outcome = "SL"
         elif tp_hit:
@@ -429,11 +437,6 @@ def has_recent_el_signal(
     strategy_name: str = "OTE-SC",
     hours: int = 2,
 ) -> bool:
-    """
-    Ritorna True se esiste già un segnale generato nelle ultime N ore
-    con stesso asset, direzione e strategia.
-    Usato come fallback di sicurezza oltre al check per candela.
-    """
     cutoff = (
         datetime.now(timezone.utc) - timedelta(hours=hours)
     ).isoformat()
