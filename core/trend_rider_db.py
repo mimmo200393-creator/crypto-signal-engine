@@ -26,7 +26,6 @@ CREATE TABLE IF NOT EXISTS trb_signals (
     timestamp_setup      DATETIME NOT NULL,
     timestamp_closed     DATETIME,
 
-    -- Prezzi
     entry                REAL NOT NULL,
     stop_loss            REAL NOT NULL,
     tp1                  REAL,
@@ -35,7 +34,6 @@ CREATE TABLE IF NOT EXISTS trb_signals (
     rr1                  REAL DEFAULT 1.0,
     rr2                  REAL,
 
-    -- Contesto
     trend_h1             TEXT,
     trend_h4             TEXT,
     adx                  REAL,
@@ -45,16 +43,13 @@ CREATE TABLE IF NOT EXISTS trb_signals (
     new_24h_extreme      BOOLEAN DEFAULT 0,
     session              TEXT,
 
-    -- Liquidità
     liquidity_target       TEXT,
     liquidity_target_price REAL,
     liquidity_priority     TEXT,
 
-    -- Quality
     quality_score        INTEGER,
     quality_label        TEXT CHECK(quality_label IN ('LOW','MEDIUM','HIGH','PREMIUM')),
 
-    -- Tracking
     final_outcome        TEXT DEFAULT 'OPEN'
         CHECK(final_outcome IN ('OPEN','TP1_HIT','TP2_HIT','SL_HIT','EXPIRED')),
     tp1_hit              BOOLEAN DEFAULT 0,
@@ -138,16 +133,31 @@ def has_recent_trb_signal(
     conn: sqlite3.Connection,
     asset: str,
     direction: str,
-    hours: int = 2,
+    entry_price: float,
+    hours: int = 4,
 ) -> bool:
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    """
+    Ritorna True se esiste già un segnale con:
+    - stesso asset e direzione
+    - entry price entro 1.0 punto (BTC) o 0.5 punto (PAXG)
+    - generato nelle ultime N ore
+
+    Previene duplicati quando lo stesso setup viene trovato
+    in scan consecutivi con la stessa candela trigger.
+    """
+    cutoff    = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    tolerance = 1.0  # punti di tolleranza sull'entry
+
     row = conn.execute(
         """
         SELECT 1 FROM trb_signals
-        WHERE asset=? AND direction=? AND timestamp_setup >= ?
+        WHERE asset = ?
+          AND direction = ?
+          AND ABS(entry - ?) <= ?
+          AND timestamp_setup >= ?
         LIMIT 1
         """,
-        (asset, direction, cutoff),
+        (asset, direction, entry_price, tolerance, cutoff),
     ).fetchone()
     return row is not None
 
@@ -195,7 +205,6 @@ def monitor_open_trb_signals(
 
         bars_open = (bars_open or 0) + 1
 
-        # MAE / MFE
         if direction == "BUY":
             adverse   = max(float(entry) - current_low,  0.0)
             favorable = max(current_high - float(entry), 0.0)
@@ -206,13 +215,12 @@ def monitor_open_trb_signals(
         new_mae = max(float(mae or 0), adverse)
         new_mfe = max(float(mfe or 0), favorable)
 
-        # TP1 / TP2 / SL hit
         if direction == "BUY":
-            sl_hit  = current_low  <= float(sl)
+            sl_hit      = current_low  <= float(sl)
             tp1_hit_now = tp1 is not None and current_high >= float(tp1)
             tp2_hit_now = tp2 is not None and current_high >= float(tp2)
         else:
-            sl_hit  = current_high >= float(sl)
+            sl_hit      = current_high >= float(sl)
             tp1_hit_now = tp1 is not None and current_low  <= float(tp1)
             tp2_hit_now = tp2 is not None and current_low  <= float(tp2)
 
@@ -231,18 +239,13 @@ def monitor_open_trb_signals(
         else:
             outcome = None
 
-        updates = [
-            "mae = ?", "mfe = ?", "bars_open = ?",
-            "tp1_hit = ?", "tp2_hit = ?",
-        ]
-        params = [new_mae, new_mfe, bars_open, new_tp1_hit, new_tp2_hit]
+        updates = ["mae = ?", "mfe = ?", "bars_open = ?", "tp1_hit = ?", "tp2_hit = ?"]
+        params  = [new_mae, new_mfe, bars_open, new_tp1_hit, new_tp2_hit]
 
         if outcome and outcome != "TP1_HIT":
-            # Chiude il trade
             updates += ["final_outcome = ?", "timestamp_closed = ?"]
             params  += [outcome, now_iso]
         elif outcome == "TP1_HIT" and not bool(tp1_hit):
-            # Registra TP1 ma non chiude
             updates += ["timestamp_tp1 = ?"]
             params  += [now_iso]
 
@@ -254,7 +257,6 @@ def monitor_open_trb_signals(
 
     conn.commit()
 
-    # Ritorna segnali aggiornati con outcome finale
     for row in rows:
         sid = row[0]
         updated_row = conn.execute(
