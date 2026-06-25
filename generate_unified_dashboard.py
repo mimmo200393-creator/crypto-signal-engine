@@ -456,7 +456,7 @@ def trb_open_table(rows):
   <td class="mono">{fp(r['tp1'])} {tp1_badge}</td>
   <td class="mono">{fp(r['tp2'])}</td>
   <td>{ql_badge(r['ql'])} <span style="color:var(--dim);font-size:11px">{r['qs']}</span></td>
-  <td class="mono" style="color:var(--dim)">{float(r['adx']):.1f if r['adx'] else '—'}</td>
+  <td class="mono" style="color:var(--dim)">{f"{float(r['adx']):.1f}" if r['adx'] else '—'}
   <td style="font-size:12px;color:var(--dim)">{r['trend_h1'] or '—'}{h4_str}</td>
   <td style="font-size:12px;color:var(--dim)">{r['target']}</td>
   <td class="mono" style="color:var(--dim)">{r['elapsed_h']}h</td>
