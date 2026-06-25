@@ -87,6 +87,11 @@ WEEKLY_LOOKBACK_DAYS = 7
 EQUAL_LEVEL_TOLERANCE_PCT = 0.001
 LIQUIDITY_PROXIMITY_PCT = 0.003
 SCORE_LIQUIDITY_CONTEXT = 1
+SCORE_MFM_SWEEP         = 2   # bonus se sweep confermato su sacca MFM
+
+# Parametri sweep su MFM
+MFM_SWEEP_LOOKBACK      = 10  # candele M15 da analizzare
+MFM_SWEEP_TOLERANCE_PCT = 0.0008  # 0.08% penetrazione minima oltre il livello
 
 # ============================================================
 # Watchlist Alert
@@ -409,6 +414,110 @@ def is_stop_too_wide(asset: str, entry: float, stop_loss: float) -> bool:
 
 
 # ============================================================
+# MFM Liquidity Sweep Check (Phase 2 — informativo)
+# ============================================================
+
+def check_mfm_liquidity_sweep(
+    df_m15: pd.DataFrame,
+    mfm: dict,
+    direction: str,
+) -> dict:
+    """
+    Verifica se nelle ultime MFM_SWEEP_LOOKBACK candele M15 il prezzo
+    ha fatto sweep su una sacca di liquidità della Money Flow Map.
+
+    Sweep BEARISH (per SELL):
+        - Prezzo supera un livello HIGH della MFM
+        - Candela richiude SOTTO il livello (falso breakout)
+
+    Sweep BULLISH (per BUY):
+        - Prezzo scende sotto un livello LOW della MFM
+        - Candela richiude SOPRA il livello (falso breakdown)
+
+    Parametro informativo — non è un gate.
+    Salva i risultati nel segnale per analytics.
+
+    Returns:
+        {
+            "confirmed":    bool,
+            "level_label":  str | None,
+            "level_price":  float | None,
+            "priority":     str | None,
+            "candle_idx":   int | None,
+        }
+    """
+    result = {
+        "confirmed":   False,
+        "level_label": None,
+        "level_price": None,
+        "priority":    None,
+        "candle_idx":  None,
+    }
+
+    if mfm is None or len(df_m15) < MFM_SWEEP_LOOKBACK + 2:
+        return result
+
+    levels = mfm.get("levels", [])
+    if not levels:
+        return result
+
+    # Considera solo livelli HIGH/MEDIUM/CRITICAL — ignora LOW
+    relevant_levels = [
+        lv for lv in levels
+        if lv["priority_label"] in ("CRITICAL", "HIGH", "MEDIUM")
+    ]
+
+    end   = len(df_m15) - 1
+    start = max(1, end - MFM_SWEEP_LOOKBACK)
+
+    # Per SELL: cerca sweep su livelli HIGH (prezzo supera e richiude sotto)
+    # Per BUY:  cerca sweep su livelli LOW  (prezzo scende e richiude sopra)
+    kind_filter = "high" if direction == "SELL" else "low"
+    candidates  = [lv for lv in relevant_levels if lv["kind"] == kind_filter]
+
+    if not candidates:
+        return result
+
+    for i in range(end - 1, start - 1, -1):
+        candle = df_m15.iloc[i]
+        c_high  = float(candle["high"])
+        c_low   = float(candle["low"])
+        c_close = float(candle["close"])
+
+        for lv in candidates:
+            lvl_price = lv["price"]
+            tol       = lvl_price * MFM_SWEEP_TOLERANCE_PCT
+
+            if direction == "SELL":
+                # High supera il livello + penetrazione minima
+                # Close richiude sotto il livello → sweep confermato
+                penetrated = c_high > (lvl_price + tol)
+                closed_back = c_close < lvl_price
+                if penetrated and closed_back:
+                    result["confirmed"]   = True
+                    result["level_label"] = lv["label"]
+                    result["level_price"] = lvl_price
+                    result["priority"]    = lv["priority_label"]
+                    result["candle_idx"]  = i
+                    return result
+
+            else:  # BUY
+                # Low scende sotto il livello + penetrazione minima
+                # Close richiude sopra il livello → sweep confermato
+                penetrated  = c_low < (lvl_price - tol)
+                closed_back = c_close > lvl_price
+                if penetrated and closed_back:
+                    result["confirmed"]   = True
+                    result["level_label"] = lv["label"]
+                    result["level_price"] = lvl_price
+                    result["priority"]    = lv["priority_label"]
+                    result["candle_idx"]  = i
+                    return result
+
+    return result
+
+
+# ============================================================
 # Pipeline principale
 # ============================================================
 
@@ -417,6 +526,8 @@ def generate_v41_signal(market_data: dict) -> dict:
     df_h4 = market_data["df_h4"]
     df_h1 = market_data["df_h1"]
     df_m15 = market_data["df_m15"]
+    df_d1 = market_data.get("df_d1")
+    mfm   = market_data.get("mfm")  # Money Flow Map (opzionale, da v41p1_runner)
     df_d1 = market_data.get("df_d1")
     now = market_data.get("timestamp", datetime.now(timezone.utc))
     macro_provider = market_data.get("macro_provider")
@@ -539,6 +650,13 @@ def generate_v41_signal(market_data: dict) -> dict:
     if liquidity_source is not None:
         score += SCORE_LIQUIDITY_CONTEXT
 
+    # ── MFM Liquidity Sweep (Phase 2 — informativo + bonus) ──
+    # Cerca sweep su sacche di liquidità MFM nelle ultime 10 candele M15
+    # Non è un gate — raccoglie dati per analytics
+    mfm_sweep = check_mfm_liquidity_sweep(df_m15, mfm, direction)
+    if mfm_sweep["confirmed"]:
+        score += SCORE_MFM_SWEEP
+
     score = max(0, min(score, SCORE_MAX))
 
     if score >= QUALITY_HIGH_THRESHOLD:
@@ -633,6 +751,12 @@ def generate_v41_signal(market_data: dict) -> dict:
         "ote_entry_high": fibonacci["ote_upper"] if fibonacci else None,
         "ote_in_zone_now": fib_in_ote,
         "timestamp_setup": now.isoformat(),
+
+        # MFM Liquidity Sweep (Phase 2 — informativo)
+        "mfm_sweep_confirmed":  mfm_sweep["confirmed"],
+        "mfm_sweep_level":      mfm_sweep["level_label"],
+        "mfm_sweep_price":      mfm_sweep["level_price"],
+        "mfm_sweep_priority":   mfm_sweep["priority"],
     }
 
     logger.info(
