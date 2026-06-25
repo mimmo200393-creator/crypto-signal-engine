@@ -2,15 +2,6 @@
 core/v41p1_runner.py
 Orchestratore di Institutional Scanner V4.1 Phase 1
 Money Flow & Intraday Edge Validation.
-
-Differenze rispetto a v41_runner.py:
-- Costruisce la Money Flow Map con Priority Score ad ogni ciclo
-- Salva snapshot MFM per analisi storica
-- Watchlist Alert arricchiti con Priority Score e historical_touches
-- Segnali tracciati in v41p1_signals (tabella separata)
-- Sessione corretta via get_session_v41 (LONDON/OVERLAP/NEW_YORK/ASIA)
-- Formato Telegram dedicato con Money Flow Map visibile nell'alert
-- time_to_tp e time_to_sl registrati per statistiche Phase 1
 """
 
 import logging
@@ -60,11 +51,6 @@ def _prepare_dataframes(conn, asset: str, config: dict):
 
 
 def _check_watchlist(conn, asset: str, mfm: dict, now: datetime, config: dict):
-    """
-    Genera Watchlist Alert per i livelli entro WATCHLIST_PROXIMITY_PCT
-    dal prezzo corrente, usando la Money Flow Map con Priority Score.
-    Solo sulla transizione fuori -> dentro fascia.
-    """
     timestamp_str = now.isoformat()
 
     proximities = [
@@ -97,7 +83,6 @@ def _check_watchlist(conn, asset: str, mfm: dict, now: datetime, config: dict):
                 )
                 logger.info("V41P1 Watchlist [%s]: Telegram inviato=%s", asset, sent)
             if ntfy_topic:
-                # Usa il formato plain watchlist di V4.1 come fallback
                 from notifications import v41_telegram
                 proximity_for_ntfy = {
                     "label": label,
@@ -113,7 +98,6 @@ def _check_watchlist(conn, asset: str, mfm: dict, now: datetime, config: dict):
 
         v41p1_db.set_watchlist_state(conn, asset, label, True, timestamp_str)
 
-    # Resetta livelli usciti dalla fascia
     all_labels = {lv["label"] for lv in mfm["levels"]}
     for label in all_labels:
         if label not in proximities_by_label:
@@ -122,11 +106,6 @@ def _check_watchlist(conn, asset: str, mfm: dict, now: datetime, config: dict):
 
 
 def _enrich_signal_with_mfm(signal: dict, mfm: dict) -> dict:
-    """
-    Arricchisce il segnale con i dati della Money Flow Map:
-    nearest_above, nearest_below, liquidity source/target con Priority Score,
-    expected move verso il target piu' vicino nella direzione del trade.
-    """
     direction = signal["direction"]
     entry     = signal["entry"]
 
@@ -146,31 +125,14 @@ def _enrich_signal_with_mfm(signal: dict, mfm: dict) -> dict:
     signal["distance_to_nearest_below_pct"] = below["distance_pct"] if below else None
 
     if direction == "BUY":
-        source_candidates = [
-            lv for lv in mfm["levels"]
-            if lv["kind"] == "low" and lv["price"] < entry
-        ]
-        target_candidates = [
-            lv for lv in mfm["levels"]
-            if lv["kind"] == "high" and lv["price"] > entry
-        ]
+        source_candidates = [lv for lv in mfm["levels"] if lv["kind"] == "low" and lv["price"] < entry]
+        target_candidates = [lv for lv in mfm["levels"] if lv["kind"] == "high" and lv["price"] > entry]
     else:
-        source_candidates = [
-            lv for lv in mfm["levels"]
-            if lv["kind"] == "high" and lv["price"] > entry
-        ]
-        target_candidates = [
-            lv for lv in mfm["levels"]
-            if lv["kind"] == "low" and lv["price"] < entry
-        ]
+        source_candidates = [lv for lv in mfm["levels"] if lv["kind"] == "high" and lv["price"] > entry]
+        target_candidates = [lv for lv in mfm["levels"] if lv["kind"] == "low" and lv["price"] < entry]
 
-    liq_source = None
-    if source_candidates:
-        liq_source = min(source_candidates, key=lambda lv: abs(lv["price"] - entry))
-
-    liq_target = None
-    if target_candidates:
-        liq_target = max(target_candidates, key=lambda lv: lv["priority_score"])
+    liq_source = min(source_candidates, key=lambda lv: abs(lv["price"] - entry)) if source_candidates else None
+    liq_target = max(target_candidates, key=lambda lv: lv["priority_score"]) if target_candidates else None
 
     signal["liquidity_source"]          = liq_source["label"]          if liq_source else None
     signal["liquidity_source_price"]    = liq_source["price"]          if liq_source else None
@@ -243,7 +205,7 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
     except Exception as e:
         logger.error("V41P1 Watchlist [%s]: errore: %s", asset, e)
 
-    # --- Trigger (riusa la pipeline V4.1 esistente) ---
+    # --- Trigger ---
     market_data = {
         "asset":          asset,
         "df_h4":          df_h4,
@@ -252,10 +214,11 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
         "df_d1":          df_d1,
         "timestamp":      now,
         "macro_provider": macro_provider,
+        "mfm":            mfm,   # ← passa MFM per check sweep (Phase 2)
     }
 
-    result     = v41.generate_v41_signal(market_data)
-    signal     = result["signal"]
+    result      = v41.generate_v41_signal(market_data)
+    signal      = result["signal"]
     diagnostics = result["diagnostics"]
 
     logger.info(
@@ -268,14 +231,14 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
         logger.info("V41P1 Scanner [%s]: nessun alert.", asset)
         return
 
-    # --- Sessione corretta (LONDON/OVERLAP/NEW_YORK/ASIA) ---
+    # --- Sessione corretta ---
     signal["session"] = get_session_v41(now)
 
-    # --- Arricchisce il segnale con la Money Flow Map ---
+    # --- Arricchisce con MFM ---
     signal = _enrich_signal_with_mfm(signal, mfm)
 
     # --- Duplicate Signal Protection ---
-    current_trigger_type    = "BOS" if signal.get("bos_direction") else "CHOCH"
+    current_trigger_type     = "BOS" if signal.get("bos_direction") else "CHOCH"
     current_liquidity_source = signal.get("liquidity_source")
 
     last_state   = v41p1_db.get_last_alert_state(conn, asset)
@@ -296,7 +259,7 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
     signal_id = v41p1_db.insert_v41p1_signal(conn, signal)
     logger.info(
         "V41P1 Scanner [%s]: ALERT [%s] trigger=%s quality=%d/12 (%s) "
-        "source=%s target=%s em=%s session=%s (id=%s)",
+        "source=%s target=%s em=%s session=%s sweep=%s (id=%s)",
         asset, signal["direction"], signal.get("trigger_types"),
         signal["quality_score"], signal["quality_label"],
         signal.get("liquidity_source") or "N/A",
@@ -304,6 +267,7 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
         f"{signal.get('expected_move_points', 0):.1f}pt"
             if signal.get("expected_move_points") else "N/A",
         signal["session"],
+        signal.get("mfm_sweep_confirmed", False),
         signal_id,
     )
 
