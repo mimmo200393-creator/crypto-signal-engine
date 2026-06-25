@@ -1,7 +1,6 @@
 -- storage/v41p1_schema.sql
 -- Schema isolato per Institutional Scanner V4.1 Phase 1
 -- Money Flow & Intraday Edge Validation
--- Completamente separato da v41_signals per tracking statistico indipendente.
 
 CREATE TABLE IF NOT EXISTS v41p1_signals (
     signal_id TEXT PRIMARY KEY,
@@ -21,7 +20,7 @@ CREATE TABLE IF NOT EXISTS v41p1_signals (
     rr REAL,
 
     -- Trigger
-    trigger_types TEXT,           -- JSON list: BOS / CHOCH / LIQUIDITY_SWEEP
+    trigger_types TEXT,
     sweep_direction TEXT,
     bos_direction TEXT,
     choch_direction TEXT,
@@ -69,6 +68,12 @@ CREATE TABLE IF NOT EXISTS v41p1_signals (
     ote_entry_low REAL,
     ote_entry_high REAL,
 
+    -- MFM Liquidity Sweep (Phase 2 — informativo)
+    mfm_sweep_confirmed BOOLEAN DEFAULT 0,
+    mfm_sweep_level     TEXT,
+    mfm_sweep_price     REAL,
+    mfm_sweep_priority  TEXT,
+
     -- Outcome Tracking
     trader_decision TEXT DEFAULT 'unknown'
         CHECK(trader_decision IN ('unknown','taken','skipped')),
@@ -93,8 +98,10 @@ CREATE INDEX IF NOT EXISTS idx_v41p1_signals_session
     ON v41p1_signals(session);
 CREATE INDEX IF NOT EXISTS idx_v41p1_signals_trigger
     ON v41p1_signals(trigger_types);
+CREATE INDEX IF NOT EXISTS idx_v41p1_signals_sweep
+    ON v41p1_signals(mfm_sweep_confirmed);
 
--- Watchlist Alert: preparatori, non operativi
+-- Watchlist Alert
 CREATE TABLE IF NOT EXISTS v41p1_watchlist_alerts (
     alert_id TEXT PRIMARY KEY,
     timestamp_alert DATETIME NOT NULL,
@@ -112,7 +119,6 @@ CREATE TABLE IF NOT EXISTS v41p1_watchlist_alerts (
 CREATE INDEX IF NOT EXISTS idx_v41p1_watchlist_asset
     ON v41p1_watchlist_alerts(asset, timestamp_alert);
 
--- Stato di prossimita' per Watchlist Alert (evita ripetizioni)
 CREATE TABLE IF NOT EXISTS v41p1_watchlist_state (
     asset TEXT NOT NULL,
     level_label TEXT NOT NULL,
@@ -121,7 +127,6 @@ CREATE TABLE IF NOT EXISTS v41p1_watchlist_state (
     PRIMARY KEY (asset, level_label)
 );
 
--- Ultimo alert operativo per Duplicate Signal Protection
 CREATE TABLE IF NOT EXISTS v41p1_last_alert_state (
     asset TEXT PRIMARY KEY,
     direction TEXT NOT NULL,
@@ -130,7 +135,6 @@ CREATE TABLE IF NOT EXISTS v41p1_last_alert_state (
     last_updated DATETIME NOT NULL
 );
 
--- Money Flow Map snapshot: registra la mappa ad ogni scan per analisi storica
 CREATE TABLE IF NOT EXISTS v41p1_mfm_snapshots (
     snapshot_id TEXT PRIMARY KEY,
     timestamp_snapshot DATETIME NOT NULL,
@@ -144,7 +148,7 @@ CREATE TABLE IF NOT EXISTS v41p1_mfm_snapshots (
     nearest_below_price REAL,
     nearest_below_priority TEXT,
     nearest_below_score REAL,
-    levels_json TEXT    -- JSON completo di tutti i livelli con score
+    levels_json TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_v41p1_mfm_asset_ts
