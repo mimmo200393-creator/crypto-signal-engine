@@ -458,7 +458,22 @@ def generate_trb_signal(
 
     liq_map    = market_ctx.get("liquidity")
     liq_target = _find_liquidity_target(liq_map, direction)
-    tp2        = float(liq_target["price"]) if liq_target else tp1 * 2 - entry
+    tp2_raw    = float(liq_target["price"]) if liq_target else None
+
+    # TP2 deve essere più lontano dall'entry rispetto a TP1
+    # BUY:  tp2 > tp1 > entry
+    # SELL: tp2 < tp1 < entry
+    if tp2_raw is not None:
+        if direction == "BUY" and tp2_raw > tp1:
+            tp2 = tp2_raw
+        elif direction == "SELL" and tp2_raw < tp1:
+            tp2 = tp2_raw
+        else:
+            # Target di liquidità troppo vicino — fallback 2R
+            tp2 = tp1 + risk if direction == "BUY" else tp1 - risk
+            liq_target = None  # non valido, non conta come bonus
+    else:
+        tp2 = tp1 + risk if direction == "BUY" else tp1 - risk
 
     diag["tp1"] = tp1
     diag["tp2"] = tp2
