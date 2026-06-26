@@ -1,6 +1,7 @@
 """
-notifications/telegram_bot.py  (V2.1)
+notifications/telegram_bot.py  (V2.2)
 Notifiche Telegram multi-strategia.
+Fix: fallback plain text se Markdown fallisce (400 Bad Request).
 """
 
 import logging
@@ -16,6 +17,8 @@ def send_message(bot_token: str, chat_id: str, text: str) -> bool:
         return False
 
     url = f"{TELEGRAM_API_BASE}/bot{bot_token}/sendMessage"
+
+    # Tentativo 1: con Markdown
     payload = {
         "chat_id": chat_id,
         "text": text,
@@ -24,6 +27,27 @@ def send_message(bot_token: str, chat_id: str, text: str) -> bool:
     }
     try:
         resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200 and resp.json().get("ok"):
+            return True
+        # Se 400 Bad Request → riprova senza parse_mode
+        if resp.status_code == 400:
+            logger.warning(
+                "Telegram Markdown fallito (400), riprovo in plain text: %s",
+                resp.text[:200],
+            )
+            plain_text = text.replace("*", "").replace("`", "").replace("_", " ")
+            payload_plain = {
+                "chat_id": chat_id,
+                "text": plain_text,
+                "disable_web_page_preview": True,
+            }
+            resp2 = requests.post(url, json=payload_plain, timeout=10)
+            resp2.raise_for_status()
+            data2 = resp2.json()
+            if not data2.get("ok"):
+                logger.error("Telegram plain text ok=False: %s", data2)
+                return False
+            return True
         resp.raise_for_status()
         data = resp.json()
         if not data.get("ok"):
@@ -79,7 +103,7 @@ def send_signal_alert(bot_token: str, chat_id: str, signal) -> bool:
 
 
 # ============================================================
-# Backward compatibility V1 (usato da test_alert)
+# Backward compatibility V1
 # ============================================================
 
 def format_alert(setup: dict, score: int, label: str) -> str:
@@ -128,22 +152,21 @@ def send_alert(bot_token: str, chat_id: str, setup: dict, score: int, label: str
 
 
 # ============================================================
-# Zone + Confirmation — formato specifico
+# Zone + Confirmation
 # ============================================================
 
 def format_zone_signal_alert(signal, label: str) -> str:
-    """Formato specifico per Zone + Confirmation V1.0."""
     direction_emoji = "🟢" if signal.direction == "LONG" else "🔴"
     ctx = signal.additional_context or {}
 
-    zone_level  = ctx.get("zone_level", 0)
+    zone_level   = ctx.get("zone_level", 0)
     zone_touches = ctx.get("zone_touches", 0)
-    bias_h4     = ctx.get("bias_h4", "N/A")
-    pattern     = ctx.get("pattern_name", "N/A")
-    macro_risk  = ctx.get("macro_risk", "LOW")
-    session     = ctx.get("session", "N/A")
-    momentum    = ctx.get("momentum", "N/A")
-    atr_daily   = ctx.get("atr_daily", 0)
+    bias_h4      = ctx.get("bias_h4", "N/A")
+    pattern      = ctx.get("pattern_name", "N/A")
+    macro_risk   = ctx.get("macro_risk", "LOW")
+    session      = ctx.get("session", "N/A")
+    momentum     = ctx.get("momentum", "N/A")
+    atr_daily    = ctx.get("atr_daily", 0)
 
     def fp(v):
         if v > 1000: return f"{v:,.2f}"
@@ -186,11 +209,8 @@ def format_zone_signal_alert(signal, label: str) -> str:
 
 
 def send_zone_signal_alert(bot_token: str, chat_id: str, signal) -> bool:
-    """Invia notifica Zone + Confirmation con formato dedicato."""
     score = signal.final_score
-    if score >= 9:
-        label = "⭐ ELITE SETUP"
-    else:
-        label = "🔥 HIGH QUALITY SETUP"
+    label = "⭐ ELITE SETUP" if score >= 9 else "🔥 HIGH QUALITY SETUP"
     text = format_zone_signal_alert(signal, label)
     return send_message(bot_token, chat_id, text)
+    
