@@ -3,9 +3,10 @@ generate_unified_dashboard.py
 Crypto Signal Engine — Homepage Operativa
 
 Mostra lo stato in tempo reale di:
-    - Edge Lab OTE-SC (segnali aperti + ultimi chiusi)
-    - V4.1 Phase 1 Money Flow (benchmark, segnali aperti)
-    - NMC Trend Rider Balanced v1.0 (segnali aperti)
+    - Edge Lab OTE-SC
+    - V4.1 Phase 1 Money Flow (benchmark)
+    - NMC Trend Rider Balanced v1.0
+    - Liquidity Hunter v1.0
 
 Genera docs/unified_dashboard.html
 """
@@ -34,8 +35,7 @@ def load_el_open(conn):
                    quality_score, quality_label, session, ref_session,
                    liquidity_target, trend_combined, mae, mfe, bars_open,
                    tradeability_flags, timestamp_setup
-            FROM edge_lab_signals
-            WHERE final_outcome = 'OPEN'
+            FROM edge_lab_signals WHERE final_outcome = 'OPEN'
             ORDER BY timestamp_setup DESC
         """)
     except sqlite3.OperationalError:
@@ -45,17 +45,12 @@ def load_el_open(conn):
     for r in rows:
         try:
             setup_dt = datetime.fromisoformat(r[17])
-            if setup_dt.tzinfo is None:
-                setup_dt = setup_dt.replace(tzinfo=timezone.utc)
+            if setup_dt.tzinfo is None: setup_dt = setup_dt.replace(tzinfo=timezone.utc)
             elapsed_h = round((now - setup_dt).total_seconds() / 3600, 1)
             bars_pct  = round((r[15] or 0) / 96 * 100)
-        except Exception:
-            elapsed_h = 0
-            bars_pct  = 0
-        try:
-            flags = json.loads(r[16]) if r[16] else []
-        except Exception:
-            flags = []
+        except: elapsed_h = 0; bars_pct = 0
+        try: flags = json.loads(r[16]) if r[16] else []
+        except: flags = []
         result.append({
             "signal_id": r[0], "asset": r[1], "direction": r[2],
             "entry": r[3], "sl": r[4], "tp": r[5], "rr": r[6],
@@ -66,40 +61,27 @@ def load_el_open(conn):
         })
     return result
 
-
 def load_el_recent_closed(conn, limit=10):
     try:
         return q(conn, f"""
             SELECT asset, direction, entry, stop_loss, tp, rr,
                    quality_label, session, ref_session, liquidity_target,
                    final_outcome, mae, mfe, bars_open, timestamp_setup
-            FROM edge_lab_signals
-            WHERE final_outcome != 'OPEN'
+            FROM edge_lab_signals WHERE final_outcome != 'OPEN'
             ORDER BY timestamp_setup DESC LIMIT {limit}
         """)
     except sqlite3.OperationalError:
         return []
 
-
 def load_el_stats(conn):
     try:
-        rows = q(conn, """
-            SELECT final_outcome, COUNT(*) as n
-            FROM edge_lab_signals WHERE final_outcome != 'OPEN'
-            GROUP BY final_outcome
-        """)
+        rows = q(conn, "SELECT final_outcome, COUNT(*) FROM edge_lab_signals WHERE final_outcome!='OPEN' GROUP BY final_outcome")
         d = {r[0]: r[1] for r in rows}
-        n = sum(d.values())
-        wins = d.get("TP", 0)
-        sls  = d.get("SL", 0)
-        return {
-            "n":     n,
-            "open":  q(conn, "SELECT COUNT(*) FROM edge_lab_signals WHERE final_outcome='OPEN'")[0][0],
-            "win":   round(wins/n*100, 1) if n > 0 else 0,
-            "exp_r": round((wins*2-sls)/n, 2) if n > 0 else 0,
-        }
+        n = sum(d.values()); wins = d.get("TP",0); sls = d.get("SL",0)
+        return {"n":n,"open":q(conn,"SELECT COUNT(*) FROM edge_lab_signals WHERE final_outcome='OPEN'")[0][0],
+                "win":round(wins/n*100,1) if n>0 else 0,"exp_r":round((wins*2-sls)/n,2) if n>0 else 0}
     except sqlite3.OperationalError:
-        return {"n": 0, "open": 0, "win": 0, "exp_r": 0}
+        return {"n":0,"open":0,"win":0,"exp_r":0}
 
 
 # ============================================================
@@ -121,42 +103,29 @@ def load_v41p1_open(conn):
     now = datetime.now(timezone.utc)
     result = []
     for r in rows:
-        try:
-            types   = json.loads(r[8]) if r[8] else []
-            trigger = "+".join(types) if types else "—"
-        except Exception:
-            trigger = "—"
+        try: types = json.loads(r[8]) if r[8] else []; trigger = "+".join(types) if types else "—"
+        except: trigger = "—"
         try:
             setup_dt = datetime.fromisoformat(r[15])
-            if setup_dt.tzinfo is None:
-                setup_dt = setup_dt.replace(tzinfo=timezone.utc)
+            if setup_dt.tzinfo is None: setup_dt = setup_dt.replace(tzinfo=timezone.utc)
             elapsed_h = round((now - setup_dt).total_seconds() / 3600, 1)
-        except Exception:
-            elapsed_h = 0
+        except: elapsed_h = 0
         result.append({
-            "asset": r[0], "direction": r[1], "entry": r[2],
-            "sl": r[3], "tp1": r[4], "tp2": r[5],
-            "ql": r[6], "qs": r[7], "trigger": trigger,
-            "mae": r[9], "mfe": r[10], "tp1_hit": bool(r[11]),
-            "source": r[12] or "N/A", "target": r[13] or "N/A",
-            "em": r[14], "elapsed_h": elapsed_h,
+            "asset":r[0],"direction":r[1],"entry":r[2],"sl":r[3],"tp1":r[4],"tp2":r[5],
+            "ql":r[6],"qs":r[7],"trigger":trigger,"mae":r[9],"mfe":r[10],"tp1_hit":bool(r[11]),
+            "source":r[12] or "N/A","target":r[13] or "N/A","em":r[14],"elapsed_h":elapsed_h,
         })
     return result
 
-
 def load_v41p1_stats(conn):
     try:
-        n    = q(conn, "SELECT COUNT(*) FROM v41p1_signals WHERE final_outcome!='OPEN'")[0][0]
-        wins = q(conn, "SELECT COUNT(*) FROM v41p1_signals WHERE final_outcome='TP'")[0][0]
-        sls  = q(conn, "SELECT COUNT(*) FROM v41p1_signals WHERE final_outcome='SL'")[0][0]
-        opn  = q(conn, "SELECT COUNT(*) FROM v41p1_signals WHERE final_outcome='OPEN'")[0][0]
-        return {
-            "n": n, "open": opn,
-            "win":   round(wins/n*100, 1) if n > 0 else 0,
-            "exp_r": round((wins*2-sls)/n, 2) if n > 0 else 0,
-        }
+        n    = q(conn,"SELECT COUNT(*) FROM v41p1_signals WHERE final_outcome!='OPEN'")[0][0]
+        wins = q(conn,"SELECT COUNT(*) FROM v41p1_signals WHERE final_outcome='TP'")[0][0]
+        sls  = q(conn,"SELECT COUNT(*) FROM v41p1_signals WHERE final_outcome='SL'")[0][0]
+        opn  = q(conn,"SELECT COUNT(*) FROM v41p1_signals WHERE final_outcome='OPEN'")[0][0]
+        return {"n":n,"open":opn,"win":round(wins/n*100,1) if n>0 else 0,"exp_r":round((wins*2-sls)/n,2) if n>0 else 0}
     except sqlite3.OperationalError:
-        return {"n": 0, "open": 0, "win": 0, "exp_r": 0}
+        return {"n":0,"open":0,"win":0,"exp_r":0}
 
 
 # ============================================================
@@ -180,43 +149,72 @@ def load_trb_open(conn):
     for r in rows:
         try:
             setup_dt = datetime.fromisoformat(r[16])
-            if setup_dt.tzinfo is None:
-                setup_dt = setup_dt.replace(tzinfo=timezone.utc)
+            if setup_dt.tzinfo is None: setup_dt = setup_dt.replace(tzinfo=timezone.utc)
             elapsed_h = round((now - setup_dt).total_seconds() / 3600, 1)
-        except Exception:
-            elapsed_h = 0
+        except: elapsed_h = 0
         result.append({
-            "asset": r[0], "direction": r[1], "entry": r[2],
-            "sl": r[3], "tp1": r[4], "tp2": r[5],
-            "ql": r[6], "qs": r[7], "adx": r[8],
-            "mae": r[9], "mfe": r[10], "tp1_hit": bool(r[11]),
-            "target": r[12] or "N/A",
-            "trend_h1": r[13], "trend_h4": r[14],
-            "session": r[15], "elapsed_h": elapsed_h,
-            "ts": r[16],
+            "asset":r[0],"direction":r[1],"entry":r[2],"sl":r[3],"tp1":r[4],"tp2":r[5],
+            "ql":r[6],"qs":r[7],"adx":r[8],"mae":r[9],"mfe":r[10],"tp1_hit":bool(r[11]),
+            "target":r[12] or "N/A","trend_h1":r[13],"trend_h4":r[14],
+            "session":r[15],"elapsed_h":elapsed_h,"ts":r[16],
         })
     return result
 
-
 def load_trb_stats(conn):
     try:
-        rows = q(conn, """
-            SELECT final_outcome, COUNT(*) FROM trb_signals
-            WHERE final_outcome != 'OPEN' GROUP BY final_outcome
-        """)
-        d    = {r[0]: r[1] for r in rows}
-        n    = sum(d.values())
-        wins = d.get("TP2_HIT", 0) + d.get("TP1_HIT", 0)
-        sls  = d.get("SL_HIT", 0)
-        opn  = q(conn, "SELECT COUNT(*) FROM trb_signals WHERE final_outcome='OPEN'")[0][0]
-        return {
-            "n":     n,
-            "open":  opn,
-            "win":   round(wins/n*100, 1) if n > 0 else 0,
-            "exp_r": round((wins*2-sls)/n, 2) if n > 0 else 0,
-        }
+        rows = q(conn,"SELECT final_outcome, COUNT(*) FROM trb_signals WHERE final_outcome!='OPEN' GROUP BY final_outcome")
+        d = {r[0]:r[1] for r in rows}; n = sum(d.values())
+        wins = d.get("TP2_HIT",0)+d.get("TP1_HIT",0); sls = d.get("SL_HIT",0)
+        opn = q(conn,"SELECT COUNT(*) FROM trb_signals WHERE final_outcome='OPEN'")[0][0]
+        return {"n":n,"open":opn,"win":round(wins/n*100,1) if n>0 else 0,"exp_r":round((wins*2-sls)/n,2) if n>0 else 0}
     except sqlite3.OperationalError:
-        return {"n": 0, "open": 0, "win": 0, "exp_r": 0}
+        return {"n":0,"open":0,"win":0,"exp_r":0}
+
+
+# ============================================================
+# Data loading — Liquidity Hunter
+# ============================================================
+
+def load_lh_open(conn):
+    try:
+        rows = q(conn, """
+            SELECT asset, direction, entry, stop_loss, tp, rr,
+                   quality_label, quality_score,
+                   swept_level_label, swept_level_priority,
+                   sweep_direction, trigger_type, tp_label,
+                   mae, mfe, bars_open, timestamp_setup
+            FROM lh_signals WHERE final_outcome = 'OPEN'
+            ORDER BY timestamp_setup DESC
+        """)
+    except sqlite3.OperationalError:
+        return []
+    now = datetime.now(timezone.utc)
+    result = []
+    for r in rows:
+        try:
+            setup_dt = datetime.fromisoformat(r[16])
+            if setup_dt.tzinfo is None: setup_dt = setup_dt.replace(tzinfo=timezone.utc)
+            elapsed_h = round((now - setup_dt).total_seconds() / 3600, 1)
+            bars_pct  = round((r[15] or 0) / 96 * 100)
+        except: elapsed_h = 0; bars_pct = 0
+        result.append({
+            "asset":r[0],"direction":r[1],"entry":r[2],"sl":r[3],"tp":r[4],"rr":r[5],
+            "ql":r[6],"qs":r[7],"level":r[8] or "N/A","level_pri":r[9] or "N/A",
+            "sweep":r[10] or "N/A","trigger":r[11] or "N/A","tp_label":r[12] or "N/A",
+            "mae":r[13],"mfe":r[14],"bars_open":r[15] or 0,"bars_pct":bars_pct,
+            "elapsed_h":elapsed_h,"ts":r[16],
+        })
+    return result
+
+def load_lh_stats(conn):
+    try:
+        rows = q(conn,"SELECT final_outcome, COUNT(*) FROM lh_signals WHERE final_outcome!='OPEN' GROUP BY final_outcome")
+        d = {r[0]:r[1] for r in rows}; n = sum(d.values())
+        wins = d.get("TP",0); sls = d.get("SL",0)
+        opn = q(conn,"SELECT COUNT(*) FROM lh_signals WHERE final_outcome='OPEN'")[0][0]
+        return {"n":n,"open":opn,"win":round(wins/n*100,1) if n>0 else 0,"exp_r":round((wins*2-sls)/n,2) if n>0 else 0}
+    except sqlite3.OperationalError:
+        return {"n":0,"open":0,"win":0,"exp_r":0}
 
 
 # ============================================================
@@ -228,37 +226,41 @@ def fp(v):
     v = float(v)
     return f"{v:,.2f}" if v > 1000 else f"{v:.4f}"
 
-
 def fmt_ts(ts):
     if not ts: return "—"
     try:
-        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(ts.replace("Z","+00:00"))
         return dt.strftime("%d %b %H:%M")
-    except Exception:
-        return ts[:16]
-
+    except: return ts[:16]
 
 def outcome_badge(o):
-    cls = {"TP": "b-tp", "SL": "b-sl", "EXPIRED": "b-exp",
-           "TP1_HIT": "b-tp", "TP2_HIT": "b-tp", "SL_HIT": "b-sl"}.get(o, "b-exp")
+    cls = {"TP":"b-tp","SL":"b-sl","EXPIRED":"b-exp",
+           "TP1_HIT":"b-tp","TP2_HIT":"b-tp","SL_HIT":"b-sl"}.get(o,"b-exp")
     return f'<span class="badge {cls}">{o}</span>'
-
 
 def direction_badge(d):
     return f'<span class="badge {"b-buy" if d=="BUY" else "b-sell"}">{d}</span>'
 
-
 def ql_badge(ql):
-    cls = {"HIGH": "b-high", "MEDIUM": "b-med", "LOW": "b-low",
-           "PREMIUM": "b-premium"}.get(ql, "b-low")
+    cls = {"HIGH":"b-high","MEDIUM":"b-med","LOW":"b-low","PREMIUM":"b-premium"}.get(ql,"b-low")
     return f'<span class="badge {cls}">{ql or "—"}</span>'
+
+def kpi_row(s, color):
+    wc = "pos" if s["win"]>=40 else ("neg" if s["win"]<25 else "warn")
+    ec = "pos" if s["exp_r"]>0 else "neg"
+    return f"""<div class="kpi-row" style="border-top:2px solid {color};margin-bottom:16px">
+  <div><span class="big">{s['open']}</span><span class="lbl">Aperti ora</span></div>
+  <div><span class="big">{s['n']}</span><span class="lbl">Chiusi totale</span></div>
+  <div><span class="big {wc}">{s['win']}%</span><span class="lbl">Win Rate</span></div>
+  <div><span class="big {ec}">{s['exp_r']:+.2f}R</span><span class="lbl">Expectancy</span></div>
+</div>"""
 
 
 CSS = """
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
 :root{
   --bg:#0d0f14;--surface:#141720;--border:#1e2330;
-  --accent:#4fffb0;--accent2:#ff6b6b;--accent3:#ffd166;--accent4:#a78bfa;
+  --accent:#4fffb0;--accent2:#ff6b6b;--accent3:#ffd166;--accent4:#a78bfa;--accent5:#38bdf8;
   --text:#e2e8f0;--dim:#5a6478;--buy:#4fffb0;--sell:#ff6b6b;
 }
 *{box-sizing:border-box;margin:0;padding:0}
@@ -271,6 +273,7 @@ header h1{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;l
 .section-title{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;margin:28px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--border)}
 .section-title.el{color:var(--accent)}
 .section-title.trb{color:var(--accent4)}
+.section-title.lh{color:var(--accent5)}
 .section-title.v41p1{color:var(--accent3);opacity:.8}
 .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:20px}
 .kpi-row>div{background:var(--surface);padding:16px 12px;text-align:center}
@@ -280,7 +283,7 @@ header h1{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;l
 .card{background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px}
 .ch{padding:10px 16px;border-bottom:1px solid var(--border);font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);display:flex;align-items:center;gap:8px}
 .pulse{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent);animation:pulse 2s infinite;flex-shrink:0}
-.pulse-trb{background:var(--accent4)}
+.pulse-trb{background:var(--accent4)} .pulse-lh{background:var(--accent5)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 table{width:100%;border-collapse:collapse}
 th{font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);padding:9px 14px;text-align:left;border-bottom:1px solid var(--border)}
@@ -303,46 +306,22 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
 .progress-fill{height:3px;background:var(--accent3);border-radius:2px}
 .empty-row td{text-align:center;color:var(--dim);padding:32px;font-size:13px}
 .divider{margin:32px 0 24px;border-top:1px dashed var(--border)}
-@media(max-width:900px){
-  .kpi-row{grid-template-columns:repeat(2,1fr)}
-  .container{padding:12px}
-  .card table{min-width:600px}
-}
+@media(max-width:900px){.kpi-row{grid-template-columns:repeat(2,1fr)}.container{padding:12px}.card table{min-width:600px}}
 """
 
 
 # ============================================================
-# Componenti HTML
+# Tabelle HTML
 # ============================================================
-
-def kpi_row(s, color):
-    wc = "pos" if s["win"] >= 40 else ("neg" if s["win"] < 25 else "warn")
-    ec = "pos" if s["exp_r"] > 0 else "neg"
-    return f"""<div class="kpi-row" style="border-top:2px solid {color};margin-bottom:16px">
-  <div><span class="big">{s['open']}</span><span class="lbl">Aperti ora</span></div>
-  <div><span class="big">{s['n']}</span><span class="lbl">Chiusi totale</span></div>
-  <div><span class="big {wc}">{s['win']}%</span><span class="lbl">Win Rate</span></div>
-  <div><span class="big {ec}">{s['exp_r']:+.2f}R</span><span class="lbl">Expectancy</span></div>
-</div>"""
-
 
 def el_open_table(rows):
     if not rows:
-        return """<div class="card">
-  <div class="ch"><span class="pulse"></span>Segnali Aperti — OTE-SC</div>
-  <table><tbody><tr class="empty-row"><td colspan="12">
-    Nessun segnale aperto. Il sistema sta scansionando ogni 5 minuti.
-  </td></tr></tbody></table>
-</div>"""
+        return """<div class="card"><div class="ch"><span class="pulse"></span>Segnali Aperti — OTE-SC</div>
+  <table><tbody><tr class="empty-row"><td colspan="12">Nessun segnale aperto. Scansione ogni 5 minuti.</td></tr></tbody></table></div>"""
     body = ""
     for r in rows:
-        asset = r["asset"].replace("_USDT", "")
-        mae_c = "neg" if r["mae"] and r["mae"] > 0 else ""
-        mfe_c = "pos" if r["mfe"] and r["mfe"] > 0 else ""
-        flags_str = " ".join(
-            f'<span style="color:var(--accent3);font-size:11px">⚠ {f}</span>'
-            for f in r["flags"]
-        ) if r["flags"] else ""
+        asset = r["asset"].replace("_USDT","")
+        flags_str = " ".join(f'<span style="color:var(--accent3);font-size:11px">⚠ {f}</span>' for f in r["flags"]) if r["flags"] else ""
         body += f"""<tr>
   <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(r['ts'])}</td>
   <td><strong>{asset}</strong></td>
@@ -353,29 +332,22 @@ def el_open_table(rows):
   <td class="mono">{float(r['rr'] or 0):.2f}</td>
   <td>{ql_badge(r['ql'])}</td>
   <td style="font-size:12px;color:var(--dim)">{r['session']} → {r['ref_session']}</td>
-  <td class="mono {mae_c}">{fp(r['mae'])}</td>
-  <td class="mono {mfe_c}">{fp(r['mfe'])}</td>
-  <td>
-    <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dim)">{r['bars_open']}/96</div>
-    <div class="progress-bar"><div class="progress-fill" style="width:{r['bars_pct']}%"></div></div>
-    {flags_str}
-  </td>
+  <td class="mono neg">{fp(r['mae'])}</td>
+  <td class="mono pos">{fp(r['mfe'])}</td>
+  <td><div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dim)">{r['bars_open']}/96</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:{r['bars_pct']}%"></div></div>{flags_str}</td>
 </tr>"""
-    return f"""<div class="card">
-  <div class="ch"><span class="pulse"></span>Segnali Aperti — OTE-SC ({len(rows)})</div>
+    return f"""<div class="card"><div class="ch"><span class="pulse"></span>Segnali Aperti — OTE-SC ({len(rows)})</div>
   <div style="overflow-x:auto"><table><thead><tr>
     <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP</th>
-    <th>R/R</th><th>Quality</th><th>Sessione → Ref</th><th>MAE</th><th>MFE</th><th>Bars</th>
-  </tr></thead><tbody>{body}</tbody></table></div>
-</div>"""
+    <th>R/R</th><th>Quality</th><th>Sessione</th><th>MAE</th><th>MFE</th><th>Bars</th>
+  </tr></thead><tbody>{body}</tbody></table></div></div>"""
 
 
 def el_closed_table(rows):
     if not rows:
-        return """<div class="card">
-  <div class="ch">Ultimi Segnali Chiusi — OTE-SC</div>
-  <table><tbody><tr class="empty-row"><td colspan="12">Nessun segnale chiuso ancora.</td></tr></tbody></table>
-</div>"""
+        return """<div class="card"><div class="ch">Ultimi Chiusi — OTE-SC</div>
+  <table><tbody><tr class="empty-row"><td colspan="11">Nessun segnale chiuso ancora.</td></tr></tbody></table></div>"""
     body = ""
     for r in rows:
         asset,direction,entry,sl,tp,rr,ql,sess,ref,target,outcome,mae,mfe,bars,ts = r
@@ -384,33 +356,26 @@ def el_closed_table(rows):
   <td><strong>{(asset or '').replace('_USDT','')}</strong></td>
   <td>{direction_badge(direction)}</td>
   <td class="mono">{fp(entry)}</td>
-  <td class="mono neg">{fp(sl)}</td>
   <td class="mono">{fp(tp)}</td>
   <td class="mono">{float(rr or 0):.2f}</td>
   <td>{ql_badge(ql)}</td>
-  <td style="font-size:12px;color:var(--dim)">{sess or '—'} → {ref or '—'}</td>
   <td style="font-size:12px;color:var(--dim)">{target or '—'}</td>
   <td>{outcome_badge(outcome)}</td>
-  <td class="mono" style="color:var(--dim)">{int(bars or 0)}</td>
 </tr>"""
-    return f"""<div class="card">
-  <div class="ch">Ultimi Segnali Chiusi — OTE-SC</div>
+    return f"""<div class="card"><div class="ch">Ultimi Chiusi — OTE-SC</div>
   <div style="overflow-x:auto"><table><thead><tr>
-    <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP</th>
-    <th>R/R</th><th>Quality</th><th>Sessione → Ref</th><th>Target</th><th>Esito</th><th>Bars</th>
-  </tr></thead><tbody>{body}</tbody></table></div>
-</div>"""
+    <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>TP</th><th>R/R</th>
+    <th>Quality</th><th>Target</th><th>Esito</th>
+  </tr></thead><tbody>{body}</tbody></table></div></div>"""
 
 
 def v41p1_open_table(rows):
     if not rows:
-        return """<div class="card">
-  <div class="ch">Segnali Aperti — V4.1 Phase 1 Money Flow</div>
-  <table><tbody><tr class="empty-row"><td colspan="11">Nessun segnale aperto.</td></tr></tbody></table>
-</div>"""
+        return """<div class="card"><div class="ch">Segnali Aperti — V4.1 Phase 1</div>
+  <table><tbody><tr class="empty-row"><td colspan="10">Nessun segnale aperto.</td></tr></tbody></table></div>"""
     body = ""
     for r in rows:
-        asset     = r["asset"].replace("_USDT", "")
+        asset = r["asset"].replace("_USDT","")
         tp1_badge = '<span class="badge b-tp" style="font-size:10px">TP1✓</span>' if r["tp1_hit"] else ""
         body += f"""<tr>
   <td><strong>{asset}</strong></td>
@@ -419,34 +384,26 @@ def v41p1_open_table(rows):
   <td class="mono neg">{fp(r['sl'])}</td>
   <td class="mono">{fp(r['tp1'])} {tp1_badge}</td>
   <td class="mono">{fp(r['tp2'])}</td>
-  <td>{ql_badge(r['ql'])} <span style="color:var(--dim);font-size:11px">({r['qs']}/12)</span></td>
+  <td>{ql_badge(r['ql'])}</td>
   <td style="font-size:12px;color:var(--dim)">{r['trigger']}</td>
   <td class="mono neg">{fp(r['mae'])}</td>
-  <td class="mono pos">{fp(r['mfe'])}</td>
   <td class="mono" style="color:var(--dim)">{r['elapsed_h']}h</td>
 </tr>"""
-    return f"""<div class="card">
-  <div class="ch">Segnali Aperti — V4.1 Phase 1 Money Flow ({len(rows)})</div>
+    return f"""<div class="card"><div class="ch">Segnali Aperti — V4.1 Phase 1 ({len(rows)})</div>
   <div style="overflow-x:auto"><table><thead><tr>
     <th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP1</th><th>TP2</th>
-    <th>Quality</th><th>Trigger</th><th>MAE</th><th>MFE</th><th>Aperto</th>
-  </tr></thead><tbody>{body}</tbody></table></div>
-</div>"""
+    <th>Quality</th><th>Trigger</th><th>MAE</th><th>Aperto</th>
+  </tr></thead><tbody>{body}</tbody></table></div></div>"""
 
 
 def trb_open_table(rows):
     if not rows:
-        return """<div class="card">
-  <div class="ch"><span class="pulse pulse-trb"></span>Segnali Aperti — Trend Rider Balanced</div>
-  <table><tbody><tr class="empty-row"><td colspan="12">
-    Nessun segnale aperto. In attesa di pullback verso EMA20 H1.
-  </td></tr></tbody></table>
-</div>"""
+        return """<div class="card"><div class="ch"><span class="pulse pulse-trb"></span>Segnali Aperti — Trend Rider Balanced</div>
+  <table><tbody><tr class="empty-row"><td colspan="11">Nessun segnale aperto. In attesa di pullback verso EMA20 H1.</td></tr></tbody></table></div>"""
     body = ""
     for r in rows:
-        asset     = r["asset"].replace("_USDT", "")
+        asset = r["asset"].replace("_USDT","")
         tp1_badge = '<span class="badge b-tp" style="font-size:10px">TP1✓</span>' if r["tp1_hit"] else ""
-        h4_str    = f" / H4:{r['trend_h4']}" if r["trend_h4"] else ""
         body += f"""<tr>
   <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(r['ts'])}</td>
   <td><strong>{asset}</strong></td>
@@ -455,19 +412,43 @@ def trb_open_table(rows):
   <td class="mono neg">{fp(r['sl'])}</td>
   <td class="mono">{fp(r['tp1'])} {tp1_badge}</td>
   <td class="mono">{fp(r['tp2'])}</td>
-  <td>{ql_badge(r['ql'])} <span style="color:var(--dim);font-size:11px">{r['qs']}</span></td>
-  <td class="mono" style="color:var(--dim)">{f"{float(r['adx']):.1f}" if r['adx'] else '—'}
-  <td style="font-size:12px;color:var(--dim)">{r['trend_h1'] or '—'}{h4_str}</td>
-  <td style="font-size:12px;color:var(--dim)">{r['target']}</td>
+  <td>{ql_badge(r['ql'])}</td>
+  <td class="mono" style="color:var(--dim)">{f"{float(r['adx']):.1f}" if r['adx'] else '—'}</td>
+  <td style="font-size:12px;color:var(--dim)">{r['trend_h1'] or '—'}</td>
   <td class="mono" style="color:var(--dim)">{r['elapsed_h']}h</td>
 </tr>"""
-    return f"""<div class="card">
-  <div class="ch"><span class="pulse pulse-trb"></span>Segnali Aperti — Trend Rider Balanced ({len(rows)})</div>
+    return f"""<div class="card"><div class="ch"><span class="pulse pulse-trb"></span>Segnali Aperti — Trend Rider Balanced ({len(rows)})</div>
   <div style="overflow-x:auto"><table><thead><tr>
     <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP1</th><th>TP2</th>
-    <th>Quality</th><th>ADX</th><th>Trend</th><th>Target</th><th>Aperto</th>
-  </tr></thead><tbody>{body}</tbody></table></div>
-</div>"""
+    <th>Quality</th><th>ADX</th><th>H1</th><th>Aperto</th>
+  </tr></thead><tbody>{body}</tbody></table></div></div>"""
+
+
+def lh_open_table(rows):
+    if not rows:
+        return """<div class="card"><div class="ch"><span class="pulse pulse-lh"></span>Segnali Aperti — Liquidity Hunter v1.0</div>
+  <table><tbody><tr class="empty-row"><td colspan="11">Nessun segnale aperto. In attesa di sweep su Liquidity Pool.</td></tr></tbody></table></div>"""
+    body = ""
+    for r in rows:
+        asset = r["asset"].replace("_USDT","")
+        body += f"""<tr>
+  <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(r['ts'])}</td>
+  <td><strong>{asset}</strong></td>
+  <td>{direction_badge(r['direction'])}</td>
+  <td class="mono">{fp(r['entry'])}</td>
+  <td class="mono neg">{fp(r['sl'])}</td>
+  <td class="mono">{fp(r['tp'])}</td>
+  <td class="mono">{float(r['rr'] or 0):.2f}</td>
+  <td>{ql_badge(r['ql'])}</td>
+  <td style="font-size:12px;color:var(--dim)">{r['level']} ({r['level_pri']})</td>
+  <td style="font-size:12px;color:var(--dim)">{r['sweep']} → {r['trigger']}</td>
+  <td class="mono neg">{fp(r['mae'])}</td>
+</tr>"""
+    return f"""<div class="card"><div class="ch"><span class="pulse pulse-lh"></span>Segnali Aperti — Liquidity Hunter v1.0 ({len(rows)})</div>
+  <div style="overflow-x:auto"><table><thead><tr>
+    <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP</th>
+    <th>R/R</th><th>Quality</th><th>Livello</th><th>Sweep → Trigger</th><th>MAE</th>
+  </tr></thead><tbody>{body}</tbody></table></div></div>"""
 
 
 # ============================================================
@@ -484,6 +465,8 @@ def generate():
     v41p1_stats = load_v41p1_stats(conn)
     trb_open    = load_trb_open(conn)
     trb_stats   = load_trb_stats(conn)
+    lh_open     = load_lh_open(conn)
+    lh_stats    = load_lh_stats(conn)
 
     conn.close()
 
@@ -500,10 +483,7 @@ def generate():
 <body>
 <header>
   <h1>Crypto Signal Engine — Dashboard</h1>
-  <div class="meta">
-    {generated} &nbsp;|&nbsp;
-    <a href="analytics_dashboard.html">Analytics Lab →</a>
-  </div>
+  <div class="meta">{generated} &nbsp;|&nbsp; <a href="analytics_dashboard.html">Analytics Lab →</a></div>
 </header>
 <div class="container">
 
@@ -514,15 +494,21 @@ def generate():
 
   <div class="divider"></div>
 
-  <div class="section-title v41p1">V4.1 Phase 1 — Money Flow Benchmark</div>
-  {kpi_row(v41p1_stats, "var(--accent3)")}
-  {v41p1_open_table(v41p1_open)}
-
-  <div class="divider"></div>
-
   <div class="section-title trb">🎯 NMC Trend Rider Balanced v1.0</div>
   {kpi_row(trb_stats, "var(--accent4)")}
   {trb_open_table(trb_open)}
+
+  <div class="divider"></div>
+
+  <div class="section-title lh">🎯 Liquidity Hunter v1.0</div>
+  {kpi_row(lh_stats, "var(--accent5)")}
+  {lh_open_table(lh_open)}
+
+  <div class="divider"></div>
+
+  <div class="section-title v41p1">V4.1 Phase 1 — Money Flow Benchmark</div>
+  {kpi_row(v41p1_stats, "var(--accent3)")}
+  {v41p1_open_table(v41p1_open)}
 
 </div>
 </body>
@@ -531,11 +517,13 @@ def generate():
     os.makedirs("docs", exist_ok=True)
     with open(OUT_PATH, "w") as f:
         f.write(html)
+
     print(
         f"Dashboard unificata generata: {OUT_PATH} "
         f"(EL aperti={el_stats['open']} chiusi={el_stats['n']} | "
         f"V4.1P1 aperti={v41p1_stats['open']} chiusi={v41p1_stats['n']} | "
-        f"TRB aperti={trb_stats['open']} chiusi={trb_stats['n']})"
+        f"TRB aperti={trb_stats['open']} chiusi={trb_stats['n']} | "
+        f"LH aperti={lh_stats['open']} chiusi={lh_stats['n']})"
     )
 
 
