@@ -74,24 +74,6 @@ def build_market_context(
     macro_provider: Optional[MacroEventProvider] = None,
     config: Optional[dict] = None,
 ) -> dict:
-    """
-    Costruisce il market context completo per un asset.
-
-    Args:
-        asset:          es. "BTC_USDT"
-        df_h4:          candele H4 (da candles_cache)
-        df_h1:          candele H1 (da candles_cache)
-        df_m15:         candele M15 (da v3_candles_cache)
-        df_d1:          candele D1  (da v3_candles_cache)
-        now:            datetime UTC corrente
-        macro_provider: YAMLMacroProvider (opzionale, da core.macro)
-        config:         config.yaml dict (opzionale, per EMA_PERIODS)
-
-    Returns:
-        dict completo con tutte le sezioni del contesto.
-        Sempre ritornato anche in caso di dati insufficienti
-        (campi mancanti impostati a None).
-    """
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
 
@@ -145,7 +127,6 @@ def build_market_context(
     )
 
     # ── Step 7: Fibonacci Engine ─────────────────────────────
-    # Calcoliamo per entrambe le direzioni — OTE-SC sceglierà quella giusta
     fib_buy  = _safe(compute_fibonacci_levels, reference_levels, "BUY")
     fib_sell = _safe(compute_fibonacci_levels, reference_levels, "SELL")
 
@@ -207,16 +188,19 @@ def build_market_context(
 
     # ── Tradeability summary ─────────────────────────────────
     # Blocchi hard (indipendenti dalla direzione):
+    # NEUTRAL  → bloccato (nessuna direzione definita)
+    # TRANSITION → NON bloccato (dati: H4 BEARISH + H1 NEUTRAL/TRANSITION
+    #              performa meglio di H4+H1 allineati — è un pullback)
     hard_blocks = []
     if vol_ctx and not vol_ctx["is_tradeable"]:
         hard_blocks.append(vol_ctx["block_reason"])
     if macro_ctx["is_blackout"]:
         ev = macro_ctx["event"] or {}
         hard_blocks.append(f"MACRO_BLACKOUT_{ev.get('type','?')}")
-    if combined in ("NEUTRAL", "TRANSITION"):
-        hard_blocks.append(f"TREND_{combined}")
-    if current_session == "OVERLAP":                          # ← AGGIUNGI
-        hard_blocks.append("SESSION_OVERLAP_EXCLUDED")        # ← AGGIUNGI
+    if combined == "NEUTRAL":
+        hard_blocks.append("TREND_NEUTRAL")
+    if current_session == "OVERLAP":
+        hard_blocks.append("SESSION_OVERLAP_EXCLUDED")
 
     ctx["is_tradeable"]  = len(hard_blocks) == 0
     ctx["block_reasons"] = hard_blocks
@@ -234,37 +218,16 @@ def build_market_context(
 # ============================================================
 
 def get_direction_context(market_ctx: dict, direction: str) -> dict:
-    """
-    Estrae il sottoinsieme di contesto rilevante per una direzione specifica.
-    Usato da OTE-SC (Step 9) per non dover navigare l'intero dict.
-
-    direction: "BUY" | "SELL"
-
-    Returns:
-        {
-            "trend_ok":       bool,   # trend allineato alla direzione
-            "fib":            dict,   # livelli Fibonacci per la direzione
-            "ote_zone":       dict,   # {ote_low, ote_high, fib_618, fib_786}
-            "sr_score":       float,
-            "sr_reaction":    bool,
-            "liq_map":        dict,   # intera liquidity map
-            "session":        str,    # current session
-            "ref_session":    str,    # reference session
-            "ref_levels":     dict,   # High/Low sessione di riferimento
-            "is_tradeable":   bool,
-            "block_reasons":  list,
-        }
-    """
     trend = market_ctx.get("trend", {})
     combined = trend.get("combined", "NEUTRAL")
 
     if direction == "BUY":
-        trend_ok   = combined == "BULLISH"
-        sr_score   = market_ctx.get("sr_scores", {}).get("score_buy", 0.0)
+        trend_ok    = combined == "BULLISH"
+        sr_score    = market_ctx.get("sr_scores", {}).get("score_buy", 0.0)
         sr_reaction = market_ctx.get("sr_scores", {}).get("reaction_buy", False)
     else:
-        trend_ok   = combined == "BEARISH"
-        sr_score   = market_ctx.get("sr_scores", {}).get("score_sell", 0.0)
+        trend_ok    = combined == "BEARISH"
+        sr_score    = market_ctx.get("sr_scores", {}).get("score_sell", 0.0)
         sr_reaction = market_ctx.get("sr_scores", {}).get("reaction_sell", False)
 
     fib      = (market_ctx.get("fibonacci") or {}).get(direction)
@@ -299,10 +262,6 @@ def get_direction_context(market_ctx: dict, direction: str) -> dict:
 # ============================================================
 
 def serialize_for_db(market_ctx: dict) -> dict:
-    """
-    Prepara il dict per l'inserimento in market_context_snapshots.
-    Appiattisce i campi annidati nei nomi di colonna dello schema.
-    """
     import json
 
     trend    = market_ctx.get("trend") or {}
@@ -323,52 +282,44 @@ def serialize_for_db(market_ctx: dict) -> dict:
         "timestamp_snapshot":  market_ctx["timestamp"],
         "current_price":       market_ctx["current_price"],
 
-        # Trend
         "trend_h4":            trend_h4.get("direction"),
         "trend_h1":            trend_h1.get("direction"),
         "trend_combined":      trend.get("combined"),
         "ema_slope_h4":        trend_h4.get("ema_slope"),
         "ema_slope_h1":        trend_h1.get("ema_slope"),
 
-        # Session
         "current_session":     sess.get("current_session"),
         "reference_session":   sess.get("reference_session"),
         "ref_high":            (sess.get("reference_levels") or {}).get("high"),
         "ref_low":             (sess.get("reference_levels") or {}).get("low"),
         "ref_range":           (sess.get("reference_levels") or {}).get("range"),
 
-        # OTE zone (BUY come riferimento — simmetrico per SELL)
         "ote_low":             fib_buy.get("ote_low"),
         "ote_high":            fib_buy.get("ote_high"),
         "fib_618":             fib_buy.get("fib_618"),
         "fib_786":             fib_buy.get("fib_786"),
 
-        # Liquidity
         "nearest_above_label": nearest_above.get("label"),
         "nearest_above_price": nearest_above.get("price"),
         "nearest_below_label": nearest_below.get("label"),
         "nearest_below_price": nearest_below.get("price"),
 
-        # S/R
         "sr_score_buy":        sr_sc.get("score_buy", 0.0),
         "sr_score_sell":       sr_sc.get("score_sell", 0.0),
         "sr_reaction_buy":     sr_sc.get("reaction_buy", False),
         "sr_reaction_sell":    sr_sc.get("reaction_sell", False),
 
-        # Volatility
         "vol_regime_m15":      vol.get("regime_m15"),
         "vol_regime_h1":       vol.get("regime_h1"),
         "atr_m15":             vol.get("atr_m15"),
         "atr_h1":              vol.get("atr_h1"),
         "is_high_vol_window":  vol.get("is_high_vol_window", False),
 
-        # Macro
         "macro_risk":          macro.get("macro_risk", "LOW"),
         "macro_is_blackout":   macro.get("is_blackout", False),
         "macro_event_type":    (macro.get("event") or {}).get("type"),
         "macro_minutes_to_event": macro.get("minutes_to_event"),
 
-        # Tradeability
         "is_tradeable":        market_ctx.get("is_tradeable", False),
         "block_reasons":       json.dumps(market_ctx.get("block_reasons", [])),
     }
@@ -379,7 +330,6 @@ def serialize_for_db(market_ctx: dict) -> dict:
 # ============================================================
 
 def _safe(fn, *args, **kwargs):
-    """Chiama fn con gestione eccezioni — ritorna None in caso di errore."""
     try:
         return fn(*args, **kwargs)
     except Exception as e:
