@@ -8,7 +8,7 @@
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
 :root{
   --bg:#0d0f14;--surface:#141720;--border:#1e2330;
-  --accent:#4fffb0;--accent2:#ff6b6b;--accent3:#ffd166;--accent4:#a78bfa;
+  --accent:#4fffb0;--accent2:#ff6b6b;--accent3:#ffd166;--accent4:#a78bfa;--accent5:#38bdf8;
   --text:#e2e8f0;--dim:#5a6478;--buy:#4fffb0;--sell:#ff6b6b;
 }
 *{box-sizing:border-box;margin:0;padding:0}
@@ -22,9 +22,11 @@ header a{color:var(--accent);text-decoration:none;font-family:'IBM Plex Mono',mo
 .fw-tag{font-size:10px;padding:2px 8px;border-radius:4px;font-weight:600}
 .tag-active{background:rgba(79,255,176,.15);color:var(--buy)}
 .tag-active-purple{background:rgba(167,139,250,.15);color:var(--accent4)}
+.tag-active-blue{background:rgba(56,189,248,.15);color:var(--accent5)}
 .tag-benchmark{background:rgba(90,100,120,.2);color:var(--dim)}
 .summary-grid{display:grid;gap:1px;background:var(--border)}
 .summary-grid.cols8{grid-template-columns:repeat(8,1fr)}
+.summary-grid.cols7{grid-template-columns:repeat(7,1fr)}
 .summary-grid.cols6{grid-template-columns:repeat(6,1fr)}
 .summary-grid.cols5{grid-template-columns:repeat(5,1fr)}
 .summary-grid>div{background:var(--surface);padding:14px 8px;text-align:center}
@@ -51,16 +53,13 @@ tr.hl td{background:rgba(79,255,176,.06)}
 .b-sell{background:rgba(255,107,107,.15);color:var(--sell)}
 .b-premium{background:rgba(167,139,250,.15);color:var(--accent4)}
 .empty{text-align:center;padding:24px;color:var(--dim);font-size:13px}
-@media(max-width:900px){.grid-2{grid-template-columns:1fr}.summary-grid.cols8,.summary-grid.cols6{grid-template-columns:repeat(3,1fr)}.container{padding:12px}.card table{min-width:600px}}
+@media(max-width:900px){.grid-2{grid-template-columns:1fr}.summary-grid.cols8,.summary-grid.cols7,.summary-grid.cols6{grid-template-columns:repeat(3,1fr)}.container{padding:12px}.card table{min-width:600px}}
 </style>
 </head>
 <body>
 <header>
   <h1>Crypto Signal Engine — Analytics Lab</h1>
-  <div class="meta">
-    2026-06-26 05:36 UTC &nbsp;|&nbsp;
-    <a href="unified_dashboard.html">&larr; Dashboard</a>
-  </div>
+  <div class="meta">2026-06-26 05:41 UTC &nbsp;|&nbsp; <a href="unified_dashboard.html">&larr; Dashboard</a></div>
 </header>
 <div class="container">
 
@@ -69,7 +68,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <div class="fw-header" style="color:var(--accent)">
     ⚡ Institutional Edge Lab — OTE-SC
     <span class="fw-tag tag-active">ATTIVO</span>
-    <span style="color:var(--dim);font-size:11px;margin-left:auto">Phase 1A · BTC_USDT · PAXG_USDT</span>
+    <span style="color:var(--dim);font-size:11px;margin-left:auto">Phase 1A · BTC · PAXG</span>
   </div>
   <div class="summary-grid cols8" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
   <div><span class="big">0</span><span class="lbl">Chiusi</span></div>
@@ -80,74 +79,50 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <div><span class="big neg">0.0</span><span class="lbl">Avg MAE</span></div>
   <div><span class="big pos">0.0</span><span class="lbl">Avg MFE</span></div>
   <div><span class="big">0</span><span class="lbl">Avg Bars</span></div>
-</div>
-  <div class="card" style="border-color:var(--accent3)">
-  <div class="ch" style="color:var(--accent3)">In attesa del primo segnale</div>
-  <div style="padding:16px;color:var(--dim)">OTE-SC entra quando H1 è BULLISH o BEARISH e il prezzo tocca la zona OTE.</div>
-</div>
+</div><div class="card"><div class="empty">In attesa del primo segnale OTE-SC.</div></div>
   <div class="grid-2">
     <div class="card">
   <div class="ch">Per Asset</div>
   <table><thead><tr>
     <th>Asset</th><th>N</th><th>Win%</th><th>Expectancy</th>
-    <th>Avg R/R</th><th>Avg MAE</th><th>Avg MFE</th>
-  </tr></thead><tbody><tr><td colspan="7" class="empty">Nessun dato</td></tr></tbody></table>
+    <th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="6" class="empty">Nessun dato</td></tr></tbody></table>
 </div>
     <div class="card">
   <div class="ch">Per Direzione</div>
   <table><thead><tr>
     <th>Dir</th><th>N</th><th>Win%</th><th>Expectancy</th>
-    <th>Avg R/R</th><th>Avg MAE</th><th>Avg MFE</th>
-  </tr></thead><tbody><tr><td colspan="7" class="empty">Nessun dato</td></tr></tbody></table>
+    <th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="6" class="empty">Nessun dato</td></tr></tbody></table>
 </div>
   </div>
   <div class="grid-2">
     <div class="card">
-  <div class="ch">Per Quality Label</div>
+  <div class="ch">Per Quality</div>
   <table><thead><tr>
     <th>Quality</th><th>N</th><th>Win%</th><th>Expectancy</th>
-    <th>Avg R/R</th><th>Avg MAE</th><th>Avg MFE</th>
-  </tr></thead><tbody><tr><td colspan="7" class="empty">Nessun dato</td></tr></tbody></table>
+    <th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="6" class="empty">Nessun dato</td></tr></tbody></table>
 </div>
     <div class="card">
-  <div class="ch">Per Sessione Corrente</div>
+  <div class="ch">Per Sessione</div>
   <table><thead><tr>
     <th>Sessione</th><th>N</th><th>Win%</th><th>Expectancy</th>
-    <th>Avg R/R</th><th>Avg MAE</th><th>Avg MFE</th>
-  </tr></thead><tbody><tr><td colspan="7" class="empty">Nessun dato</td></tr></tbody></table>
-</div>
-  </div>
-  <div class="grid-2">
-    <div class="card">
-  <div class="ch">Per Sessione Riferimento</div>
-  <table><thead><tr>
-    <th>Ref Session</th><th>N</th><th>Win%</th><th>Expectancy</th>
-    <th>Avg R/R</th><th>Avg MAE</th><th>Avg MFE</th>
-  </tr></thead><tbody><tr><td colspan="7" class="empty">Nessun dato</td></tr></tbody></table>
-</div>
-    <div class="card">
-  <div class="ch">Per Liquidity Target</div>
-  <table><thead><tr>
-    <th>Target</th><th>N</th><th>Win%</th><th>Expectancy</th>
-    <th>Avg R/R</th><th>Avg MAE</th><th>Avg MFE</th>
-  </tr></thead><tbody><tr><td colspan="7" class="empty">Nessun dato</td></tr></tbody></table>
+    <th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="6" class="empty">Nessun dato</td></tr></tbody></table>
 </div>
   </div>
   <div class="card"><div class="empty">Nessun segnale ancora.</div></div>
 </div>
 
-  <div class="section-divider">
-    <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">
-      Strategie Attive
-    </span>
-  </div>
+  <div class="section-divider"><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">Strategie Attive</span></div>
 
   
 <div class="card" style="border-top:2px solid var(--accent4)">
   <div class="fw-header" style="color:var(--accent4)">
     🎯 NMC Trend Rider Balanced v1.0
     <span class="fw-tag tag-active-purple">ATTIVO</span>
-    <span style="color:var(--dim);font-size:11px;margin-left:auto">BTC_USDT · PAXG_USDT</span>
+    <span style="color:var(--dim);font-size:11px;margin-left:auto">BTC · PAXG</span>
   </div>
   <div class="summary-grid cols6" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
   <div><span class="big">3</span><span class="lbl">Chiusi</span></div>
@@ -157,18 +132,16 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <div><span class="big pos">+1.00R</span><span class="lbl">Expectancy</span></div>
   <div><span class="big">21.8</span><span class="lbl">Avg ADX</span></div>
 </div>
-  
   <div class="grid-2">
     <div class="card">
   <div class="ch">Per Asset</div>
   <table><thead><tr>
-    <th>Asset</th><th>N</th><th>Win%</th><th>TP2%</th>
-    <th>Expectancy</th><th>Avg MAE</th><th>Avg MFE</th>
+    <th>Asset</th><th>N</th><th>Win%</th><th>Expectancy</th>
+    <th>Avg MAE</th><th>Avg MFE</th>
   </tr></thead><tbody><tr>
   <td><strong>BTC_USDT</strong></td>
   <td class="mono">3</td>
   <td class="mono pos">66.7%</td>
-  <td class="mono">66.7%</td>
   <td class="mono pos">+1.00R</td>
   <td class="mono neg">567.1</td>
   <td class="mono pos">89.2</td>
@@ -177,13 +150,12 @@ tr.hl td{background:rgba(79,255,176,.06)}
     <div class="card">
   <div class="ch">Per Direzione</div>
   <table><thead><tr>
-    <th>Dir</th><th>N</th><th>Win%</th><th>TP2%</th>
-    <th>Expectancy</th><th>Avg MAE</th><th>Avg MFE</th>
+    <th>Dir</th><th>N</th><th>Win%</th><th>Expectancy</th>
+    <th>Avg MAE</th><th>Avg MFE</th>
   </tr></thead><tbody><tr>
   <td><strong>SELL</strong></td>
   <td class="mono">3</td>
   <td class="mono pos">66.7%</td>
-  <td class="mono">66.7%</td>
   <td class="mono pos">+1.00R</td>
   <td class="mono neg">567.1</td>
   <td class="mono pos">89.2</td>
@@ -192,15 +164,14 @@ tr.hl td{background:rgba(79,255,176,.06)}
   </div>
   <div class="grid-2">
     <div class="card">
-  <div class="ch">Per Quality Label</div>
+  <div class="ch">Per Quality</div>
   <table><thead><tr>
-    <th>Quality</th><th>N</th><th>Win%</th><th>TP2%</th>
-    <th>Expectancy</th><th>Avg MAE</th><th>Avg MFE</th>
+    <th>Quality</th><th>N</th><th>Win%</th><th>Expectancy</th>
+    <th>Avg MAE</th><th>Avg MFE</th>
   </tr></thead><tbody><tr>
   <td><strong>PREMIUM</strong></td>
   <td class="mono">3</td>
   <td class="mono pos">66.7%</td>
-  <td class="mono">66.7%</td>
   <td class="mono pos">+1.00R</td>
   <td class="mono neg">567.1</td>
   <td class="mono pos">89.2</td>
@@ -209,13 +180,12 @@ tr.hl td{background:rgba(79,255,176,.06)}
     <div class="card">
   <div class="ch">Per Sessione</div>
   <table><thead><tr>
-    <th>Sessione</th><th>N</th><th>Win%</th><th>TP2%</th>
-    <th>Expectancy</th><th>Avg MAE</th><th>Avg MFE</th>
+    <th>Sessione</th><th>N</th><th>Win%</th><th>Expectancy</th>
+    <th>Avg MAE</th><th>Avg MFE</th>
   </tr></thead><tbody><tr>
   <td><strong>ASIA</strong></td>
   <td class="mono">1</td>
   <td class="mono neg">0.0%</td>
-  <td class="mono">0.0%</td>
   <td class="mono neg">-1.00R</td>
   <td class="mono neg">1690.5</td>
   <td class="mono pos">0.0</td>
@@ -223,7 +193,6 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td><strong>LONDON</strong></td>
   <td class="mono">2</td>
   <td class="mono pos">100.0%</td>
-  <td class="mono">100.0%</td>
   <td class="mono pos">+2.00R</td>
   <td class="mono neg">5.4</td>
   <td class="mono pos">133.7</td>
@@ -234,13 +203,12 @@ tr.hl td{background:rgba(79,255,176,.06)}
     <div class="card">
   <div class="ch">Per Trend H1</div>
   <table><thead><tr>
-    <th>Trend H1</th><th>N</th><th>Win%</th><th>TP2%</th>
-    <th>Expectancy</th><th>Avg MAE</th><th>Avg MFE</th>
+    <th>Trend H1</th><th>N</th><th>Win%</th><th>Expectancy</th>
+    <th>Avg MAE</th><th>Avg MFE</th>
   </tr></thead><tbody><tr>
   <td><strong>BEARISH</strong></td>
   <td class="mono">3</td>
   <td class="mono pos">66.7%</td>
-  <td class="mono">66.7%</td>
   <td class="mono pos">+1.00R</td>
   <td class="mono neg">567.1</td>
   <td class="mono pos">89.2</td>
@@ -249,24 +217,22 @@ tr.hl td{background:rgba(79,255,176,.06)}
     <div class="card">
   <div class="ch">Per ADX Bucket</div>
   <table><thead><tr>
-    <th>ADX</th><th>N</th><th>Win%</th><th>TP2%</th>
-    <th>Expectancy</th><th>Avg MAE</th><th>Avg MFE</th>
+    <th>ADX</th><th>N</th><th>Win%</th><th>Expectancy</th>
+    <th>Avg MAE</th><th>Avg MFE</th>
   </tr></thead><tbody><tr>
   <td><strong>ADX 20-25</strong></td>
   <td class="mono">3</td>
   <td class="mono pos">66.7%</td>
-  <td class="mono">66.7%</td>
   <td class="mono pos">+1.00R</td>
   <td class="mono neg">567.1</td>
   <td class="mono pos">89.2</td>
 </tr></tbody></table>
 </div>
   </div>
-  <div class="card">
-  <div class="ch">Segnali Recenti TRB</div>
+  <div class="card"><div class="ch">Segnali Recenti TRB</div>
   <table><thead><tr>
-    <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP1</th><th>TP2</th>
-    <th>ADX</th><th>H1/H4</th><th>Target</th><th>Esito</th>
+    <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP1</th>
+    <th>ADX</th><th>H1</th><th>Target</th><th>Esito</th>
   </tr></thead><tbody><tr>
   <td class="mono" style="color:var(--dim);font-size:11px">26 Jun 03:00</td>
   <td><strong>BTC</strong></td>
@@ -274,9 +240,8 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">58,407.50</td>
   <td class="mono">59,462.11</td>
   <td class="mono">57,352.89</td>
-  <td class="mono">56,298.28</td>
   <td class="mono" style="color:var(--dim)">20.5</td>
-  <td style="font-size:12px;color:var(--dim)">BEARISH / BEARISH</td>
+  <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">—</td>
   <td><span class="badge b-sl">SL_HIT</span></td>
 </tr><tr>
@@ -286,9 +251,8 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">61,319.97</td>
   <td class="mono">61,800.51</td>
   <td class="mono">60,839.43</td>
-  <td class="mono">61,267.23</td>
   <td class="mono" style="color:var(--dim)">21.3</td>
-  <td style="font-size:12px;color:var(--dim)">BEARISH / BEARISH</td>
+  <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">London Low</td>
   <td><span class="badge b-tp">TP2_HIT</span></td>
 </tr><tr>
@@ -298,20 +262,67 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">61,781.10</td>
   <td class="mono">61,967.01</td>
   <td class="mono">61,595.19</td>
-  <td class="mono">61,604.98</td>
   <td class="mono" style="color:var(--dim)">23.7</td>
-  <td style="font-size:12px;color:var(--dim)">BEARISH / BEARISH</td>
+  <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">London Low</td>
   <td><span class="badge b-tp">TP2_HIT</span></td>
-</tr></tbody></table>
-</div>
+</tr></tbody></table></div>
 </div>
 
-  <div class="section-divider">
-    <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">
-      Benchmark Storico
-    </span>
+  <div class="section-divider"><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">Nuove Strategie</span></div>
+
+  
+<div class="card" style="border-top:2px solid var(--accent5)">
+  <div class="fw-header" style="color:var(--accent5)">
+    🎯 Liquidity Hunter v1.0
+    <span class="fw-tag tag-active-blue">ATTIVO</span>
+    <span style="color:var(--dim);font-size:11px;margin-left:auto">BTC · PAXG · Proximity 0.30% · Sweep 4 candele</span>
   </div>
+  <div class="summary-grid cols7" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
+  <div><span class="big">0</span><span class="lbl">Chiusi</span></div>
+  <div><span class="big neg">0%</span><span class="lbl">Win Rate</span></div>
+  <div><span class="big neg">0%</span><span class="lbl">SL Rate</span></div>
+  <div><span class="big neg">+0.00R</span><span class="lbl">Expectancy</span></div>
+  <div><span class="big">0.00</span><span class="lbl">Avg R/R</span></div>
+  <div><span class="big neg">0.0</span><span class="lbl">Avg MAE</span></div>
+  <div><span class="big pos">0.0</span><span class="lbl">Avg MFE</span></div>
+</div><div class="card"><div class="empty">In attesa del primo segnale Liquidity Hunter.</div></div>
+  <div class="grid-2">
+    <div class="card">
+  <div class="ch">Per Asset</div>
+  <table><thead><tr>
+    <th>Asset</th><th>N</th><th>Win%</th><th>Expectancy</th>
+    <th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="6" class="empty">Nessun dato</td></tr></tbody></table>
+</div>
+    <div class="card">
+  <div class="ch">Per Direzione</div>
+  <table><thead><tr>
+    <th>Dir</th><th>N</th><th>Win%</th><th>Expectancy</th>
+    <th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="6" class="empty">Nessun dato</td></tr></tbody></table>
+</div>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+  <div class="ch">Per Trigger</div>
+  <table><thead><tr>
+    <th>Trigger</th><th>N</th><th>Win%</th><th>Expectancy</th>
+    <th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="6" class="empty">Nessun dato</td></tr></tbody></table>
+</div>
+    <div class="card">
+  <div class="ch">Per Priorità Livello</div>
+  <table><thead><tr>
+    <th>Priorità</th><th>N</th><th>Win%</th><th>Expectancy</th>
+    <th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="6" class="empty">Nessun dato</td></tr></tbody></table>
+</div>
+  </div>
+  <div class="card"><div class="empty">Nessun segnale Liquidity Hunter ancora.</div></div>
+</div>
+
+  <div class="section-divider"><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">Benchmark Storico</span></div>
 
   
 <div class="card" style="border-top:2px solid #ffd166">
@@ -327,74 +338,47 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <div><span class="big neg">235.0</span><span class="lbl">MAE medio</span></div>
 </div>
   <div class="grid-2">
-    <div class="card">
-  <div class="ch">Per Trigger</div>
+    <div class="card"><div class="ch">Per Trigger</div>
   <table><thead><tr>
     <th>Trigger</th><th>N</th><th>Win%</th><th>TP1%</th><th>TP2%</th><th>Expectancy</th>
   </tr></thead><tbody><tr class="hl">
-  <td><strong>BOS</strong></td>
-  <td class="mono">28</td>
-  <td class="mono pos">46.4%</td>
-  <td class="mono">53.6%</td>
-  <td class="mono">46.4%</td>
-  <td class="mono pos">+0.46R</td>
+  <td><strong>BOS</strong></td><td class="mono">28</td>
+  <td class="mono pos">46.4%</td><td class="mono">53.6%</td>
+  <td class="mono">46.4%</td><td class="mono pos">+0.46R</td>
 </tr><tr class="">
-  <td><strong>CHOCH</strong></td>
-  <td class="mono">30</td>
-  <td class="mono ">30.0%</td>
-  <td class="mono">46.7%</td>
-  <td class="mono">30.0%</td>
-  <td class="mono neg">-0.03R</td>
-</tr></tbody></table>
-</div>
-    <div class="card">
-  <div class="ch">Per Asset</div>
+  <td><strong>CHOCH</strong></td><td class="mono">30</td>
+  <td class="mono ">30.0%</td><td class="mono">46.7%</td>
+  <td class="mono">30.0%</td><td class="mono neg">-0.03R</td>
+</tr></tbody></table></div>
+    <div class="card"><div class="ch">Per Asset</div>
   <table><thead><tr>
     <th>Asset</th><th>N</th><th>Win%</th><th>TP1%</th><th>TP2%</th><th>Expectancy</th>
   </tr></thead><tbody><tr class="">
-  <td><strong>BTC</strong></td>
-  <td class="mono">43</td>
-  <td class="mono ">34.9%</td>
-  <td class="mono">48.8%</td>
-  <td class="mono">34.9%</td>
-  <td class="mono pos">+0.09R</td>
+  <td><strong>BTC</strong></td><td class="mono">43</td>
+  <td class="mono ">34.9%</td><td class="mono">48.8%</td>
+  <td class="mono">34.9%</td><td class="mono pos">+0.09R</td>
 </tr><tr class="hl">
-  <td><strong>PAXG</strong></td>
-  <td class="mono">15</td>
-  <td class="mono pos">46.7%</td>
-  <td class="mono">53.3%</td>
-  <td class="mono">46.7%</td>
-  <td class="mono pos">+0.53R</td>
-</tr></tbody></table>
-</div>
+  <td><strong>PAXG</strong></td><td class="mono">15</td>
+  <td class="mono pos">46.7%</td><td class="mono">53.3%</td>
+  <td class="mono">46.7%</td><td class="mono pos">+0.53R</td>
+</tr></tbody></table></div>
   </div>
-  <div class="card">
-  <div class="ch">Per Sessione</div>
+  <div class="card"><div class="ch">Per Sessione</div>
   <table><thead><tr>
     <th>Sessione</th><th>N</th><th>Win%</th><th>TP1%</th><th>TP2%</th><th>Expectancy</th>
   </tr></thead><tbody><tr class="hl">
-  <td><strong>ASIA</strong></td>
-  <td class="mono">20</td>
-  <td class="mono pos">45.0%</td>
-  <td class="mono">55.0%</td>
-  <td class="mono">45.0%</td>
-  <td class="mono pos">+0.35R</td>
+  <td><strong>ASIA</strong></td><td class="mono">20</td>
+  <td class="mono pos">45.0%</td><td class="mono">55.0%</td>
+  <td class="mono">45.0%</td><td class="mono pos">+0.35R</td>
 </tr><tr class="hl">
-  <td><strong>LONDON</strong></td>
-  <td class="mono">13</td>
-  <td class="mono pos">46.2%</td>
-  <td class="mono">61.5%</td>
-  <td class="mono">46.2%</td>
-  <td class="mono pos">+0.46R</td>
+  <td><strong>LONDON</strong></td><td class="mono">13</td>
+  <td class="mono pos">46.2%</td><td class="mono">61.5%</td>
+  <td class="mono">46.2%</td><td class="mono pos">+0.46R</td>
 </tr><tr class="hl">
-  <td><strong>NEW_YORK</strong></td>
-  <td class="mono">16</td>
-  <td class="mono pos">43.8%</td>
-  <td class="mono">50.0%</td>
-  <td class="mono">43.8%</td>
-  <td class="mono pos">+0.31R</td>
-</tr></tbody></table>
-</div>
+  <td><strong>NEW_YORK</strong></td><td class="mono">16</td>
+  <td class="mono pos">43.8%</td><td class="mono">50.0%</td>
+  <td class="mono">43.8%</td><td class="mono pos">+0.31R</td>
+</tr></tbody></table></div>
 </div>
 
 </div>
