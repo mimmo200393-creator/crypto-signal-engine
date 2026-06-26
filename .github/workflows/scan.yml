@@ -41,7 +41,7 @@ jobs:
         run: |
           HOUR=$(date -u +%H)
           MINUTE=$(date -u +%M)
-          if [ "$HOUR" = "08" ] && [ "$MINUTE" -lt "20" ]; then
+          if [ "$HOUR" = "08" ] && [ "$MINUTE" -lt "05" ]; then
             python3 daily_brief_runner.py
           fi
       - name: Fetch candele M15/D1 (BTC_USDT + PAXG_USDT)
