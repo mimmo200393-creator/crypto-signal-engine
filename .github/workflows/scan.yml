@@ -20,18 +20,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Cleanup LH (ONE TIME - RIMUOVERE DOPO)
-        run: |
-          python3 -c "
-          import sqlite3, os
-          conn = sqlite3.connect(os.environ.get('DB_PATH', 'data/signals.db'))
-          n = conn.execute('DELETE FROM lh_signals').rowcount
-          conn.commit()
-          conn.close()
-          print(f'LH cleanup: {n} segnali eliminati')
-          "
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
