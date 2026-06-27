@@ -14,13 +14,13 @@ from typing import Optional
 
 def init_v41p1_schema(conn: sqlite3.Connection,
                        schema_path: str = "storage/v41p1_schema.sql"):
-    # Step 1: aggiunge colonne MFM sweep PRIMA di executescript
-    # (se la tabella esiste già senza queste colonne)
+    # Step 1: aggiunge colonne PRIMA di executescript
     for col, col_type in [
         ("mfm_sweep_confirmed", "BOOLEAN DEFAULT 0"),
         ("mfm_sweep_level",     "TEXT"),
         ("mfm_sweep_price",     "REAL"),
         ("mfm_sweep_priority",  "TEXT"),
+        ("adx_m15",             "REAL"),  # ← NUOVO: forza trend al momento segnale
     ]:
         try:
             conn.execute(f"ALTER TABLE v41p1_signals ADD COLUMN {col} {col_type}")
@@ -28,7 +28,7 @@ def init_v41p1_schema(conn: sqlite3.Connection,
         except sqlite3.OperationalError:
             pass  # colonna già presente o tabella non esiste ancora
 
-    # Step 2: crea tabelle e indici (IF NOT EXISTS — sicuro su DB esistenti)
+    # Step 2: crea tabelle e indici
     with open(schema_path, "r") as f:
         conn.executescript(f.read())
 
@@ -65,10 +65,11 @@ def insert_v41p1_signal(conn: sqlite3.Connection, signal: dict) -> str:
             ote_entry_low, ote_entry_high,
             mfm_sweep_confirmed, mfm_sweep_level,
             mfm_sweep_price, mfm_sweep_priority,
+            adx_m15,
             trader_decision, final_outcome, market_snapshot
         ) VALUES (
             ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-            ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'unknown','OPEN',?
+            ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'unknown','OPEN',?
         )
     """, (
         signal_id,
@@ -122,6 +123,7 @@ def insert_v41p1_signal(conn: sqlite3.Connection, signal: dict) -> str:
         signal.get("mfm_sweep_level"),
         signal.get("mfm_sweep_price"),
         signal.get("mfm_sweep_priority"),
+        signal.get("adx_m15"),
         snapshot_json,
     ))
     conn.commit()
