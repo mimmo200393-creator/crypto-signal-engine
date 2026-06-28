@@ -43,8 +43,10 @@ STRATEGY_VERSION = "Phase1A"
 # Spec OTE-SC
 CONFIRMATION_BODY_PCT = 0.50
 EXPIRY_BARS_M15       = 96
-MIN_RR_FLAG           = 1.5
+MIN_RR_FLAG           = 1.5    # sotto questa soglia → flag informativo
+MIN_RR_BLOCK          = 1.0    # sotto questa soglia → segnale bloccato
 MAX_SL_ATR_MULT       = 3.0
+MIN_QUALITY_LABEL     = "MEDIUM"  # LOW → segnale bloccato
 
 
 def _find_ote_touch_candle(
@@ -214,6 +216,14 @@ def generate_ote_sc_signal(
     quality_score, quality_label = _compute_quality_score(dir_ctx, rr, flags)
     diag["quality_score"] = quality_score
     diag["quality_label"] = quality_label
+
+    # ── Gate 5: RR minimo bloccante ─────────────────────────
+    if rr < MIN_RR_BLOCK:
+        return reject(f"RR_TOO_LOW_BLOCK (rr={rr:.2f} < min={MIN_RR_BLOCK})")
+
+    # ── Gate 6: Quality minima ───────────────────────────────
+    if quality_label == "LOW":
+        return reject(f"QUALITY_TOO_LOW (score={quality_score}/LOW)")
 
     # ── Costruzione segnale ───────────────────────────────────
     asset     = market_ctx.get("asset", "UNKNOWN")
