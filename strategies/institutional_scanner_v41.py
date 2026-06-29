@@ -2,6 +2,12 @@
 strategies/institutional_scanner_v41.py
 Institutional Scanner Framework V4.1 — Intraday Wave Edition
 
+AGGIORNATO: Structure Engine V1.0 (29 Giugno 2026)
+    - CHOCH V2: valuta la struttura M15 REALE (non confronta con H4)
+    - M15_CHOCH_LOOKBACK: da 2 a 3
+    - Import di evaluate_choch_v2 da core.structure_engine
+    - Campi informativi V2 aggiunti al signal dict
+
 Strategia indipendente da V3.2 Frozen e V4.0 Daily Edition. Riusa le
 funzioni di analisi di mercato pure (pivot, struttura H4, zone, OTE,
 BOS, sessione) da institutional_scanner_v3.py.
@@ -49,6 +55,17 @@ from strategies.institutional_scanner_v4 import (
     combine_h4_trend,
 )
 
+# ── Structure Engine V1.0 ────────────────────────────────────
+from core.structure_engine import (
+    evaluate_choch_v2,
+    evaluate_bos_v2,
+    compute_volume_ratio,
+    compute_premium_discount,
+    check_displacement,
+    classify_m15_structure,
+    is_pullback_valid,
+)
+
 logger = logging.getLogger("institutional_scanner_v41")
 
 
@@ -75,7 +92,7 @@ V41_ASSETS = ["PAXG_USDT", "BTC_USDT"]
 # ============================================================
 # Parametri tecnici
 # ============================================================
-M15_CHOCH_LOOKBACK = 3
+M15_CHOCH_LOOKBACK = 3          # ERA 2 — aggiornato per Structure Engine V1.0
 SWEEP_LOOKBACK_CANDLES = 20
 SWEEP_PENETRATION_MIN_PCT = 0.0005
 MOMENTUM_LOOKBACK = 5
@@ -140,32 +157,28 @@ def evaluate_ema_trend(df: pd.DataFrame) -> str:
 
 
 # ============================================================
-# Change of Character (CHOCH)
+# Change of Character (CHOCH) — V2: struttura M15 reale
 # ============================================================
 
 def evaluate_m15_choch(df_m15: pd.DataFrame, prevailing_structure: str) -> Optional[str]:
-    if prevailing_structure not in ("BULLISH", "BEARISH"):
-        return None
-    if len(df_m15) < M15_CHOCH_LOOKBACK * 2 + 3:
+    """
+    CHOCH V2: valuta il cambio di struttura sulla sequenza M15 REALE.
+
+    Il parametro prevailing_structure (da H4) viene mantenuto nella
+    firma per compatibilita' con i chiamanti, ma NON viene piu' usato
+    per determinare il CHOCH. La struttura M15 viene valutata
+    internamente dalla sequenza dei suoi pivot.
+
+    Se il CHOCH V2 conferma E la direzione e' opposta alla
+    prevailing_structure H4, il segnale e' coerente con la definizione
+    originale (inversione rispetto al trend macro).
+    """
+    choch = evaluate_choch_v2(df_m15, lookback=M15_CHOCH_LOOKBACK)
+
+    if not choch["confirmed"]:
         return None
 
-    last_close = float(df_m15.iloc[-1]["close"])
-    pivots = find_pivots(df_m15.iloc[:-1], M15_CHOCH_LOOKBACK)
-
-    if prevailing_structure == "BEARISH":
-        highs = sorted(pivots["pivot_highs"], key=lambda p: p[2])
-        if not highs:
-            return None
-        if last_close > highs[-1][1]:
-            return "BULLISH"
-        return None
-    else:
-        lows = sorted(pivots["pivot_lows"], key=lambda p: p[2])
-        if not lows:
-            return None
-        if last_close < lows[-1][1]:
-            return "BEARISH"
-        return None
+    return choch["direction"]
 
 
 # ============================================================
@@ -442,16 +455,32 @@ def generate_v41_signal(market_data: dict) -> dict:
     diagnostics["dow_theory_h4"] = dow_theory_h4
     diagnostics["dominant_h4_structure"] = dominant_h4_structure
 
+    # ── BOS detection (usa lookback=3 da institutional_scanner_v3) ──
     bos_direction = None
     if dominant_h4_structure in ("BULLISH", "BEARISH"):
         bos_signal_direction = "BUY" if dominant_h4_structure == "BULLISH" else "SELL"
         if evaluate_m15_bos(df_m15, bos_signal_direction):
             bos_direction = dominant_h4_structure
 
+    # ── CHOCH V2: struttura M15 reale ────────────────────────
     choch_direction = evaluate_m15_choch(df_m15, dominant_h4_structure)
 
     diagnostics["bos_direction"] = bos_direction
     diagnostics["choch_direction"] = choch_direction
+
+    # ── Structure Engine V2 — campi informativi ──────────────
+    choch_v2_detail = evaluate_choch_v2(df_m15, lookback=M15_CHOCH_LOOKBACK)
+    m15_struct_detail = classify_m15_structure(df_m15, lookback=M15_CHOCH_LOOKBACK)
+    vol_ratio = compute_volume_ratio(df_m15)
+    pb_valid = is_pullback_valid(df_h4, "BUY" if (bos_direction or choch_direction) == "BULLISH" else "SELL", h4_struct)
+
+    diagnostics["choch_v2_prev_structure"] = choch_v2_detail.get("prev_structure")
+    diagnostics["choch_v2_displacement"] = choch_v2_detail.get("displacement")
+    diagnostics["m15_structure"] = m15_struct_detail.get("structure")
+    diagnostics["volume_ratio"] = vol_ratio.get("ratio")
+    diagnostics["volume_classification"] = vol_ratio.get("classification")
+    diagnostics["pullback_valid"] = pb_valid.get("valid", True)
+    diagnostics["pullback_invalidated"] = pb_valid.get("invalidated", False)
 
     if bos_direction and choch_direction and bos_direction != choch_direction:
         diagnostics["rejections"].append("BOS_CHOCH_CONFLICT")
@@ -479,7 +508,6 @@ def generate_v41_signal(market_data: dict) -> dict:
 
     current_price_for_map = float(df_m15.iloc[-1]["close"])
     liquidity_map = build_liquidity_map(df_h4, df_d1 if df_d1 is not None else pd.DataFrame())
-    liquidity_source = find_liquidity_source(liquidity_map, current_price_for_map, direction)
     liquidity_target = find_liquidity_target(liquidity_map, current_price_for_map, direction)
 
     diagnostics["liquidity_source"] = liquidity_source["label"] if liquidity_source else None
@@ -590,6 +618,16 @@ def generate_v41_signal(market_data: dict) -> dict:
     take_profit = tp2
     rr = abs(tp2 - entry) / risk
 
+    # ── Premium/Discount (informativo) ───────────────────────
+    pd_zone = compute_premium_discount(
+        entry,
+        float(df_m15.iloc[-24:]["high"].max()) if len(df_m15) >= 24 else entry + atr_m15,
+        float(df_m15.iloc[-24:]["low"].min()) if len(df_m15) >= 24 else entry - atr_m15,
+    )
+
+    # ── Displacement (informativo) ───────────────────────────
+    disp = check_displacement(df_m15, direction, atr_m15)
+
     signal = {
         "asset": asset,
         "direction": direction,
@@ -623,6 +661,19 @@ def generate_v41_signal(market_data: dict) -> dict:
 
         # ADX M15 — forza del trend al momento del segnale (per analytics)
         "adx_m15": adx_m15,
+
+        # ── Structure Engine V2 — campi informativi ──────────
+        "choch_v2_prev_structure": choch_v2_detail.get("prev_structure"),
+        "choch_v2_displacement": choch_v2_detail.get("displacement"),
+        "choch_v2_penetration_pct": choch_v2_detail.get("penetration_pct"),
+        "m15_structure": m15_struct_detail.get("structure"),
+        "volume_ratio": vol_ratio.get("ratio"),
+        "volume_classification": vol_ratio.get("classification"),
+        "pullback_invalidated": pb_valid.get("invalidated", False),
+        "premium_discount_zone": pd_zone.get("zone"),
+        "premium_discount_position": pd_zone.get("position"),
+        "displacement_confirmed": disp.get("confirmed", False),
+        "displacement_magnitude_atr": disp.get("magnitude_atr", 0.0),
     }
 
     logger.info(
@@ -654,6 +705,19 @@ def generate_v41_signal(market_data: dict) -> dict:
         f"{fibonacci['ote_lower']:.4f}" if fibonacci else "N/A",
         f"{fibonacci['ote_upper']:.4f}" if fibonacci else "N/A",
         fib_in_ote,
+    )
+    # ── Log Structure Engine V2 ──────────────────────────────
+    logger.info(
+        "%s | Structure V2: m15_struct=%s choch_prev=%s choch_disp=%s "
+        "vol_ratio=%.2f(%s) pb_valid=%s pd_zone=%s(%.2f) disp=%s(%.1fATR)",
+        asset,
+        m15_struct_detail.get("structure"),
+        choch_v2_detail.get("prev_structure"),
+        choch_v2_detail.get("displacement"),
+        vol_ratio.get("ratio", 0), vol_ratio.get("classification", "?"),
+        pb_valid.get("valid", True),
+        pd_zone.get("zone", "?"), pd_zone.get("position", 0),
+        disp.get("confirmed", False), disp.get("magnitude_atr", 0),
     )
 
     return {"signal": signal, "diagnostics": diagnostics}
