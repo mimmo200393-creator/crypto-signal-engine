@@ -2,32 +2,25 @@
 strategies/institutional_scanner_v41.py
 Institutional Scanner Framework V4.1 — Intraday Wave Edition
 
-AGGIORNATO: Structure Engine V1.0 (29 Giugno 2026)
-    - CHOCH V2: valuta la struttura M15 REALE (non confronta con H4)
-    - M15_CHOCH_LOOKBACK: da 2 a 3
-    - Import di evaluate_choch_v2 da core.structure_engine
-    - Campi informativi V2 aggiunti al signal dict
+AGGIORNATO: Structure Engine V2.0 Sprint 2 (29 Giugno 2026)
+    - generate_v41_signal() consuma structure_snapshot invece di
+      ricalcolare struttura M15 internamente.
+    - Hard abort su snapshot assente (Option A): nessun path duale.
+    - Fix bug: liquidity_source non era mai assegnata (NameError runtime).
+    - Rimosso doppio calcolo di: evaluate_choch_v2(), classify_m15_structure(),
+      compute_volume_ratio(), compute_premium_discount(), check_displacement(),
+      is_pullback_valid().
+    - I campi del signal dict sono identici a Sprint 1: nessun consumatore
+      (Telegram, DB) richiede modifiche.
+    - Import da core.structure_engine mantenuti solo per BOS detection
+      (Sprint 3) e funzioni non ancora migrate.
 
-Strategia indipendente da V3.2 Frozen e V4.0 Daily Edition. Riusa le
-funzioni di analisi di mercato pure (pivot, struttura H4, zone, OTE,
-BOS, sessione) da institutional_scanner_v3.py.
+Sprint 3 sostituirà: BOS detection con snapshot["events"], pullback con
+    snapshot["pullback_status"], confidence con snapshot["structure_confidence"].
+Sprint 4 rimuoverà: gli import residui da core.structure_engine.
 
-Filosofia: lo scanner ragiona come un radar di liquidita', non come
-un giudice sequenziale. Un evento strutturale reale (BOS o CHOCH su
-M15, con eventuale Liquidity Sweep di rafforzamento) genera l'alert.
-Il contesto (EMA H4/H1, Dow Theory, Zone, S/R, OTE, Momentum, Sessione)
-non blocca mai l'alert: serve solo a classificarne la qualita'.
-
-    Trigger  -> genera il segnale (obbligatorio: almeno BOS o CHOCH)
-    Contesto -> determina la qualita' (HIGH/MEDIUM/LOW), mai bloccante
-    News     -> hard gate: nessun nuovo alert in finestra macro ad alto impatto
-
-Asset: PAXG_USDT, BTC_USDT. Sessioni Londra/New York: bonus di
-contesto, non gate (raccolta dati anche fuori sessione per validare
-empiricamente se esiste una differenza statistica reale).
-
-V4.1 e' un framework completamente indipendente, tracciato a parte,
-per confronto empirico con V3.2 e V4.0.
+Filosofia invariata: Trigger → genera il segnale. Contesto → qualità.
+News → hard gate.
 """
 
 from datetime import datetime, timezone
@@ -55,16 +48,12 @@ from strategies.institutional_scanner_v4 import (
     combine_h4_trend,
 )
 
-# ── Structure Engine V1.0 ────────────────────────────────────
-from core.structure_engine import (
-    evaluate_choch_v2,
-    evaluate_bos_v2,
-    compute_volume_ratio,
-    compute_premium_discount,
-    check_displacement,
-    classify_m15_structure,
-    is_pullback_valid,
-)
+# ── Structure Engine — solo funzioni ancora attive in Sprint 2 ──
+# evaluate_bos_v2: rimane fino a Sprint 3
+# Le altre (evaluate_choch_v2, classify_m15_structure, compute_volume_ratio,
+# compute_premium_discount, check_displacement, is_pullback_valid) sono
+# ora consumate tramite snapshot — import rimossi.
+from core.structure_engine import evaluate_bos_v2
 
 logger = logging.getLogger("institutional_scanner_v41")
 
@@ -92,7 +81,7 @@ V41_ASSETS = ["PAXG_USDT", "BTC_USDT"]
 # ============================================================
 # Parametri tecnici
 # ============================================================
-M15_CHOCH_LOOKBACK = 3          # ERA 2 — aggiornato per Structure Engine V1.0
+M15_CHOCH_LOOKBACK = 3
 SWEEP_LOOKBACK_CANDLES = 20
 SWEEP_PENETRATION_MIN_PCT = 0.0005
 MOMENTUM_LOOKBACK = 5
@@ -157,53 +146,49 @@ def evaluate_ema_trend(df: pd.DataFrame) -> str:
 
 
 # ============================================================
-# Change of Character (CHOCH) — V2: struttura M15 reale
+# CHOCH — Sprint 2: legge dal snapshot
 # ============================================================
 
-def evaluate_m15_choch(df_m15: pd.DataFrame, prevailing_structure: str) -> Optional[str]:
+def _choch_from_snapshot(snapshot: dict) -> Optional[str]:
     """
-    CHOCH V2: valuta il cambio di struttura sulla sequenza M15 REALE.
-
-    Il parametro prevailing_structure (da H4) viene mantenuto nella
-    firma per compatibilita' con i chiamanti, ma NON viene piu' usato
-    per determinare il CHOCH. La struttura M15 viene valutata
-    internamente dalla sequenza dei suoi pivot.
-
-    Se il CHOCH V2 conferma E la direzione e' opposta alla
-    prevailing_structure H4, il segnale e' coerente con la definizione
-    originale (inversione rispetto al trend macro).
+    Estrae la direzione del CHOCH dagli eventi dello snapshot.
+    Ritorna la direzione dell'evento CHOCH più recente, o None.
     """
-    choch = evaluate_choch_v2(df_m15, lookback=M15_CHOCH_LOOKBACK)
-
-    if not choch["confirmed"]:
+    events = snapshot.get("events", [])
+    choch_events = [e for e in events if e.get("type") == "CHOCH"]
+    if not choch_events:
         return None
+    return choch_events[-1].get("direction")  # "BULLISH" o "BEARISH"
 
-    return choch["direction"]
+
+def _choch_detail_from_snapshot(snapshot: dict) -> dict:
+    """
+    Ritorna i campi di dettaglio CHOCH dallo snapshot per il signal dict.
+    Equivalente a evaluate_choch_v2() ma senza ricalcolo.
+    """
+    events = snapshot.get("events", [])
+    choch_events = [e for e in events if e.get("type") == "CHOCH"]
+    if not choch_events:
+        return {
+            "confirmed": False,
+            "direction": None,
+            "prev_structure": None,
+            "displacement": False,
+            "penetration_pct": None,
+        }
+    ev = choch_events[-1]
+    return {
+        "confirmed": True,
+        "direction": ev.get("direction"),
+        "prev_structure": ev.get("prev_structure"),
+        "displacement": ev.get("displacement", False),
+        "penetration_pct": ev.get("penetration_pct"),
+    }
 
 
 # ============================================================
 # Liquidity Sweep
 # ============================================================
-
-def evaluate_m15_liquidity_sweep(df_m15: pd.DataFrame) -> Optional[str]:
-    if len(df_m15) < SWEEP_LOOKBACK_CANDLES + 3:
-        return None
-    recent = df_m15.iloc[-(SWEEP_LOOKBACK_CANDLES + 1):-1]
-    last = df_m15.iloc[-1]
-    swing_high = float(recent["high"].max())
-    swing_low = float(recent["low"].min())
-    last_high = float(last["high"])
-    last_low = float(last["low"])
-    last_close = float(last["close"])
-    last_open = float(last["open"])
-    penetration_up = (last_high - swing_high) / swing_high if swing_high else 0
-    if penetration_up > SWEEP_PENETRATION_MIN_PCT and last_close < swing_high and last_close < last_open:
-        return "BEARISH"
-    penetration_down = (swing_low - last_low) / swing_low if swing_low else 0
-    if penetration_down > SWEEP_PENETRATION_MIN_PCT and last_close > swing_low and last_close > last_open:
-        return "BULLISH"
-    return None
-
 
 def evaluate_m15_liquidity_sweep_detailed(df_m15: pd.DataFrame) -> Optional[dict]:
     if len(df_m15) < SWEEP_LOOKBACK_CANDLES + 3:
@@ -419,13 +404,14 @@ def is_stop_too_wide(asset: str, entry: float, stop_loss: float) -> bool:
 # ============================================================
 
 def generate_v41_signal(market_data: dict) -> dict:
-    asset = market_data["asset"]
-    df_h4 = market_data["df_h4"]
-    df_h1 = market_data["df_h1"]
-    df_m15 = market_data["df_m15"]
-    df_d1 = market_data.get("df_d1")
-    now = market_data.get("timestamp", datetime.now(timezone.utc))
+    asset         = market_data["asset"]
+    df_h4         = market_data["df_h4"]
+    df_h1         = market_data["df_h1"]
+    df_m15        = market_data["df_m15"]
+    df_d1         = market_data.get("df_d1")
+    now           = market_data.get("timestamp", datetime.now(timezone.utc))
     macro_provider = market_data.get("macro_provider")
+    snapshot      = market_data.get("structure_snapshot")  # ← Sprint 2
 
     diagnostics = {
         "asset": asset,
@@ -434,54 +420,78 @@ def generate_v41_signal(market_data: dict) -> dict:
         "trigger_types": [],
     }
 
+    # ── Hard gate: news ───────────────────────────────────────
     active_event = is_news_blackout(macro_provider, now)
     if active_event:
         diagnostics["rejections"].append(f"NEWS_BLACKOUT_{active_event['type']}")
         diagnostics["active_news_event"] = active_event
         return {"signal": None, "diagnostics": diagnostics}
 
+    # ── Hard gate: snapshot assente (Option A) ────────────────
+    # Structure Engine V2 è la singola fonte di verità. Senza snapshot
+    # non possiamo validare la struttura: il segnale non viene emesso.
+    if snapshot is None:
+        diagnostics["rejections"].append("NO_STRUCTURE_SNAPSHOT")
+        return {"signal": None, "diagnostics": diagnostics}
+
+    # ── Dati minimi ───────────────────────────────────────────
     if len(df_h4) < 15 or len(df_h1) < 20 or len(df_m15) < max(SWEEP_LOOKBACK_CANDLES + 3, 15):
         diagnostics["rejections"].append("INSUFFICIENT_DATA")
         return {"signal": None, "diagnostics": diagnostics}
 
     atr_m15 = float(df_m15.iloc[-1]["atr"]) if "atr" in df_m15.columns else 0
-    atr_h4 = float(df_h4.iloc[-1]["atr"]) if "atr" in df_h4.columns else 0
+    atr_h4  = float(df_h4.iloc[-1]["atr"])  if "atr" in df_h4.columns  else 0
 
-    h4_struct = evaluate_h4_structure(df_h4)
-    dow_theory_h4 = h4_struct["structure"]
-    ema_h4_trend_for_structure = evaluate_ema_trend_h4(df_h4)
-    dominant_h4_structure = combine_h4_trend(dow_theory_h4, ema_h4_trend_for_structure)
+    # ── Struttura H4 (ancora calcolata localmente — Sprint 3) ─
+    h4_struct              = evaluate_h4_structure(df_h4)
+    dow_theory_h4          = h4_struct["structure"]
+    ema_h4_trend_for_struct = evaluate_ema_trend_h4(df_h4)
+    dominant_h4_structure  = combine_h4_trend(dow_theory_h4, ema_h4_trend_for_struct)
 
-    diagnostics["dow_theory_h4"] = dow_theory_h4
-    diagnostics["dominant_h4_structure"] = dominant_h4_structure
+    diagnostics["dow_theory_h4"]          = dow_theory_h4
+    diagnostics["dominant_h4_structure"]  = dominant_h4_structure
 
-    # ── BOS detection (usa lookback=3 da institutional_scanner_v3) ──
+    # ── BOS: ancora calcolato localmente — Sprint 3 ───────────
     bos_direction = None
     if dominant_h4_structure in ("BULLISH", "BEARISH"):
         bos_signal_direction = "BUY" if dominant_h4_structure == "BULLISH" else "SELL"
         if evaluate_m15_bos(df_m15, bos_signal_direction):
             bos_direction = dominant_h4_structure
 
-    # ── CHOCH V2: struttura M15 reale ────────────────────────
-    choch_direction = evaluate_m15_choch(df_m15, dominant_h4_structure)
+    # ── CHOCH V2: dal snapshot ────────────────────────────────
+    choch_direction  = _choch_from_snapshot(snapshot)
+    choch_v2_detail  = _choch_detail_from_snapshot(snapshot)
 
-    diagnostics["bos_direction"] = bos_direction
+    diagnostics["bos_direction"]   = bos_direction
     diagnostics["choch_direction"] = choch_direction
 
-    # ── Structure Engine V2 — campi informativi ──────────────
-    choch_v2_detail = evaluate_choch_v2(df_m15, lookback=M15_CHOCH_LOOKBACK)
-    m15_struct_detail = classify_m15_structure(df_m15, lookback=M15_CHOCH_LOOKBACK)
-    vol_ratio = compute_volume_ratio(df_m15)
-    pb_valid = is_pullback_valid(df_h4, "BUY" if (bos_direction or choch_direction) == "BULLISH" else "SELL", h4_struct)
+    # ── Campi strutturali dal snapshot ───────────────────────
+    m15_cls   = snapshot["structure_m15"]["classification"]
+    vol_ratio = {
+        "ratio":          snapshot.get("volume_ratio_m15", 1.0),
+        "classification": snapshot.get("volume_classification", "NORMAL"),
+    }
+    pullback_status = snapshot.get("pullback_status", {})
+    pd_zone = snapshot.get("premium_discount", {"zone": "EQUILIBRIUM", "position": 0.5})
 
+    # Pullback invalidated: dipende dalla direzione strutturale
+    # (calcoliamo dopo aver determinato direction, più in basso)
+
+    # Displacement: dall'evento più recente nello snapshot (se Sprint 3
+    # non è ancora attivo, leggiamo dal campo displacement placeholder)
+    disp_raw = snapshot.get("displacement", {})
+    displacement = {
+        "confirmed":       disp_raw.get("confirmed", False),
+        "magnitude_atr":   disp_raw.get("magnitude_atr", 0.0),
+    }
+
+    diagnostics["m15_structure"]         = m15_cls
     diagnostics["choch_v2_prev_structure"] = choch_v2_detail.get("prev_structure")
-    diagnostics["choch_v2_displacement"] = choch_v2_detail.get("displacement")
-    diagnostics["m15_structure"] = m15_struct_detail.get("structure")
-    diagnostics["volume_ratio"] = vol_ratio.get("ratio")
-    diagnostics["volume_classification"] = vol_ratio.get("classification")
-    diagnostics["pullback_valid"] = pb_valid.get("valid", True)
-    diagnostics["pullback_invalidated"] = pb_valid.get("invalidated", False)
+    diagnostics["choch_v2_displacement"]   = choch_v2_detail.get("displacement")
+    diagnostics["volume_ratio"]            = vol_ratio["ratio"]
+    diagnostics["volume_classification"]   = vol_ratio["classification"]
 
+    # ── Conflict check e direzione strutturale ────────────────
     if bos_direction and choch_direction and bos_direction != choch_direction:
         diagnostics["rejections"].append("BOS_CHOCH_CONFLICT")
         return {"signal": None, "diagnostics": diagnostics}
@@ -498,7 +508,8 @@ def generate_v41_signal(market_data: dict) -> dict:
     if choch_direction:
         diagnostics["trigger_types"].append("CHOCH")
 
-    sweep_detail = evaluate_m15_liquidity_sweep_detailed(df_m15)
+    # ── Sweep ─────────────────────────────────────────────────
+    sweep_detail    = evaluate_m15_liquidity_sweep_detailed(df_m15)
     sweep_direction = sweep_detail["direction"] if sweep_detail else None
     diagnostics["sweep_direction"] = sweep_direction
     if sweep_direction:
@@ -506,60 +517,65 @@ def generate_v41_signal(market_data: dict) -> dict:
 
     direction = "BUY" if structural_direction == "BULLISH" else "SELL"
 
-    current_price_for_map = float(df_m15.iloc[-1]["close"])
+    # ── Pullback invalidated (ora che direction è nota) ───────
+    if direction == "BUY":
+        pullback_invalidated = not pullback_status.get("buy_valid", True)
+    else:
+        pullback_invalidated = not pullback_status.get("sell_valid", True)
+
+    diagnostics["pullback_valid"]       = not pullback_invalidated
+    diagnostics["pullback_invalidated"] = pullback_invalidated
+
+    # ── Liquidity Map ─────────────────────────────────────────
+    current_price = float(df_m15.iloc[-1]["close"])
     liquidity_map = build_liquidity_map(df_h4, df_d1 if df_d1 is not None else pd.DataFrame())
-    liquidity_target = find_liquidity_target(liquidity_map, current_price_for_map, direction)
+
+    liquidity_source = find_liquidity_source(liquidity_map, current_price, direction)  # fix bug Sprint 1
+    liquidity_target = find_liquidity_target(liquidity_map, current_price, direction)
 
     diagnostics["liquidity_source"] = liquidity_source["label"] if liquidity_source else None
     diagnostics["liquidity_target"] = liquidity_target["label"] if liquidity_target else None
 
-    fibonacci = calculate_v41_fibonacci(df_m15, direction, sweep_detail)
-    fib_in_ote = fibonacci["in_ote"] if fibonacci else False
+    # ── Fibonacci / OTE ───────────────────────────────────────
+    fibonacci   = calculate_v41_fibonacci(df_m15, direction, sweep_detail)
+    fib_in_ote  = fibonacci["in_ote"] if fibonacci else False
     diagnostics["fibonacci"] = fibonacci
 
-    ema_h4 = evaluate_ema_trend(df_h4)
-    ema_h1 = evaluate_ema_trend(df_h1)
-    momentum = evaluate_m15_momentum(df_m15)
-    session = get_session_v41(now)
+    # ── Contesto qualità ─────────────────────────────────────
+    ema_h4    = evaluate_ema_trend(df_h4)
+    ema_h1    = evaluate_ema_trend(df_h1)
+    momentum  = evaluate_m15_momentum(df_m15)
+    session   = get_session_v41(now)
 
-    # ADX M15 — forza del trend (informativo, per analytics)
     adx_m15 = None
     if "atr" in df_m15.columns and len(df_m15) >= 14:
         try:
-            adx_m15 = float(df_m15.iloc[-1]["atr"]) if "adx" not in df_m15.columns else float(df_m15.iloc[-1]["adx"])
+            adx_m15 = float(df_m15.iloc[-1]["adx"]) if "adx" in df_m15.columns else None
         except Exception:
             adx_m15 = None
 
-    zones = build_h4_zones(df_h4, atr_h4) if atr_h4 > 0 else []
-    in_h4_zone = any(
+    zones       = build_h4_zones(df_h4, atr_h4) if atr_h4 > 0 else []
+    in_h4_zone  = any(
         price_in_zone(float(df_h1.iloc[-1]["close"]), z, tolerance_pct=0.006) for z in zones
     ) if zones else False
     sr_reaction = evaluate_sr_reaction(df_h1, zones)
     ote_present = fib_in_ote
 
-    ema_h4_aligned = ema_h4 == structural_direction
-    ema_h1_aligned = ema_h1 == structural_direction
-    dow_aligned = dow_theory_h4 == structural_direction
+    ema_h4_aligned  = ema_h4    == structural_direction
+    ema_h1_aligned  = ema_h1    == structural_direction
+    dow_aligned     = dow_theory_h4 == structural_direction
     momentum_aligned = momentum == structural_direction
-    session_bonus = session in ("LONDON", "OVERLAP", "NEW_YORK")
+    session_bonus   = session in ("LONDON", "OVERLAP", "NEW_YORK")
 
     score = 0
-    if ema_h4_aligned:
-        score += SCORE_EMA_H4
-    if ema_h1_aligned:
-        score += SCORE_EMA_H1
-    if in_h4_zone:
-        score += SCORE_ZONE_H4
-    if sr_reaction:
-        score += SCORE_SR
-    if dow_aligned:
-        score += SCORE_DOW_THEORY
-    if momentum_aligned:
-        score += SCORE_MOMENTUM
-    if ote_present:
-        score += SCORE_OTE
-    if session_bonus:
-        score += SCORE_SESSION
+    if ema_h4_aligned:    score += SCORE_EMA_H4
+    if ema_h1_aligned:    score += SCORE_EMA_H1
+    if in_h4_zone:        score += SCORE_ZONE_H4
+    if sr_reaction:       score += SCORE_SR
+    if dow_aligned:       score += SCORE_DOW_THEORY
+    if momentum_aligned:  score += SCORE_MOMENTUM
+    if ote_present:       score += SCORE_OTE
+    if session_bonus:     score += SCORE_SESSION
     if liquidity_source is not None:
         score += SCORE_LIQUIDITY_CONTEXT
 
@@ -575,9 +591,10 @@ def generate_v41_signal(market_data: dict) -> dict:
     diagnostics["quality_score"] = score
     diagnostics["quality_label"] = quality_label
 
-    entry = float(df_m15.iloc[-1]["close"])
+    # ── Stop Loss ─────────────────────────────────────────────
+    entry = current_price
 
-    swing_type = "low" if direction == "BUY" else "high"
+    swing_type      = "low" if direction == "BUY" else "high"
     structural_swing = _find_m15_swing(df_m15.iloc[:-1], swing_type, M15_BOS_LOOKBACK)
 
     if atr_m15 <= 0:
@@ -585,10 +602,10 @@ def generate_v41_signal(market_data: dict) -> dict:
         return {"signal": None, "diagnostics": diagnostics}
 
     if direction == "BUY":
-        sl_atr = entry - 1.5 * atr_m15
+        sl_atr    = entry - 1.5 * atr_m15
         stop_loss = min(structural_swing, sl_atr) if structural_swing is not None else sl_atr
     else:
-        sl_atr = entry + 1.5 * atr_m15
+        sl_atr    = entry + 1.5 * atr_m15
         stop_loss = max(structural_swing, sl_atr) if structural_swing is not None else sl_atr
 
     risk = abs(entry - stop_loss)
@@ -607,7 +624,7 @@ def generate_v41_signal(market_data: dict) -> dict:
         )
         return {"signal": None, "diagnostics": diagnostics}
 
-    # Target: TP1 = 1R (R/R 1:1), TP2 = 2R (R/R 1:2)
+    # ── Target ────────────────────────────────────────────────
     if direction == "BUY":
         tp1 = entry + 1.0 * risk
         tp2 = entry + 2.0 * risk
@@ -618,64 +635,54 @@ def generate_v41_signal(market_data: dict) -> dict:
     take_profit = tp2
     rr = abs(tp2 - entry) / risk
 
-    # ── Premium/Discount (informativo) ───────────────────────
-    pd_zone = compute_premium_discount(
-        entry,
-        float(df_m15.iloc[-24:]["high"].max()) if len(df_m15) >= 24 else entry + atr_m15,
-        float(df_m15.iloc[-24:]["low"].min()) if len(df_m15) >= 24 else entry - atr_m15,
-    )
-
-    # ── Displacement (informativo) ───────────────────────────
-    disp = check_displacement(df_m15, direction, atr_m15)
-
+    # ── Signal dict ───────────────────────────────────────────
     signal = {
-        "asset": asset,
-        "direction": direction,
-        "entry": entry,
-        "stop_loss": stop_loss,
-        "take_profit": take_profit,
-        "tp1": tp1,
-        "tp2": tp2,
-        "rr": rr,
-        "trigger_types": list(diagnostics["trigger_types"]),
+        "asset":          asset,
+        "direction":      direction,
+        "entry":          entry,
+        "stop_loss":      stop_loss,
+        "take_profit":    take_profit,
+        "tp1":            tp1,
+        "tp2":            tp2,
+        "rr":             rr,
+        "trigger_types":  list(diagnostics["trigger_types"]),
         "sweep_direction": sweep_direction,
-        "bos_direction": bos_direction,
+        "bos_direction":  bos_direction,
         "choch_direction": choch_direction,
-        "quality_score": score,
-        "quality_label": quality_label,
-        "ema_h4": ema_h4,
-        "ema_h1": ema_h1,
-        "dow_theory_h4": dow_theory_h4,
-        "momentum": momentum,
-        "in_h4_zone": in_h4_zone,
-        "sr_reaction": sr_reaction,
-        "ote_present": ote_present,
-        "session": session,
-        "liquidity_source": liquidity_source["label"] if liquidity_source else None,
-        "liquidity_target": liquidity_target["label"] if liquidity_target else None,
+        "quality_score":  score,
+        "quality_label":  quality_label,
+        "ema_h4":         ema_h4,
+        "ema_h1":         ema_h1,
+        "dow_theory_h4":  dow_theory_h4,
+        "momentum":       momentum,
+        "in_h4_zone":     in_h4_zone,
+        "sr_reaction":    sr_reaction,
+        "ote_present":    ote_present,
+        "session":        session,
+        "liquidity_source":       liquidity_source["label"] if liquidity_source else None,
+        "liquidity_target":       liquidity_target["label"] if liquidity_target else None,
         "liquidity_target_price": liquidity_target["price"] if liquidity_target else None,
-        "ote_entry_low": fibonacci["ote_lower"] if fibonacci else None,
-        "ote_entry_high": fibonacci["ote_upper"] if fibonacci else None,
-        "ote_in_zone_now": fib_in_ote,
-        "timestamp_setup": now.isoformat(),
+        "ote_entry_low":    fibonacci["ote_lower"] if fibonacci else None,
+        "ote_entry_high":   fibonacci["ote_upper"] if fibonacci else None,
+        "ote_in_zone_now":  fib_in_ote,
+        "timestamp_setup":  now.isoformat(),
+        "adx_m15":          adx_m15,
 
-        # ADX M15 — forza del trend al momento del segnale (per analytics)
-        "adx_m15": adx_m15,
-
-        # ── Structure Engine V2 — campi informativi ──────────
-        "choch_v2_prev_structure": choch_v2_detail.get("prev_structure"),
-        "choch_v2_displacement": choch_v2_detail.get("displacement"),
-        "choch_v2_penetration_pct": choch_v2_detail.get("penetration_pct"),
-        "m15_structure": m15_struct_detail.get("structure"),
-        "volume_ratio": vol_ratio.get("ratio"),
-        "volume_classification": vol_ratio.get("classification"),
-        "pullback_invalidated": pb_valid.get("invalidated", False),
-        "premium_discount_zone": pd_zone.get("zone"),
+        # ── Structure Engine V2 — Sprint 2: dal snapshot ─────
+        "choch_v2_prev_structure":   choch_v2_detail.get("prev_structure"),
+        "choch_v2_displacement":     choch_v2_detail.get("displacement"),
+        "choch_v2_penetration_pct":  choch_v2_detail.get("penetration_pct"),
+        "m15_structure":             m15_cls,
+        "volume_ratio":              vol_ratio["ratio"],
+        "volume_classification":     vol_ratio["classification"],
+        "pullback_invalidated":      pullback_invalidated,
+        "premium_discount_zone":     pd_zone.get("zone"),
         "premium_discount_position": pd_zone.get("position"),
-        "displacement_confirmed": disp.get("confirmed", False),
-        "displacement_magnitude_atr": disp.get("magnitude_atr", 0.0),
+        "displacement_confirmed":    displacement["confirmed"],
+        "displacement_magnitude_atr": displacement["magnitude_atr"],
     }
 
+    # ── Log ───────────────────────────────────────────────────
     logger.info(
         "%s | V4.1 ALERT [%s] trigger=%s quality=%d/%d (%s) session=%s",
         asset, direction, diagnostics["trigger_types"], score, SCORE_MAX,
@@ -685,14 +692,14 @@ def generate_v41_signal(market_data: dict) -> dict:
         "%s | Quality breakdown: EMA_H4=%s(%s) EMA_H1=%s(%s) ZONE_H4=%s SR=%s "
         "DOW_THEORY=%s(%s) MOMENTUM=%s(%s) OTE=%s SESSION=%s LIQUIDITY_CTX=%s | totale=%d/%d",
         asset,
-        "OK" if ema_h4_aligned else "NO", ema_h4,
-        "OK" if ema_h1_aligned else "NO", ema_h1,
-        "OK" if in_h4_zone else "NO",
-        "OK" if sr_reaction else "NO",
-        "OK" if dow_aligned else "NO", dow_theory_h4,
+        "OK" if ema_h4_aligned  else "NO", ema_h4,
+        "OK" if ema_h1_aligned  else "NO", ema_h1,
+        "OK" if in_h4_zone      else "NO",
+        "OK" if sr_reaction     else "NO",
+        "OK" if dow_aligned     else "NO", dow_theory_h4,
         "OK" if momentum_aligned else "NO", momentum,
-        "OK" if ote_present else "NO",
-        "OK" if session_bonus else "NO",
+        "OK" if ote_present     else "NO",
+        "OK" if session_bonus   else "NO",
         "OK" if liquidity_source is not None else "NO",
         score, SCORE_MAX,
     )
@@ -706,18 +713,18 @@ def generate_v41_signal(market_data: dict) -> dict:
         f"{fibonacci['ote_upper']:.4f}" if fibonacci else "N/A",
         fib_in_ote,
     )
-    # ── Log Structure Engine V2 ──────────────────────────────
     logger.info(
-        "%s | Structure V2: m15_struct=%s choch_prev=%s choch_disp=%s "
-        "vol_ratio=%.2f(%s) pb_valid=%s pd_zone=%s(%.2f) disp=%s(%.1fATR)",
+        "%s | Structure V2 (snapshot): m15=%s choch_prev=%s choch_disp=%s "
+        "vol=%.2f(%s) pb_inv=%s pd=%s(%.2f) disp=%s(%.1fATR) conf=%d",
         asset,
-        m15_struct_detail.get("structure"),
+        m15_cls,
         choch_v2_detail.get("prev_structure"),
         choch_v2_detail.get("displacement"),
-        vol_ratio.get("ratio", 0), vol_ratio.get("classification", "?"),
-        pb_valid.get("valid", True),
-        pd_zone.get("zone", "?"), pd_zone.get("position", 0),
-        disp.get("confirmed", False), disp.get("magnitude_atr", 0),
+        vol_ratio["ratio"], vol_ratio["classification"],
+        pullback_invalidated,
+        pd_zone.get("zone"), pd_zone.get("position", 0),
+        displacement["confirmed"], displacement["magnitude_atr"],
+        snapshot.get("structure_confidence", 0),
     )
 
     return {"signal": signal, "diagnostics": diagnostics}
