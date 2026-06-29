@@ -2,6 +2,12 @@
 core/v41p1_runner.py
 Orchestratore di Institutional Scanner V4.1 Phase 1
 Money Flow & Intraday Edge Validation.
+
+Sprint 1: integrazione Structure Engine V2.
+    - produce_structure_snapshot() chiamato in _run_for_asset()
+    - snapshot passato a market_data["structure_snapshot"]
+    - signal arricchito con i campi strutturali rilevanti
+    - init_structure_schema() chiamato in run_v41p1_scan()
 """
 
 import logging
@@ -11,6 +17,8 @@ from storage import db as core_db
 from core import indicators, macro
 from core import v3_db
 from core import v41p1_db
+from core.structure_db import init_structure_schema
+from core.structure_engine_v2 import produce_structure_snapshot
 from strategies import institutional_scanner_v41 as v41
 from strategies.institutional_scanner_v41 import get_session_v41
 from strategies.money_flow_map import (
@@ -26,6 +34,10 @@ V41P1_TIMEFRAMES = {"H4": "4h", "H1": "1h", "M15": "15m"}
 
 WATCHLIST_PROXIMITY_PCT = 0.005
 
+
+# ============================================================
+# DataFrame preparation
+# ============================================================
 
 def _prepare_dataframes(conn, asset: str, config: dict):
     limit = config.get("BOOTSTRAP_TARGET_CANDLES", 300)
@@ -49,6 +61,31 @@ def _prepare_dataframes(conn, asset: str, config: dict):
 
     return df_h4, df_h1, df_m15, df_d1
 
+
+# ============================================================
+# Session High/Low helper
+# ============================================================
+
+def _get_session_range(df_m15, now: datetime) -> tuple[float, float]:
+    """
+    Calcola il range della sessione corrente dalle candele M15.
+
+    Usa le candele della sessione attiva (ultime 32 candele M15 ≈ 8h),
+    garantendo sempre valori validi anche senza Session Engine.
+    Restituisce (session_high, session_low).
+    """
+    if len(df_m15) == 0:
+        return 0.0, 0.0
+
+    session_candles = df_m15.iloc[-32:]  # ~8 ore di M15
+    session_high = float(session_candles["high"].max())
+    session_low  = float(session_candles["low"].min())
+    return session_high, session_low
+
+
+# ============================================================
+# Watchlist
+# ============================================================
 
 def _check_watchlist(conn, asset: str, mfm: dict, now: datetime, config: dict):
     timestamp_str = now.isoformat()
@@ -105,6 +142,10 @@ def _check_watchlist(conn, asset: str, mfm: dict, now: datetime, config: dict):
                 v41p1_db.set_watchlist_state(conn, asset, label, False, timestamp_str)
 
 
+# ============================================================
+# MFM enrichment
+# ============================================================
+
 def _enrich_signal_with_mfm(signal: dict, mfm: dict) -> dict:
     direction = signal["direction"]
     entry     = signal["entry"]
@@ -157,6 +198,58 @@ def _enrich_signal_with_mfm(signal: dict, mfm: dict) -> dict:
     return signal
 
 
+# ============================================================
+# Structure enrichment  ← NUOVO (Sprint 1)
+# ============================================================
+
+def _enrich_signal_with_structure(signal: dict, snapshot: dict) -> dict:
+    """
+    Aggiunge i campi strutturali allo snapshot del segnale.
+
+    Tutti i campi usano il prefisso `struct_` per evitare collisioni
+    con i campi esistenti.  I consumatori (Telegram, DB) possono
+    ignorarli senza modifiche — sono additive.
+    """
+    signal["struct_h4"]          = snapshot["structure_h4"]["classification"]
+    signal["struct_m15"]         = snapshot["structure_m15"]["classification"]
+    signal["struct_confidence"]  = snapshot["structure_confidence"]
+    signal["struct_volume_cls"]  = snapshot["volume_classification"]
+    signal["struct_pd_zone"]     = snapshot["premium_discount"]["zone"]
+    signal["struct_pd_pos"]      = snapshot["premium_discount"]["position"]
+    signal["struct_bars_bos"]    = snapshot.get("bars_since_bos")
+    signal["struct_bars_choch"]  = snapshot.get("bars_since_choch")
+
+    # Coerenza strutturale tra H4/M15 e la direzione del segnale
+    direction = signal.get("direction")
+    h4_cls  = snapshot["structure_h4"]["classification"]
+    m15_cls = snapshot["structure_m15"]["classification"]
+
+    aligned_h4  = (direction == "BUY"  and h4_cls  == "BULLISH") or \
+                  (direction == "SELL" and h4_cls  == "BEARISH")
+    aligned_m15 = (direction == "BUY"  and m15_cls == "BULLISH") or \
+                  (direction == "SELL" and m15_cls == "BEARISH")
+
+    signal["struct_aligned_h4"]  = aligned_h4
+    signal["struct_aligned_m15"] = aligned_m15
+    signal["struct_aligned_both"] = aligned_h4 and aligned_m15
+
+    # Evento strutturale più recente (tipo + direzione, se presente)
+    events = snapshot.get("events", [])
+    if events:
+        last_ev = events[-1]
+        signal["struct_last_event_type"] = last_ev.get("type")
+        signal["struct_last_event_dir"]  = last_ev.get("direction")
+    else:
+        signal["struct_last_event_type"] = None
+        signal["struct_last_event_dir"]  = None
+
+    return signal
+
+
+# ============================================================
+# Per-asset runner
+# ============================================================
+
 def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime):
     logger.info("V41P1 Scanner: inizio ciclo per %s", asset)
 
@@ -169,7 +262,7 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
         )
         return
 
-    # --- Money Flow Map ---
+    # ── Money Flow Map ────────────────────────────────────────
     current_price = float(df_m15.iloc[-1]["close"])
     mfm = build_money_flow_map(df_h4, df_d1, current_price)
 
@@ -180,7 +273,40 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
     except Exception as e:
         logger.warning("V41P1 [%s]: errore salvataggio MFM snapshot: %s", asset, e)
 
-    # --- Monitoraggio segnali aperti ---
+    # ── Structure Engine V2 (Sprint 1) ───────────────────────
+    atr_m15 = float(df_m15.iloc[-1]["atr"]) if "atr" in df_m15.columns else 0.0
+    session_high, session_low = _get_session_range(df_m15, now)
+
+    structure_snapshot = None
+    try:
+        structure_snapshot = produce_structure_snapshot(
+            asset=asset,
+            df_h4=df_h4,
+            df_m15=df_m15,
+            conn=conn,
+            atr_m15=atr_m15,
+            session_high=session_high,
+            session_low=session_low,
+            now=now,
+            config=config.get("STRUCTURE_ENGINE", {}),
+        )
+        logger.info(
+            "V41P1 Structure [%s]: H4=%s M15=%s confidence=%d pd=%s(%.2f) "
+            "events=%d bars_bos=%s bars_choch=%s",
+            asset,
+            structure_snapshot["structure_h4"]["classification"],
+            structure_snapshot["structure_m15"]["classification"],
+            structure_snapshot["structure_confidence"],
+            structure_snapshot["premium_discount"]["zone"],
+            structure_snapshot["premium_discount"]["position"],
+            len(structure_snapshot.get("events", [])),
+            structure_snapshot.get("bars_since_bos"),
+            structure_snapshot.get("bars_since_choch"),
+        )
+    except Exception as e:
+        logger.error("V41P1 Structure [%s]: errore produce_structure_snapshot: %s", asset, e)
+
+    # ── Monitoraggio segnali aperti ───────────────────────────
     try:
         last_m15 = df_m15.iloc[-1]
         updated = v41p1_db.monitor_open_signals(
@@ -199,22 +325,23 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
     except Exception as e:
         logger.error("V41P1 Monitor [%s]: errore: %s", asset, e)
 
-    # --- Watchlist Alert ---
+    # ── Watchlist Alert ───────────────────────────────────────
     try:
         _check_watchlist(conn, asset, mfm, now, config)
     except Exception as e:
         logger.error("V41P1 Watchlist [%s]: errore: %s", asset, e)
 
-    # --- Trigger ---
+    # ── Trigger ───────────────────────────────────────────────
     market_data = {
-        "asset":          asset,
-        "df_h4":          df_h4,
-        "df_h1":          df_h1,
-        "df_m15":         df_m15,
-        "df_d1":          df_d1,
-        "timestamp":      now,
-        "macro_provider": macro_provider,
-        "mfm":            mfm,   # ← passa MFM per check sweep (Phase 2)
+        "asset":              asset,
+        "df_h4":              df_h4,
+        "df_h1":              df_h1,
+        "df_m15":             df_m15,
+        "df_d1":              df_d1,
+        "timestamp":          now,
+        "macro_provider":     macro_provider,
+        "mfm":                mfm,
+        "structure_snapshot": structure_snapshot,  # ← Sprint 1
     }
 
     result      = v41.generate_v41_signal(market_data)
@@ -231,13 +358,28 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
         logger.info("V41P1 Scanner [%s]: nessun alert.", asset)
         return
 
-    # --- Sessione corretta ---
+    # ── Sessione corrente ─────────────────────────────────────
     signal["session"] = get_session_v41(now)
 
-    # --- Arricchisce con MFM ---
+    # ── Arricchisce con MFM ───────────────────────────────────
     signal = _enrich_signal_with_mfm(signal, mfm)
 
-    # --- Duplicate Signal Protection ---
+    # ── Arricchisce con struttura (Sprint 1) ──────────────────
+    if structure_snapshot is not None:
+        signal = _enrich_signal_with_structure(signal, structure_snapshot)
+    else:
+        # Valori neutri: il segnale rimane valido anche senza struttura
+        signal.update({
+            "struct_h4": "NEUTRAL", "struct_m15": "NEUTRAL",
+            "struct_confidence": 0, "struct_volume_cls": "NORMAL",
+            "struct_pd_zone": "EQUILIBRIUM", "struct_pd_pos": 0.5,
+            "struct_bars_bos": None, "struct_bars_choch": None,
+            "struct_aligned_h4": False, "struct_aligned_m15": False,
+            "struct_aligned_both": False,
+            "struct_last_event_type": None, "struct_last_event_dir": None,
+        })
+
+    # ── Duplicate Signal Protection ───────────────────────────
     current_trigger_type     = "BOS" if signal.get("bos_direction") else "CHOCH"
     current_liquidity_source = signal.get("liquidity_source")
 
@@ -259,15 +401,23 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
     signal_id = v41p1_db.insert_v41p1_signal(conn, signal)
     logger.info(
         "V41P1 Scanner [%s]: ALERT [%s] trigger=%s quality=%d/12 (%s) "
-        "source=%s target=%s em=%s session=%s sweep=%s (id=%s)",
-        asset, signal["direction"], signal.get("trigger_types"),
-        signal["quality_score"], signal["quality_label"],
+        "source=%s target=%s em=%s session=%s sweep=%s "
+        "struct=H4:%s/M15:%s conf=%d aligned=%s (id=%s)",
+        asset,
+        signal["direction"],
+        signal.get("trigger_types"),
+        signal["quality_score"],
+        signal["quality_label"],
         signal.get("liquidity_source") or "N/A",
         signal.get("liquidity_target") or "N/A",
         f"{signal.get('expected_move_points', 0):.1f}pt"
             if signal.get("expected_move_points") else "N/A",
         signal["session"],
         signal.get("mfm_sweep_confirmed", False),
+        signal.get("struct_h4", "N/A"),
+        signal.get("struct_m15", "N/A"),
+        signal.get("struct_confidence", 0),
+        signal.get("struct_aligned_both", False),
         signal_id,
     )
 
@@ -288,9 +438,14 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
         logger.info("V41P1 Scanner [%s]: ntfy inviato=%s", asset, ntfy_sent)
 
 
+# ============================================================
+# Entry point
+# ============================================================
+
 def run_v41p1_scan(config: dict):
     conn = core_db.get_connection(config["DB_PATH"])
     v41p1_db.init_v41p1_schema(conn, "storage/v41p1_schema.sql")
+    init_structure_schema(conn)  # ← Sprint 1: idempotente, sicuro chiamarlo ogni volta
 
     macro_provider = macro.get_provider(config)
     now = datetime.now(timezone.utc)
