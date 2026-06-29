@@ -75,7 +75,7 @@ V41_ASSETS = ["PAXG_USDT", "BTC_USDT"]
 # ============================================================
 # Parametri tecnici
 # ============================================================
-M15_CHOCH_LOOKBACK = 2
+M15_CHOCH_LOOKBACK = 3
 SWEEP_LOOKBACK_CANDLES = 20
 SWEEP_PENETRATION_MIN_PCT = 0.0005
 MOMENTUM_LOOKBACK = 5
