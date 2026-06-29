@@ -578,4 +578,113 @@ def compute_volume_ratio(df: pd.DataFrame, avg_period: int = 20) -> dict:
 
 # ============================================================
 # Premium / Discount (informativo)
-# ==============
+# ============================================================
+
+def compute_premium_discount(current_price: float,
+                              range_high: float,
+                              range_low: float) -> dict:
+    """
+    Calcola la posizione del prezzo nel range (sessione, giorno, swing).
+
+    Premium Zone: > 50% del range (zona cara, favorevole per SELL)
+    Discount Zone: < 50% del range (zona a sconto, favorevole per BUY)
+    Equilibrium: intorno al 50%
+
+    Returns:
+        {
+            "position": float,         # 0.0 = bottom, 1.0 = top
+            "zone": str,               # PREMIUM / DISCOUNT / EQUILIBRIUM
+            "buy_favorable": bool,     # True se il prezzo è in Discount (< 0.45)
+            "sell_favorable": bool,    # True se il prezzo è in Premium (> 0.55)
+        }
+    """
+    result = {
+        "position": 0.5,
+        "zone": "EQUILIBRIUM",
+        "buy_favorable": False,
+        "sell_favorable": False,
+    }
+
+    range_size = range_high - range_low
+    if range_size <= 0:
+        return result
+
+    position = (current_price - range_low) / range_size
+    position = max(0.0, min(1.0, position))  # clamp [0, 1]
+
+    result["position"] = round(position, 4)
+
+    if position < 0.45:
+        result["zone"] = "DISCOUNT"
+        result["buy_favorable"] = True
+    elif position > 0.55:
+        result["zone"] = "PREMIUM"
+        result["sell_favorable"] = True
+    else:
+        result["zone"] = "EQUILIBRIUM"
+
+    return result
+
+
+# ============================================================
+# Convenience: build context enrichment dict
+# ============================================================
+
+def build_structure_context(df_m15: pd.DataFrame,
+                             df_h4: pd.DataFrame,
+                             direction: str,
+                             h4_structure: dict,
+                             atr_m15: float = 0.0,
+                             session_high: float = 0.0,
+                             session_low: float = 0.0) -> dict:
+    """
+    Costruisce un dict con tutte le informazioni strutturali
+    e contestuali per un segnale, da aggiungere al signal dict
+    o al market_context.
+
+    Uso tipico nei runner:
+        ctx = build_structure_context(df_m15, df_h4, direction, h4_struct, atr_m15)
+        signal.update(ctx)
+
+    Returns:
+        {
+            "bos_v2": dict,              # risultato evaluate_bos_v2
+            "choch_v2": dict,            # risultato evaluate_choch_v2
+            "m15_structure": dict,       # struttura M15 corrente
+            "pullback_valid": dict,      # risultato is_pullback_valid
+            "displacement": dict,        # risultato check_displacement
+            "volume_ratio": dict,        # volume ratio dell'ultima candela
+            "premium_discount": dict,    # posizione nel range sessione
+        }
+    """
+    # BOS V2
+    bos = evaluate_bos_v2(df_m15, direction)
+
+    # CHOCH V2
+    choch = evaluate_choch_v2(df_m15)
+
+    # Struttura M15
+    m15_struct = classify_m15_structure(df_m15)
+
+    # Pullback Invalidation
+    pb_valid = is_pullback_valid(df_h4, direction, h4_structure)
+
+    # Displacement (informativo)
+    disp = check_displacement(df_m15, direction, atr_m15)
+
+    # Volume Ratio (informativo)
+    vol = compute_volume_ratio(df_m15)
+
+    # Premium/Discount (informativo)
+    current_price = float(df_m15.iloc[-1]["close"]) if len(df_m15) > 0 else 0
+    pd_zone = compute_premium_discount(current_price, session_high, session_low)
+
+    return {
+        "bos_v2": bos,
+        "choch_v2": choch,
+        "m15_structure": m15_struct,
+        "pullback_valid": pb_valid,
+        "displacement": disp,
+        "volume_ratio": vol,
+        "premium_discount": pd_zone,
+    }
