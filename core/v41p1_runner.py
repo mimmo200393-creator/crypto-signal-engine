@@ -28,6 +28,11 @@ from core.volatility_engine import produce_volatility_snapshot, init_volatility_
 from core.order_block_engine import produce_ob_snapshot, init_ob_schema
 from core.fvg_engine import produce_fvg_snapshot, init_fvg_schema
 from core.liquidity_engine_v2 import produce_liquidity_snapshot, init_liquidity_schema
+from core.session_sweep_engine import produce_session_sweep_snapshot, init_session_sweep_schema
+from core.reaction_map import produce_reaction_map, init_reaction_map_schema
+from core.candlestick_engine import produce_candlestick_snapshot, init_candlestick_schema
+from core.macro_context_engine import produce_macro_snapshot, init_macro_schema
+from core.market_state_model import produce_market_state, init_market_state_schema
 from strategies import institutional_scanner_v41 as v41
 from strategies.institutional_scanner_v41 import get_session_v41
 from strategies.money_flow_map import (
@@ -357,14 +362,68 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
     except Exception as e:
         logger.error("V41P1 Volatility [%s]: errore produce_volatility_snapshot: %s", asset, e)
 
-    ob_snapshot = produce_ob_snapshot(asset, df_m15, structure_snapshot, conn,
-        session=get_session_v41(now), now=now) if structure_snapshot else None
+    ss_snapshot = None
+    try:
+        ss_snapshot = produce_session_sweep_snapshot(asset, df_m15, conn, now=now)
+    except Exception as e:
+        logger.error("V41P1 Session Sweep [%s]: errore: %s", asset, e)
 
-    fvg_snapshot = produce_fvg_snapshot(asset, df_m15, structure_snapshot, conn,
-        atr_m15=atr_m15, now=now) if structure_snapshot else None
+    ob_snapshot = None
+    try:
+        ob_snapshot = produce_ob_snapshot(asset, df_m15, structure_snapshot, conn,
+            session=get_session_v41(now), now=now) if structure_snapshot else None
+    except Exception as e:
+        logger.error("V41P1 OrderBlock [%s]: errore: %s", asset, e)
 
-    liq_snapshot = produce_liquidity_snapshot(asset, df_h4, df_d1, df_m15,
-        structure_snapshot or {}, conn, now=now) if structure_snapshot else None
+    fvg_snapshot = None
+    try:
+        fvg_snapshot = produce_fvg_snapshot(asset, df_m15, structure_snapshot, conn,
+            atr_m15=atr_m15, now=now) if structure_snapshot else None
+    except Exception as e:
+        logger.error("V41P1 FVG [%s]: errore: %s", asset, e)
+
+    liq_snapshot = None
+    try:
+        liq_snapshot = produce_liquidity_snapshot(asset, df_h4, df_d1, df_m15,
+            structure_snapshot or {}, conn, now=now) if structure_snapshot else None
+    except Exception as e:
+        logger.error("V41P1 Liquidity [%s]: errore: %s", asset, e)
+
+    rm_snapshot = None
+    try:
+        rm_snapshot = produce_reaction_map(
+            asset, structure_snapshot,
+            ob_snapshot=ob_snapshot,
+            fvg_snapshot=fvg_snapshot,
+            liq_snapshot=liq_snapshot,
+            conn=conn, now=now)
+    except Exception as e:
+        logger.error("V41P1 ReactionMap [%s]: errore: %s", asset, e)
+
+    cs_snapshot = None
+    try:
+        cs_snapshot = produce_candlestick_snapshot(
+            asset, df_m15, rm_snapshot, conn, now=now)
+    except Exception as e:
+        logger.error("V41P1 Candlestick [%s]: errore: %s", asset, e)
+
+    macro_snapshot = None
+    try:
+        macro_snapshot = produce_macro_snapshot(asset, conn, macro_provider, now=now)
+    except Exception as e:
+        logger.error("V41P1 Macro [%s]: errore: %s", asset, e)
+
+    ms_snapshot = None
+    try:
+        ms_snapshot = produce_market_state(
+            asset, structure_snapshot,
+            ob_snapshot=ob_snapshot, fvg_snapshot=fvg_snapshot,
+            liq_snapshot=liq_snapshot, ss_snapshot=ss_snapshot,
+            rm_snapshot=rm_snapshot, cs_snapshot=cs_snapshot,
+            macro_snapshot=macro_snapshot, vol_snapshot=vol_snapshot,
+            session=get_session_v41(now), conn=conn, now=now)
+    except Exception as e:
+        logger.error("V41P1 MarketState [%s]: errore: %s", asset, e)
 
     # ── Monitoraggio segnali aperti ───────────────────────────
     try:
@@ -444,7 +503,73 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
             "vol_atr_percentile_h1": 50,
             "vol_expanding": False, "vol_contracting": False,
             "vol_range_24h_pct": 0,
+            "struct_disp_confirmed": False, "struct_disp_direction": None,
+            "struct_disp_atr": 0,
+            "ob_fresh_count": 0, "ob_nearest_quality": 0, "ob_in_zone": False,
+            "fvg_open_count": 0, "fvg_in_zone": False,
         })
+
+    # Displacement (Sprint 3)
+    disp = structure_snapshot.get("displacement", {}) if structure_snapshot else {}
+    signal["struct_disp_confirmed"] = disp.get("confirmed", False)
+    signal["struct_disp_direction"] = disp.get("direction")
+    signal["struct_disp_atr"] = disp.get("magnitude_atr", 0)
+
+    # Order Block (Sprint 4)
+    if ob_snapshot:
+        nb = ob_snapshot.get("nearest_fresh_bullish")
+        nbe = ob_snapshot.get("nearest_fresh_bearish")
+        signal["ob_fresh_count"] = ob_snapshot.get("fresh_bullish_count", 0) + ob_snapshot.get("fresh_bearish_count", 0)
+        nearest_ob = nb or nbe
+        signal["ob_nearest_quality"] = nearest_ob["quality_score"] if nearest_ob else 0
+        signal["ob_in_zone"] = any(
+            ob["zone_low"] <= current_price <= ob["zone_high"]
+            for ob in ob_snapshot.get("order_blocks", [])
+            if ob.get("status") == "FRESH"
+        )
+    else:
+        signal["ob_fresh_count"] = 0
+        signal["ob_nearest_quality"] = 0
+        signal["ob_in_zone"] = False
+
+    # FVG (Sprint 5)
+    if fvg_snapshot:
+        signal["fvg_open_count"] = fvg_snapshot.get("open_bullish_count", 0) + fvg_snapshot.get("open_bearish_count", 0)
+        signal["fvg_in_zone"] = any(
+            f["zone_low"] <= current_price <= f["zone_high"]
+            for f in fvg_snapshot.get("fvgs", [])
+            if f.get("status") in ("OPEN", "PARTIALLY_FILLED")
+        )
+    else:
+        signal["fvg_open_count"] = 0
+        signal["fvg_in_zone"] = False
+
+    # Session Sweep
+    ss_snapshot_safe = ss_snapshot or {}
+    la = ss_snapshot_safe.get("london_action", {})
+    signal["ss_asia_range_pct"] = ss_snapshot_safe.get("asia_range", {}).get("range_pct", 0)
+    signal["ss_london_swept_asia"] = la.get("swept_asia_high") or la.get("swept_asia_low")
+    signal["ss_sweep_reversed"] = la.get("sweep_reversed", False)
+    signal["ss_true_direction"] = la.get("true_direction")
+
+    # Reaction Map
+    rm_snapshot_safe = rm_snapshot or {}
+    signal["rm_nearest_confluence"] = rm_snapshot_safe["strongest_below"]["confluence_score"] if rm_snapshot_safe.get("strongest_below") else 0
+    signal["rm_in_high_conf_zone"] = rm_snapshot_safe.get("in_high_confluence_zone", False)
+    signal["rm_total_zones"] = rm_snapshot_safe.get("total_zones", 0)
+
+    # Candlestick
+    cs_snapshot_safe = cs_snapshot or {}
+    signal["cs_has_confirmation"] = cs_snapshot_safe.get("has_confirmation", False)
+    signal["cs_pattern"] = cs_snapshot_safe.get("strongest_pattern")
+    signal["cs_direction"] = cs_snapshot_safe.get("strongest_direction")
+
+    # Market State
+    ms_snapshot_safe = ms_snapshot or {}
+    signal["ms_quality"] = ms_snapshot_safe.get("market_quality_score", 0)
+    signal["ms_bias"] = ms_snapshot_safe.get("bias", "NEUTRAL")
+    signal["ms_bias_confidence"] = ms_snapshot_safe.get("bias_confidence", 0)
+    signal["ms_tradeable"] = ms_snapshot_safe.get("tradeable", True)
 
     # ── Duplicate Signal Protection ───────────────────────────
     current_trigger_type     = "BOS" if signal.get("bos_direction") else "CHOCH"
@@ -523,6 +648,11 @@ def run_v41p1_scan(config: dict):
     init_ob_schema(conn)
     init_fvg_schema(conn)
     init_liquidity_schema(conn)
+    init_session_sweep_schema(conn)
+    init_reaction_map_schema(conn)
+    init_candlestick_schema(conn)
+    init_macro_schema(conn)
+    init_market_state_schema(conn)
 
     macro_provider = macro.get_provider(config)
     now = datetime.now(timezone.utc)
