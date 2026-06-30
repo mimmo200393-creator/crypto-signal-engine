@@ -1,27 +1,16 @@
 """
 core/structure_engine_v2.py
-Structure Engine V2.0 — Sprint 1
+Structure Engine V2.0 — Sprint 2
+
+Sprint 1: Swing, Struttura, BOS, CHOCH, Pullback, Confidence, Event History
+Sprint 2: Trend Health (impulse counting, phase detection) ← QUESTO
 
 Fonte unica di verita' per la struttura di mercato dell'intero MIE.
 Nessun altro modulo deve calcolare swing, BOS, CHOCH, o classificare
 la struttura. Tutti consumano lo StructureSnapshot prodotto da qui.
 
-Sprint 1 include:
-    - Swing Points con lookback configurabile
-    - Classificazione struttura (HH/HL/LH/LL → BULLISH/BEARISH/NEUTRAL)
-    - BOS V2 (lookback=3, persistenza, penetrazione minima)
-    - CHOCH V2 (struttura M15 reale, non confronto con H4)
-    - Pullback Invalidation
-    - Structure Confidence (0-100)
-    - Event History con bars_since_bos, bars_since_choch
-    - Volume Ratio e Premium/Discount (informativi)
-    - Snapshot versioning + config per riproducibilita'
-
-Sprint 2 aggiungerà: Trend Health (impulse counting, phase detection)
-Sprint 3 aggiungerà: Displacement detection integrato
-
 Dipendenze: solo pandas, numpy, sqlite3, logging.
-Non importa NULLA dal progetto. I consumatori importano da qui.
+Non importa NULLA dal progetto eccetto core.structure_db.
 """
 
 from __future__ import annotations
@@ -47,17 +36,27 @@ logger = logging.getLogger("structure_engine_v2")
 # Versione e configurazione
 # ============================================================
 
-SNAPSHOT_VERSION = "2.0.0-sprint1"
+SNAPSHOT_VERSION = "2.0.0-sprint2"
 
 DEFAULT_CONFIG = {
+    # BOS
     "bos_lookback": 3,
     "bos_persistence": 3,
     "bos_min_penetration_pct": 0.0003,
+    # CHOCH
     "choch_lookback": 3,
     "choch_min_pivots": 2,
+    # H4
     "h4_pivot_lookback": 3,
+    # Volume
     "volume_avg_period": 20,
+    # Event History
     "event_history_max": 20,
+    # Trend Health (Sprint 2)
+    "max_impulses_tracked": 10,
+    "amplitude_similar_pct": 20,
+    "neutral_reset_scans": 10,
+    "min_impulse_atr": 0.5,
 }
 
 
@@ -66,10 +65,6 @@ DEFAULT_CONFIG = {
 # ============================================================
 
 def _find_pivots(df: pd.DataFrame, lookback: int, max_pivots: int = 10) -> dict:
-    """
-    Trova pivot highs e lows. Ritorna liste di dict ordinate per
-    timestamp crescente (i piu' recenti alla fine).
-    """
     if len(df) < lookback * 2 + 1:
         return {"highs": [], "lows": []}
 
@@ -108,7 +103,6 @@ def _find_pivots(df: pd.DataFrame, lookback: int, max_pivots: int = 10) -> dict:
 
 def _find_latest_swing(df: pd.DataFrame, swing_type: str,
                         lookback: int) -> Optional[dict]:
-    """Trova lo swing piu' recente (high o low)."""
     pivots = _find_pivots(df, lookback)
     items = pivots["highs"] if swing_type == "high" else pivots["lows"]
     return items[-1] if items else None
@@ -119,15 +113,6 @@ def _find_latest_swing(df: pd.DataFrame, swing_type: str,
 # ============================================================
 
 def _classify_structure(pivots: dict, min_pivots: int = 2) -> dict:
-    """
-    Classifica la struttura di mercato dalla sequenza di pivot.
-
-    BULLISH: ultimi 2 highs sono HH E ultimi 2 lows sono HL
-    BEARISH: ultimi 2 highs sono LH E ultimi 2 lows sono LL
-    NEUTRAL: pivot insufficienti o sequenza mista
-
-    Ritorna anche i livelli chiave (ultimo HH, HL, LH, LL).
-    """
     highs = pivots["highs"]
     lows = pivots["lows"]
 
@@ -167,12 +152,6 @@ def _classify_structure(pivots: dict, min_pivots: int = 2) -> dict:
 
 def _detect_bos(df: pd.DataFrame, structure: dict, direction: str,
                 cfg: dict) -> Optional[dict]:
-    """
-    BOS V2: Break of Structure nella direzione del trend.
-
-    Cerca nelle ultime `persistence` candele se il close ha rotto
-    lo swing di riferimento nella direzione attesa.
-    """
     lookback = cfg["bos_lookback"]
     persistence = cfg["bos_persistence"]
     min_pen = cfg["bos_min_penetration_pct"]
@@ -214,7 +193,7 @@ def _detect_bos(df: pd.DataFrame, structure: dict, direction: str,
                 "ref_level": swing["price"],
                 "penetration_pct": round(pen, 6),
                 "displacement": (body / range_ > 0.6) if range_ > 0 else False,
-                "volume_ratio": 0.0,  # sarà popolato dal chiamante
+                "volume_ratio": 0.0,
                 "timestamp": str(candle.get("timestamp", "")),
             }
 
@@ -222,32 +201,20 @@ def _detect_bos(df: pd.DataFrame, structure: dict, direction: str,
 
 
 # ============================================================
-# CHOCH Detection — struttura M15 reale
+# CHOCH Detection
 # ============================================================
 
 def _detect_choch(df: pd.DataFrame, prev_structure: str,
                    current_structure: dict, cfg: dict) -> Optional[dict]:
-    """
-    CHOCH V2: Change of Character basato sulla struttura M15 REALE.
-
-    Il CHOCH scatta quando:
-    - La struttura M15 precedente (dallo scan precedente) era definita
-    - L'ultima candela chiude oltre il livello che definiva quella struttura
-    - La struttura e' effettivamente CAMBIATA (non era gia' nella nuova direzione)
-
-    Nota: prev_structure viene dallo stato persistente (DB), non da H4.
-    """
     if prev_structure == "NEUTRAL":
         return None
 
     if len(df) < cfg["choch_lookback"] * 2 + 3:
         return None
 
-    # Ricalcola la struttura sulle candele PRECEDENTI all'ultima
     pivots_before = _find_pivots(df.iloc[:-1], cfg["choch_lookback"])
     struct_before = _classify_structure(pivots_before, cfg["choch_min_pivots"])
 
-    # La struttura prima dell'ultima candela deve essere quella attesa
     if struct_before["classification"] != prev_structure:
         return None
 
@@ -259,7 +226,6 @@ def _detect_choch(df: pd.DataFrame, prev_structure: str,
 
     event = None
 
-    # Bullish CHOCH: struttura era BEARISH, close > ultimo LH
     if prev_structure == "BEARISH" and struct_before["last_lh"] is not None:
         ref = struct_before["last_lh"]
         if close > ref and ref != 0:
@@ -278,7 +244,6 @@ def _detect_choch(df: pd.DataFrame, prev_structure: str,
                 "prev_structure": prev_structure,
             }
 
-    # Bearish CHOCH: struttura era BULLISH, close < ultimo HL
     elif prev_structure == "BULLISH" and struct_before["last_hl"] is not None:
         ref = struct_before["last_hl"]
         if close < ref and ref != 0:
@@ -305,7 +270,6 @@ def _detect_choch(df: pd.DataFrame, prev_structure: str,
 # ============================================================
 
 def _check_pullback_status(df_h4: pd.DataFrame, structure_h4: dict) -> dict:
-    """Verifica se i pullback sono ancora validi per entrambe le direzioni."""
     result = {
         "buy_valid": True,
         "sell_valid": True,
@@ -318,14 +282,12 @@ def _check_pullback_status(df_h4: pd.DataFrame, structure_h4: dict) -> dict:
 
     price = float(df_h4.iloc[-1]["close"])
 
-    # BUY: valido se il prezzo non ha chiuso sotto l'ultimo HL
     hl = structure_h4.get("last_hl")
     if hl is not None:
         result["buy_ref_level"] = hl
         if price < hl:
             result["buy_valid"] = False
 
-    # SELL: valido se il prezzo non ha chiuso sopra l'ultimo LH
     lh = structure_h4.get("last_lh")
     if lh is not None:
         result["sell_ref_level"] = lh
@@ -336,60 +298,38 @@ def _check_pullback_status(df_h4: pd.DataFrame, structure_h4: dict) -> dict:
 
 
 # ============================================================
-# Structure Confidence (0-100)
+# Structure Confidence
 # ============================================================
 
 def _compute_confidence(structure_h4: dict, structure_m15: dict,
                          pullback: dict, volume_ratio: float,
                          events: list) -> int:
-    """
-    Punteggio di confidenza sulla qualita' della struttura corrente.
-    Calcolato SOLO dallo Structure Engine.
-
-    Fattori:
-        +25  H4 structure definita (BULLISH o BEARISH, non NEUTRAL)
-        +25  M15 structure definita
-        +15  H4 e M15 concordi nella stessa direzione
-        +10  Pullback valido per almeno una direzione
-        +10  Pivot count H4 >= 4 (struttura solida)
-        +10  Pivot count M15 >= 4
-        +5   Volume ratio > 1.0 (partecipazione)
-
-    Penalita':
-        -20  H4 e M15 in conflitto (uno BULLISH e l'altro BEARISH)
-        -10  Pullback invalidato per entrambe le direzioni
-    """
     score = 0
 
     h4_cls = structure_h4.get("classification", "NEUTRAL")
     m15_cls = structure_m15.get("classification", "NEUTRAL")
 
-    # Struttura definita
     if h4_cls != "NEUTRAL":
         score += 25
     if m15_cls != "NEUTRAL":
         score += 25
 
-    # Concordanza
     if h4_cls != "NEUTRAL" and m15_cls != "NEUTRAL":
         if h4_cls == m15_cls:
             score += 15
         else:
-            score -= 20  # conflitto
+            score -= 20
 
-    # Pullback
     if pullback.get("buy_valid", True) or pullback.get("sell_valid", True):
         score += 10
     if not pullback.get("buy_valid", True) and not pullback.get("sell_valid", True):
         score -= 10
 
-    # Pivot count (solidita')
     if structure_h4.get("pivot_count", 0) >= 4:
         score += 10
     if structure_m15.get("pivot_count", 0) >= 4:
         score += 10
 
-    # Volume
     if volume_ratio > 1.0:
         score += 5
 
@@ -401,7 +341,6 @@ def _compute_confidence(structure_h4: dict, structure_m15: dict,
 # ============================================================
 
 def _compute_volume_ratio(df: pd.DataFrame, avg_period: int = 20) -> dict:
-    """Volume dell'ultima candela / media delle ultime avg_period."""
     result = {
         "ratio": 1.0,
         "classification": "NORMAL",
@@ -439,7 +378,6 @@ def _compute_volume_ratio(df: pd.DataFrame, avg_period: int = 20) -> dict:
 # ============================================================
 
 def _compute_premium_discount(price: float, high: float, low: float) -> dict:
-    """Posizione del prezzo nel range."""
     result = {
         "zone": "EQUILIBRIUM",
         "position": 0.5,
@@ -464,14 +402,171 @@ def _compute_premium_discount(price: float, high: float, low: float) -> dict:
 
 
 # ============================================================
-# Event History Management
+# Event History
 # ============================================================
 
 def _update_event_history(history: list, new_events: list,
                            max_events: int) -> list:
-    """Aggiunge i nuovi eventi alla history, mantiene solo gli ultimi N."""
     updated = history + new_events
     return updated[-max_events:]
+
+
+# ============================================================
+# SPRINT 2 — Trend Health
+# ============================================================
+
+def _update_trend_health(prev_state: dict, structure_m15: dict,
+                          atr_m15: float, scan_idx: int,
+                          now_iso: str, cfg: dict) -> dict:
+    """
+    Aggiorna il Trend Health basandosi sulla struttura M15 corrente
+    e sullo stato precedente degli impulsi.
+
+    Un impulso in un trend BULLISH e' il movimento da HL a HH.
+    Un impulso in un trend BEARISH e' il movimento da LH a LL.
+
+    Un NUOVO impulso viene rilevato quando il prezzo fa un nuovo
+    HH (bullish) o LL (bearish) rispetto allo scan precedente.
+    """
+    current_cls = structure_m15.get("classification", "NEUTRAL")
+    prev_trend = prev_state.get("current_trend", "NEUTRAL")
+    prev_impulses = prev_state.get("impulses", [])
+    prev_impulse_count = prev_state.get("impulse_count", 0)
+    prev_trend_start = prev_state.get("trend_start_timestamp")
+    prev_neutral_count = prev_state.get("neutral_consecutive_scans", 0)
+    max_impulses = cfg.get("max_impulses_tracked", 10)
+    similar_pct = cfg.get("amplitude_similar_pct", 20)
+    neutral_reset = cfg.get("neutral_reset_scans", 10)
+    min_impulse_atr = cfg.get("min_impulse_atr", 0.5)
+
+    result = {
+        "current_trend": prev_trend,
+        "trend_start_timestamp": prev_trend_start,
+        "impulse_count": prev_impulse_count,
+        "impulses": list(prev_impulses),
+        "phase": "NEUTRAL",
+        "avg_impulse_amplitude": 0.0,
+        "last_impulse_amplitude": 0.0,
+        "last_impulse_duration": 0,
+        "trend_duration_bars": 0,
+        "neutral_consecutive_scans": 0,
+    }
+
+    # ── Reset se la struttura cambia direzione ───────────────
+    if current_cls in ("BULLISH", "BEARISH") and current_cls != prev_trend:
+        # Cambio di trend: reset completo
+        result["current_trend"] = current_cls
+        result["trend_start_timestamp"] = now_iso
+        result["impulse_count"] = 0
+        result["impulses"] = []
+        result["neutral_consecutive_scans"] = 0
+        logger.info("Trend Health: RESET trend %s → %s", prev_trend, current_cls)
+        return result
+
+    # ── Reset se NEUTRAL per troppo tempo ────────────────────
+    if current_cls == "NEUTRAL":
+        neutral_count = prev_neutral_count + 1
+        result["neutral_consecutive_scans"] = neutral_count
+        if neutral_count >= neutral_reset and prev_trend != "NEUTRAL":
+            result["current_trend"] = "NEUTRAL"
+            result["trend_start_timestamp"] = None
+            result["impulse_count"] = 0
+            result["impulses"] = []
+            logger.info("Trend Health: RESET dopo %d scan NEUTRAL", neutral_count)
+        return result
+
+    # ── Struttura definita e coerente con il trend ───────────
+    result["neutral_consecutive_scans"] = 0
+
+    # Controlla se c'e' un nuovo impulso
+    prev_hh = prev_state.get("m15_last_hh")
+    prev_ll = prev_state.get("m15_last_ll")
+    curr_hh = structure_m15.get("last_hh")
+    curr_hl = structure_m15.get("last_hl")
+    curr_lh = structure_m15.get("last_lh")
+    curr_ll = structure_m15.get("last_ll")
+
+    new_impulse = None
+
+    if current_cls == "BULLISH" and curr_hh is not None and curr_hl is not None:
+        # Nuovo HH rispetto allo stato precedente?
+        if prev_hh is not None and curr_hh > prev_hh:
+            amplitude = abs(curr_hh - curr_hl)
+            amplitude_atr = amplitude / atr_m15 if atr_m15 > 0 else 0
+
+            if amplitude_atr >= min_impulse_atr:
+                new_impulse = {
+                    "direction": "UP",
+                    "start_price": curr_hl,
+                    "end_price": curr_hh,
+                    "amplitude_pct": round(amplitude / curr_hl * 100, 4) if curr_hl > 0 else 0,
+                    "amplitude_atr": round(amplitude_atr, 3),
+                    "duration_bars": 0,  # approssimato — richiederebbe tracking temporale
+                    "timestamp_start": "",
+                    "timestamp_end": now_iso,
+                }
+
+    elif current_cls == "BEARISH" and curr_ll is not None and curr_lh is not None:
+        if prev_ll is not None and curr_ll < prev_ll:
+            amplitude = abs(curr_lh - curr_ll)
+            amplitude_atr = amplitude / atr_m15 if atr_m15 > 0 else 0
+
+            if amplitude_atr >= min_impulse_atr:
+                new_impulse = {
+                    "direction": "DOWN",
+                    "start_price": curr_lh,
+                    "end_price": curr_ll,
+                    "amplitude_pct": round(amplitude / curr_lh * 100, 4) if curr_lh > 0 else 0,
+                    "amplitude_atr": round(amplitude_atr, 3),
+                    "duration_bars": 0,
+                    "timestamp_start": "",
+                    "timestamp_end": now_iso,
+                }
+
+    # Registra nuovo impulso
+    if new_impulse is not None:
+        result["impulses"].append(new_impulse)
+        result["impulses"] = result["impulses"][-max_impulses:]
+        result["impulse_count"] = prev_impulse_count + 1
+        logger.info(
+            "Trend Health: nuovo impulso #%d %s amp=%.3f ATR",
+            result["impulse_count"],
+            new_impulse["direction"],
+            new_impulse["amplitude_atr"],
+        )
+
+    # ── Classificazione fase ─────────────────────────────────
+    impulses = result["impulses"]
+
+    if len(impulses) >= 2:
+        last_amp = impulses[-1]["amplitude_atr"]
+        prev_amp = impulses[-2]["amplitude_atr"]
+
+        result["last_impulse_amplitude"] = last_amp
+
+        if prev_amp > 0:
+            ratio = last_amp / prev_amp
+            if ratio > 1.0 + similar_pct / 100:
+                result["phase"] = "ACCELERATING"
+            elif ratio < 1.0 - similar_pct / 100:
+                result["phase"] = "EXHAUSTING"
+            else:
+                result["phase"] = "MATURE"
+
+    if impulses:
+        amps = [imp["amplitude_atr"] for imp in impulses]
+        result["avg_impulse_amplitude"] = round(sum(amps) / len(amps), 3)
+        result["last_impulse_amplitude"] = amps[-1]
+        if impulses[-1].get("duration_bars"):
+            result["last_impulse_duration"] = impulses[-1]["duration_bars"]
+
+    # Durata del trend in scan
+    if prev_trend_start:
+        result["trend_duration_bars"] = scan_idx - prev_state.get("trend_start_scan_idx", scan_idx)
+    else:
+        result["trend_duration_bars"] = 0
+
+    return result
 
 
 # ============================================================
@@ -489,17 +584,6 @@ def produce_structure_snapshot(
     now: datetime = None,
     config: dict = None,
 ) -> dict:
-    """
-    Produce lo StructureSnapshot per un asset.
-
-    1. Legge lo stato precedente dal DB
-    2. Calcola la struttura corrente
-    3. Rileva eventi (BOS, CHOCH, pullback invalidation)
-    4. Calcola confidence, volume, premium/discount
-    5. Aggiorna lo stato nel DB
-    6. Salva lo snapshot nel DB
-    7. Ritorna lo snapshot (dict immutabile)
-    """
     if now is None:
         now = datetime.now(timezone.utc)
     if config is None:
@@ -524,6 +608,8 @@ def produce_structure_snapshot(
             "impulse_count": 0,
             "trend_phase": "NEUTRAL",
             "current_trend": "NEUTRAL",
+            "neutral_consecutive_scans": 0,
+            "trend_start_scan_idx": 0,
         }
 
     scan_idx = prev_state.get("scan_counter", 0) + 1
@@ -538,7 +624,6 @@ def produce_structure_snapshot(
     # ── 3. Rileva eventi ─────────────────────────────────────
     events = []
 
-    # BOS: cerca nella direzione della struttura M15 corrente
     bos_event = None
     if structure_m15["classification"] in ("BULLISH", "BEARISH"):
         bos_dir = "BUY" if structure_m15["classification"] == "BULLISH" else "SELL"
@@ -546,54 +631,42 @@ def produce_structure_snapshot(
         if bos_event:
             events.append(bos_event)
 
-    # CHOCH: confronta con la struttura M15 dello scan PRECEDENTE
     prev_m15_structure = prev_state.get("structure_m15", "NEUTRAL")
     choch_event = _detect_choch(df_m15, prev_m15_structure, structure_m15, cfg)
     if choch_event:
         events.append(choch_event)
 
-    # Pullback Invalidation
     pullback = _check_pullback_status(df_h4, structure_h4)
 
     if not pullback["buy_valid"] and prev_state.get("structure_h4") == "BULLISH":
         events.append({
             "type": "PULLBACK_INVALIDATION",
-            "direction": "BEARISH",
-            "timeframe": "H4",
+            "direction": "BEARISH", "timeframe": "H4",
             "ref_level": pullback["buy_ref_level"],
-            "penetration_pct": 0,
-            "displacement": False,
-            "volume_ratio": 0,
-            "timestamp": now_iso,
+            "penetration_pct": 0, "displacement": False,
+            "volume_ratio": 0, "timestamp": now_iso,
         })
 
     if not pullback["sell_valid"] and prev_state.get("structure_h4") == "BEARISH":
         events.append({
             "type": "PULLBACK_INVALIDATION",
-            "direction": "BULLISH",
-            "timeframe": "H4",
+            "direction": "BULLISH", "timeframe": "H4",
             "ref_level": pullback["sell_ref_level"],
-            "penetration_pct": 0,
-            "displacement": False,
-            "volume_ratio": 0,
-            "timestamp": now_iso,
+            "penetration_pct": 0, "displacement": False,
+            "volume_ratio": 0, "timestamp": now_iso,
         })
 
-    # Structure Change (transizione della classificazione M15)
     if structure_m15["classification"] != prev_m15_structure and prev_m15_structure != "NEUTRAL":
         events.append({
             "type": "STRUCTURE_CHANGE",
             "direction": structure_m15["classification"],
-            "timeframe": "M15",
-            "ref_level": None,
-            "penetration_pct": 0,
-            "displacement": False,
-            "volume_ratio": 0,
-            "timestamp": now_iso,
+            "timeframe": "M15", "ref_level": None,
+            "penetration_pct": 0, "displacement": False,
+            "volume_ratio": 0, "timestamp": now_iso,
             "prev_structure": prev_m15_structure,
         })
 
-    # ── 4. Arricchisci eventi con volume ─────────────────────
+    # ── 4. Volume ────────────────────────────────────────────
     vol = _compute_volume_ratio(df_m15, cfg["volume_avg_period"])
     for ev in events:
         ev["volume_ratio"] = vol["ratio"]
@@ -626,16 +699,10 @@ def produce_structure_snapshot(
         structure_h4, structure_m15, pullback, vol["ratio"], events
     )
 
-    # ── 9. Trend Health (placeholder Sprint 2) ───────────────
-    trend_health = {
-        "current_trend": prev_state.get("current_trend", "NEUTRAL"),
-        "trend_start_timestamp": prev_state.get("trend_start_timestamp"),
-        "impulse_count": prev_state.get("impulse_count", 0),
-        "impulses": prev_state.get("impulses", []),
-        "phase": prev_state.get("trend_phase", "NEUTRAL"),
-        "avg_impulse_amplitude": 0.0,
-        "last_impulse_amplitude": 0.0,
-    }
+    # ── 9. Trend Health (SPRINT 2) ───────────────────────────
+    trend_health = _update_trend_health(
+        prev_state, structure_m15, atr_m15, scan_idx, now_iso, cfg
+    )
 
     # ── 10. Displacement (placeholder Sprint 3) ──────────────
     displacement = {
@@ -652,7 +719,6 @@ def produce_structure_snapshot(
         "timestamp": now_iso,
         "scan_id": f"{asset}_{scan_idx}",
         "snapshot_version": SNAPSHOT_VERSION,
-
         "config": cfg,
 
         "structure_h4": structure_h4,
@@ -661,11 +727,20 @@ def produce_structure_snapshot(
         "events": events,
         "event_history": event_history,
 
-        "trend_health": trend_health,
+        "trend_health": {
+            "current_trend": trend_health["current_trend"],
+            "trend_start_timestamp": trend_health["trend_start_timestamp"],
+            "impulse_count": trend_health["impulse_count"],
+            "impulses": trend_health["impulses"],
+            "phase": trend_health["phase"],
+            "avg_impulse_amplitude": trend_health["avg_impulse_amplitude"],
+            "last_impulse_amplitude": trend_health["last_impulse_amplitude"],
+            "last_impulse_duration": trend_health["last_impulse_duration"],
+            "trend_duration_bars": trend_health["trend_duration_bars"],
+        },
+
         "displacement": displacement,
-
         "pullback_status": pullback,
-
         "structure_confidence": confidence,
 
         "volume_ratio_m15": vol["ratio"],
@@ -708,11 +783,12 @@ def produce_structure_snapshot(
         "last_bos_scan_idx": last_bos_idx,
         "last_choch_scan_idx": last_choch_idx,
         "scan_counter": scan_idx,
+        "neutral_consecutive_scans": trend_health.get("neutral_consecutive_scans", 0),
+        "trend_start_scan_idx": prev_state.get("trend_start_scan_idx", scan_idx) if trend_health["trend_start_timestamp"] == prev_state.get("trend_start_timestamp") else scan_idx,
     }
 
     upsert_state(conn, new_state)
 
-    # ── Salva snapshot ───────────────────────────────────────
     try:
         insert_snapshot(conn, snapshot)
     except Exception as e:
@@ -725,7 +801,8 @@ def produce_structure_snapshot(
 
     logger.info(
         "Structure [%s]: H4=%s M15=%s(prev=%s) confidence=%d "
-        "events=[%s] bars_bos=%s bars_choch=%s vol=%.2f(%s) pd=%s(%.2f)",
+        "events=[%s] bars_bos=%s bars_choch=%s vol=%.2f(%s) pd=%s(%.2f) "
+        "trend=%s phase=%s impulses=%d",
         asset,
         structure_h4["classification"],
         structure_m15["classification"],
@@ -735,6 +812,9 @@ def produce_structure_snapshot(
         bars_since_bos, bars_since_choch,
         vol["ratio"], vol["classification"],
         pd_zone["zone"], pd_zone["position"],
+        trend_health["current_trend"],
+        trend_health["phase"],
+        trend_health["impulse_count"],
     )
 
     return snapshot
