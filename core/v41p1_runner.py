@@ -25,6 +25,9 @@ from core import v41p1_db
 from core.structure_db import init_structure_schema
 from core.structure_engine_v2 import produce_structure_snapshot
 from core.volatility_engine import produce_volatility_snapshot, init_volatility_schema
+from core.order_block_engine import produce_ob_snapshot, init_ob_schema
+from core.fvg_engine import produce_fvg_snapshot, init_fvg_schema
+from core.liquidity_engine_v2 import produce_liquidity_snapshot, init_liquidity_schema
 from strategies import institutional_scanner_v41 as v41
 from strategies.institutional_scanner_v41 import get_session_v41
 from strategies.money_flow_map import (
@@ -354,6 +357,15 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
     except Exception as e:
         logger.error("V41P1 Volatility [%s]: errore produce_volatility_snapshot: %s", asset, e)
 
+    ob_snapshot = produce_ob_snapshot(asset, df_m15, structure_snapshot, conn,
+        session=get_session_v41(now), now=now) if structure_snapshot else None
+
+    fvg_snapshot = produce_fvg_snapshot(asset, df_m15, structure_snapshot, conn,
+        atr_m15=atr_m15, now=now) if structure_snapshot else None
+
+    liq_snapshot = produce_liquidity_snapshot(asset, df_h4, df_d1, df_m15,
+        structure_snapshot or {}, conn, now=now) if structure_snapshot else None
+
     # ── Monitoraggio segnali aperti ───────────────────────────
     try:
         last_m15 = df_m15.iloc[-1]
@@ -508,6 +520,9 @@ def run_v41p1_scan(config: dict):
     v41p1_db.init_v41p1_schema(conn, "storage/v41p1_schema.sql")
     init_structure_schema(conn)
     init_volatility_schema(conn)
+    init_ob_schema(conn)
+    init_fvg_schema(conn)
+    init_liquidity_schema(conn)
 
     macro_provider = macro.get_provider(config)
     now = datetime.now(timezone.utc)
