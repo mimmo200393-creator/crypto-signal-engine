@@ -152,7 +152,7 @@ V4_SCANNER:
 # logica e tracking completamente indipendenti (tabella v41_signals).
 # ============================================================
 V41_SCANNER:
-  enabled: true
+  enabled: false
   assets:
     - PAXG_USDT
     - BTC_USDT
