@@ -1,16 +1,13 @@
 """
 core/structure_engine_v2.py
-Structure Engine V2.0 — Sprint 2
+Structure Engine V2.0 — Sprint 3
 
 Sprint 1: Swing, Struttura, BOS, CHOCH, Pullback, Confidence, Event History
-Sprint 2: Trend Health (impulse counting, phase detection) ← QUESTO
+Sprint 2: Trend Health (impulse counting, phase detection)
+Sprint 3: Displacement detection integrato ← QUESTO
 
 Fonte unica di verita' per la struttura di mercato dell'intero MIE.
-Nessun altro modulo deve calcolare swing, BOS, CHOCH, o classificare
-la struttura. Tutti consumano lo StructureSnapshot prodotto da qui.
-
-Dipendenze: solo pandas, numpy, sqlite3, logging.
-Non importa NULLA dal progetto eccetto core.structure_db.
+Dipendenze: solo pandas, numpy, sqlite3, logging + core.structure_db.
 """
 
 from __future__ import annotations
@@ -36,7 +33,7 @@ logger = logging.getLogger("structure_engine_v2")
 # Versione e configurazione
 # ============================================================
 
-SNAPSHOT_VERSION = "2.0.0-sprint2"
+SNAPSHOT_VERSION = "2.0.0-sprint3"
 
 DEFAULT_CONFIG = {
     # BOS
@@ -57,6 +54,11 @@ DEFAULT_CONFIG = {
     "amplitude_similar_pct": 20,
     "neutral_reset_scans": 10,
     "min_impulse_atr": 0.5,
+    # Displacement (Sprint 3)
+    "disp_body_pct": 0.60,
+    "disp_min_candles": 2,
+    "disp_atr_mult": 1.5,
+    "disp_lookback": 5,
 }
 
 
@@ -303,7 +305,7 @@ def _check_pullback_status(df_h4: pd.DataFrame, structure_h4: dict) -> dict:
 
 def _compute_confidence(structure_h4: dict, structure_m15: dict,
                          pullback: dict, volume_ratio: float,
-                         events: list) -> int:
+                         displacement_confirmed: bool) -> int:
     score = 0
 
     h4_cls = structure_h4.get("classification", "NEUTRAL")
@@ -331,6 +333,10 @@ def _compute_confidence(structure_h4: dict, structure_m15: dict,
         score += 10
 
     if volume_ratio > 1.0:
+        score += 5
+
+    # Sprint 3: displacement bonus
+    if displacement_confirmed:
         score += 5
 
     return max(0, min(100, score))
@@ -418,16 +424,6 @@ def _update_event_history(history: list, new_events: list,
 def _update_trend_health(prev_state: dict, structure_m15: dict,
                           atr_m15: float, scan_idx: int,
                           now_iso: str, cfg: dict) -> dict:
-    """
-    Aggiorna il Trend Health basandosi sulla struttura M15 corrente
-    e sullo stato precedente degli impulsi.
-
-    Un impulso in un trend BULLISH e' il movimento da HL a HH.
-    Un impulso in un trend BEARISH e' il movimento da LH a LL.
-
-    Un NUOVO impulso viene rilevato quando il prezzo fa un nuovo
-    HH (bullish) o LL (bearish) rispetto allo scan precedente.
-    """
     current_cls = structure_m15.get("classification", "NEUTRAL")
     prev_trend = prev_state.get("current_trend", "NEUTRAL")
     prev_impulses = prev_state.get("impulses", [])
@@ -452,18 +448,15 @@ def _update_trend_health(prev_state: dict, structure_m15: dict,
         "neutral_consecutive_scans": 0,
     }
 
-    # ── Reset se la struttura cambia direzione ───────────────
     if current_cls in ("BULLISH", "BEARISH") and current_cls != prev_trend:
-        # Cambio di trend: reset completo
         result["current_trend"] = current_cls
         result["trend_start_timestamp"] = now_iso
         result["impulse_count"] = 0
         result["impulses"] = []
         result["neutral_consecutive_scans"] = 0
-        logger.info("Trend Health: RESET trend %s → %s", prev_trend, current_cls)
+        logger.info("Trend Health: RESET trend %s -> %s", prev_trend, current_cls)
         return result
 
-    # ── Reset se NEUTRAL per troppo tempo ────────────────────
     if current_cls == "NEUTRAL":
         neutral_count = prev_neutral_count + 1
         result["neutral_consecutive_scans"] = neutral_count
@@ -475,10 +468,8 @@ def _update_trend_health(prev_state: dict, structure_m15: dict,
             logger.info("Trend Health: RESET dopo %d scan NEUTRAL", neutral_count)
         return result
 
-    # ── Struttura definita e coerente con il trend ───────────
     result["neutral_consecutive_scans"] = 0
 
-    # Controlla se c'e' un nuovo impulso
     prev_hh = prev_state.get("m15_last_hh")
     prev_ll = prev_state.get("m15_last_ll")
     curr_hh = structure_m15.get("last_hh")
@@ -489,7 +480,6 @@ def _update_trend_health(prev_state: dict, structure_m15: dict,
     new_impulse = None
 
     if current_cls == "BULLISH" and curr_hh is not None and curr_hl is not None:
-        # Nuovo HH rispetto allo stato precedente?
         if prev_hh is not None and curr_hh > prev_hh:
             amplitude = abs(curr_hh - curr_hl)
             amplitude_atr = amplitude / atr_m15 if atr_m15 > 0 else 0
@@ -501,7 +491,7 @@ def _update_trend_health(prev_state: dict, structure_m15: dict,
                     "end_price": curr_hh,
                     "amplitude_pct": round(amplitude / curr_hl * 100, 4) if curr_hl > 0 else 0,
                     "amplitude_atr": round(amplitude_atr, 3),
-                    "duration_bars": 0,  # approssimato — richiederebbe tracking temporale
+                    "duration_bars": 0,
                     "timestamp_start": "",
                     "timestamp_end": now_iso,
                 }
@@ -523,7 +513,6 @@ def _update_trend_health(prev_state: dict, structure_m15: dict,
                     "timestamp_end": now_iso,
                 }
 
-    # Registra nuovo impulso
     if new_impulse is not None:
         result["impulses"].append(new_impulse)
         result["impulses"] = result["impulses"][-max_impulses:]
@@ -535,13 +524,11 @@ def _update_trend_health(prev_state: dict, structure_m15: dict,
             new_impulse["amplitude_atr"],
         )
 
-    # ── Classificazione fase ─────────────────────────────────
     impulses = result["impulses"]
 
     if len(impulses) >= 2:
         last_amp = impulses[-1]["amplitude_atr"]
         prev_amp = impulses[-2]["amplitude_atr"]
-
         result["last_impulse_amplitude"] = last_amp
 
         if prev_amp > 0:
@@ -560,11 +547,95 @@ def _update_trend_health(prev_state: dict, structure_m15: dict,
         if impulses[-1].get("duration_bars"):
             result["last_impulse_duration"] = impulses[-1]["duration_bars"]
 
-    # Durata del trend in scan
     if prev_trend_start:
         result["trend_duration_bars"] = scan_idx - prev_state.get("trend_start_scan_idx", scan_idx)
-    else:
-        result["trend_duration_bars"] = 0
+
+    return result
+
+
+# ============================================================
+# SPRINT 3 — Displacement Detection
+# ============================================================
+
+def _detect_displacement(df: pd.DataFrame, atr: float, cfg: dict) -> dict:
+    """
+    Rileva un displacement (movimento impulsivo) nelle ultime candele.
+
+    Un displacement e' una sequenza di candele consecutive con:
+        - corpo > body_pct del range (candela impulsiva)
+        - stessa direzione (tutte bullish o tutte bearish)
+        - ampiezza totale > atr_mult x ATR
+
+    Cerca sia displacement bullish che bearish e ritorna il piu' forte.
+    """
+    result = {
+        "confirmed": False,
+        "direction": None,
+        "magnitude": 0.0,
+        "magnitude_atr": 0.0,
+        "candle_count": 0,
+        "timestamp": None,
+    }
+
+    lookback = cfg.get("disp_lookback", 5)
+    body_pct = cfg.get("disp_body_pct", 0.60)
+    min_candles = cfg.get("disp_min_candles", 2)
+    atr_mult = cfg.get("disp_atr_mult", 1.5)
+
+    if len(df) < lookback + 1 or atr <= 0:
+        return result
+
+    recent = df.iloc[-lookback:]
+
+    # Cerca sequenze bullish e bearish separatamente
+    best = {"count": 0, "move": 0.0, "dir": None, "ts": None}
+
+    for target_dir in ("BULLISH", "BEARISH"):
+        consecutive = 0
+        total_move = 0.0
+        start_ts = None
+
+        for idx, (_, candle) in enumerate(recent.iterrows()):
+            open_ = float(candle["open"])
+            close = float(candle["close"])
+            high = float(candle["high"])
+            low = float(candle["low"])
+            body = abs(close - open_)
+            range_ = high - low
+
+            if range_ <= 0:
+                consecutive = 0
+                total_move = 0.0
+                start_ts = None
+                continue
+
+            is_impulsive = body / range_ > body_pct
+            is_bullish = close > open_
+            is_bearish = close < open_
+
+            matches = (target_dir == "BULLISH" and is_bullish and is_impulsive) or \
+                      (target_dir == "BEARISH" and is_bearish and is_impulsive)
+
+            if matches:
+                if consecutive == 0:
+                    start_ts = str(candle.get("timestamp", ""))
+                consecutive += 1
+                total_move += body
+            else:
+                consecutive = 0
+                total_move = 0.0
+                start_ts = None
+
+        if consecutive > best["count"] or (consecutive == best["count"] and total_move > best["move"]):
+            best = {"count": consecutive, "move": total_move, "dir": target_dir, "ts": start_ts}
+
+    if best["count"] >= min_candles and best["move"] >= atr_mult * atr:
+        result["confirmed"] = True
+        result["direction"] = best["dir"]
+        result["magnitude"] = round(best["move"], 4)
+        result["magnitude_atr"] = round(best["move"] / atr, 3) if atr > 0 else 0
+        result["candle_count"] = best["count"]
+        result["timestamp"] = best["ts"]
 
     return result
 
@@ -694,24 +765,40 @@ def produce_structure_snapshot(
         cfg["event_history_max"],
     )
 
-    # ── 8. Confidence ────────────────────────────────────────
-    confidence = _compute_confidence(
-        structure_h4, structure_m15, pullback, vol["ratio"], events
-    )
-
-    # ── 9. Trend Health (SPRINT 2) ───────────────────────────
+    # ── 8. Trend Health (Sprint 2) ───────────────────────────
     trend_health = _update_trend_health(
         prev_state, structure_m15, atr_m15, scan_idx, now_iso, cfg
     )
 
-    # ── 10. Displacement (placeholder Sprint 3) ──────────────
-    displacement = {
-        "confirmed": False,
-        "direction": None,
-        "magnitude_atr": 0.0,
-        "candle_count": 0,
-        "timestamp": None,
-    }
+    # ── 9. Displacement (Sprint 3) ───────────────────────────
+    displacement = _detect_displacement(df_m15, atr_m15, cfg)
+
+    # Aggiunge evento DISPLACEMENT se confermato
+    if displacement["confirmed"]:
+        events.append({
+            "type": "DISPLACEMENT",
+            "direction": displacement["direction"],
+            "timeframe": "M15",
+            "ref_level": None,
+            "penetration_pct": 0,
+            "displacement": True,
+            "volume_ratio": vol["ratio"],
+            "timestamp": displacement["timestamp"],
+            "magnitude_atr": displacement["magnitude_atr"],
+            "candle_count": displacement["candle_count"],
+        })
+        # Aggiorna event_history con il displacement
+        event_history = _update_event_history(
+            event_history,
+            [events[-1]],
+            cfg["event_history_max"],
+        )
+
+    # ── 10. Confidence (Sprint 3: include displacement) ──────
+    confidence = _compute_confidence(
+        structure_h4, structure_m15, pullback,
+        vol["ratio"], displacement["confirmed"]
+    )
 
     # ── Costruisci lo snapshot ───────────────────────────────
     snapshot = {
@@ -799,10 +886,13 @@ def produce_structure_snapshot(
         f"{e['type']}({e['direction']})" for e in events
     ) if events else "none"
 
+    disp_str = f"disp={displacement['direction']}({displacement['magnitude_atr']:.1f}ATR)" \
+               if displacement["confirmed"] else "disp=none"
+
     logger.info(
         "Structure [%s]: H4=%s M15=%s(prev=%s) confidence=%d "
         "events=[%s] bars_bos=%s bars_choch=%s vol=%.2f(%s) pd=%s(%.2f) "
-        "trend=%s phase=%s impulses=%d",
+        "trend=%s phase=%s impulses=%d %s",
         asset,
         structure_h4["classification"],
         structure_m15["classification"],
@@ -815,6 +905,7 @@ def produce_structure_snapshot(
         trend_health["current_trend"],
         trend_health["phase"],
         trend_health["impulse_count"],
+        disp_str,
     )
 
     return snapshot
