@@ -565,7 +565,7 @@ def generate_v41_signal(market_data: dict) -> dict:
     ema_h1_aligned  = ema_h1    == structural_direction
     dow_aligned     = dow_theory_h4 == structural_direction
     momentum_aligned = momentum == structural_direction
-    session_bonus   = session in ("LONDON", "OVERLAP", "NEW_YORK")
+    session_bonus   = session in ("LONDON", "NEW_YORK")
 
     score = 0
     if ema_h4_aligned:    score += SCORE_EMA_H4
@@ -603,10 +603,10 @@ def generate_v41_signal(market_data: dict) -> dict:
 
     if direction == "BUY":
         sl_atr    = entry - 1.5 * atr_m15
-        stop_loss = min(structural_swing, sl_atr) if structural_swing is not None else sl_atr
+        stop_loss = max(structural_swing, sl_atr) if structural_swing is not None else sl_atr
     else:
         sl_atr    = entry + 1.5 * atr_m15
-        stop_loss = max(structural_swing, sl_atr) if structural_swing is not None else sl_atr
+        stop_loss = min(structural_swing, sl_atr) if structural_swing is not None else sl_atr
 
     risk = abs(entry - stop_loss)
     if risk <= 0:
