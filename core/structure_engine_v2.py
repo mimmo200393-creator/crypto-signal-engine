@@ -55,9 +55,9 @@ DEFAULT_CONFIG = {
     "neutral_reset_scans": 10,
     "min_impulse_atr": 0.5,
     # Displacement (Sprint 3)
-    "disp_body_pct": 0.60,
+    "disp_body_pct": 0.50,
     "disp_min_candles": 2,
-    "disp_atr_mult": 1.5,
+    "disp_atr_mult": 1,
     "disp_lookback": 5,
 }
 
