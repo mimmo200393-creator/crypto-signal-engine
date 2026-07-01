@@ -268,6 +268,7 @@ def _update_fvg_states(active_fvgs: list, current_price: float,
                 filled = zone_high - max(current_low, zone_low)
                 fill_pct = min(filled / zone_size, 1.0)
                 fvg["fill_percentage"] = round(max(fvg.get("fill_percentage", 0), fill_pct) * 100, 1)
+                fvg["fill_percentage"] = min(fvg["fill_percentage"], 100.0)
                 if fvg.get("first_touch_ts") is None:
                     fvg["first_touch_ts"] = now_iso
         else:
@@ -276,6 +277,7 @@ def _update_fvg_states(active_fvgs: list, current_price: float,
                 filled = min(current_high, zone_high) - zone_low
                 fill_pct = min(filled / zone_size, 1.0)
                 fvg["fill_percentage"] = round(max(fvg.get("fill_percentage", 0), fill_pct) * 100, 1)
+                fvg["fill_percentage"] = min(fvg["fill_percentage"], 100.0)
                 if fvg.get("first_touch_ts") is None:
                     fvg["first_touch_ts"] = now_iso
 
