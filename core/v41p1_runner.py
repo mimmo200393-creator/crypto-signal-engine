@@ -4,17 +4,11 @@ Orchestratore di Institutional Scanner V4.1 Phase 1
 Money Flow & Intraday Edge Validation.
 
 Sprint 1: integrazione Structure Engine V2.
-    - produce_structure_snapshot() chiamato in _run_for_asset()
-    - snapshot passato a market_data["structure_snapshot"]
-    - signal arricchito con i campi strutturali rilevanti
-    - init_structure_schema() chiamato in run_v41p1_scan()
-
 Sprint 2: Trend Health + Volatility Regime Engine.
-    - produce_volatility_snapshot() chiamato in _run_for_asset()
-    - signal arricchito con campi vol_* e struct_trend_*
-    - init_volatility_schema() chiamato in run_v41p1_scan()
+Sprint 13: Audit fix — market_snapshot persistence + filtri statistici.
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -211,13 +205,6 @@ def _enrich_signal_with_mfm(signal: dict, mfm: dict) -> dict:
 
 def _enrich_signal_with_context(signal: dict, snapshot: dict,
                                  vol_snapshot: dict = None) -> dict:
-    """
-    Aggiunge i campi strutturali e di volatilita' al segnale.
-
-    Sprint 1: campi struct_* dallo StructureSnapshot
-    Sprint 2: campi struct_trend_* dal Trend Health
-              campi vol_* dal VolatilitySnapshot
-    """
     # ── Structure (Sprint 1) ─────────────────────────────────
     signal["struct_h4"]          = snapshot["structure_h4"]["classification"]
     signal["struct_m15"]         = snapshot["structure_m15"]["classification"]
@@ -480,6 +467,45 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
     # ── Sessione corrente ─────────────────────────────────────
     signal["session"] = get_session_v41(now)
 
+    # ══════════════════════════════════════════════════════════
+    # ── Filtri statistici (Audit 02/07/2026) ─────────────────
+    # ══════════════════════════════════════════════════════════
+
+    # OVERLAP: WR 8.7% su n=23, CI 95% [2-27%], interamente
+    # sotto il breakeven del 33.3% necessario a RR 2.0.
+    if signal["session"] == "OVERLAP":
+        logger.info(
+            "V41P1 Scanner [%s]: REJECT SESSION_OVERLAP "
+            "(dir=%s quality=%d)",
+            asset, signal["direction"], signal["quality_score"],
+        )
+        return
+
+    # BUY + dow_theory NEUTRAL: WR 17.9% su n=78.
+    # 39% del volume totale, genera ~70% delle perdite nette.
+    # BUY con dow_theory confermato (BEARISH=reversal, BULLISH=trend)
+    # ha WR 56%+. Senza struttura H4 chiara, i BUY sono rumore.
+    if (signal["direction"] == "BUY"
+            and signal.get("dow_theory_h4") == "NEUTRAL"):
+        logger.info(
+            "V41P1 Scanner [%s]: REJECT BUY_DOW_NEUTRAL "
+            "(quality=%d momentum=%s)",
+            asset, signal["quality_score"], signal.get("momentum"),
+        )
+        return
+
+    # Risk cap: SL troppo stretto (< 0.2% del prezzo) ha
+    # MAE_R mediana 1.67 → quasi doppia perdita. Scartare.
+    risk_pct = abs(signal["entry"] - signal["stop_loss"]) / signal["entry"]
+    if risk_pct < 0.002:
+        logger.info(
+            "V41P1 Scanner [%s]: REJECT RISK_TOO_TIGHT "
+            "(risk_pct=%.4f)", asset, risk_pct,
+        )
+        return
+
+    # ══════════════════════════════════════════════════════════
+
     # ── Arricchisce con MFM ───────────────────────────────────
     signal = _enrich_signal_with_mfm(signal, mfm)
 
@@ -570,6 +596,17 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
     signal["ms_bias"] = ms_snapshot_safe.get("bias", "NEUTRAL")
     signal["ms_bias_confidence"] = ms_snapshot_safe.get("bias_confidence", 0)
     signal["ms_tradeable"] = ms_snapshot_safe.get("tradeable", True)
+
+    # ══════════════════════════════════════════════════════════
+    # ── Persist engine data in market_snapshot (Sprint 13) ───
+    # ══════════════════════════════════════════════════════════
+    engine_data = {k: v for k, v in signal.items()
+                   if k.startswith(("struct_", "vol_", "ob_", "fvg_",
+                                    "ss_", "rm_", "cs_", "ms_",
+                                    "choch_v2_", "m15_structure",
+                                    "volume_", "pullback_",
+                                    "premium_discount_", "displacement_"))}
+    signal["market_snapshot"] = json.dumps(engine_data, default=str)
 
     # ── Duplicate Signal Protection ───────────────────────────
     current_trigger_type     = "BOS" if signal.get("bos_direction") else "CHOCH"
