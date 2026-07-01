@@ -3,6 +3,8 @@ core/v41p1_db.py
 Funzioni di accesso dati per Institutional Scanner V4.1 Phase 1.
 Opera su v41p1_signals, v41p1_watchlist_alerts, v41p1_watchlist_state,
 v41p1_last_alert_state, v41p1_mfm_snapshots.
+
+Sprint 13: Breakeven a +1R in monitor_open_signals.
 """
 
 import json
@@ -14,21 +16,19 @@ from typing import Optional
 
 def init_v41p1_schema(conn: sqlite3.Connection,
                        schema_path: str = "storage/v41p1_schema.sql"):
-    # Step 1: aggiunge colonne PRIMA di executescript
     for col, col_type in [
         ("mfm_sweep_confirmed", "BOOLEAN DEFAULT 0"),
         ("mfm_sweep_level",     "TEXT"),
         ("mfm_sweep_price",     "REAL"),
         ("mfm_sweep_priority",  "TEXT"),
-        ("adx_m15",             "REAL"),  # ← NUOVO: forza trend al momento segnale
+        ("adx_m15",             "REAL"),
     ]:
         try:
             conn.execute(f"ALTER TABLE v41p1_signals ADD COLUMN {col} {col_type}")
             conn.commit()
         except sqlite3.OperationalError:
-            pass  # colonna già presente o tabella non esiste ancora
+            pass
 
-    # Step 2: crea tabelle e indici
     with open(schema_path, "r") as f:
         conn.executescript(f.read())
 
@@ -199,6 +199,35 @@ def monitor_open_signals(conn: sqlite3.Connection, asset: str,
         except Exception:
             expired = False
             elapsed_minutes = 0
+
+        # ══════════════════════════════════════════════════════
+        # ── Breakeven a +1R (Sprint 13) ──────────────────────
+        # ══════════════════════════════════════════════════════
+        # Se il trade ha raggiunto +1R di profitto (mfe >= risk),
+        # sposta lo SL a entry (breakeven). Dall'audit: 18% dei
+        # trade SL raggiunge 0.75-1.5R prima di invertire.
+        # Questo salva ~8/58 SL trasformandoli in breakeven.
+        #
+        # NOTA: modifica la variabile locale `sl` che viene poi
+        # usata nel check sl_hit sotto. MAE è calcolato PRIMA
+        # quindi registra comunque l'escursione completa.
+        risk = abs(entry - sl)
+        if risk > 0 and new_mfe >= risk:
+            if direction == "BUY" and sl < entry:
+                sl = entry
+                conn.execute(
+                    "UPDATE v41p1_signals SET stop_loss=? WHERE signal_id=?",
+                    (sl, sid)
+                )
+                conn.commit()
+            elif direction == "SELL" and sl > entry:
+                sl = entry
+                conn.execute(
+                    "UPDATE v41p1_signals SET stop_loss=? WHERE signal_id=?",
+                    (sl, sid)
+                )
+                conn.commit()
+        # ══════════════════════════════════════════════════════
 
         sl_hit = (
             (direction == "BUY"  and current_low  <= sl) or
