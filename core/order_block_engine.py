@@ -1,27 +1,15 @@
 """
 core/order_block_engine.py
-Order Block Engine — Sprint 4
+Order Block Engine — Sprint 4 V2
+
+Fix V2:
+    - OB creati su TUTTI gli eventi BOS/CHOCH, non solo displacement
+    - Scansione storico: analizza ultime N candele per trovare OB esistenti
+    - Displacement e' un campo di qualita', non un gate
+    - has_displacement: True/False per futura calibrazione
 
 Layer 1: dipende da Structure Engine (Layer 0).
-Identifica, classifica e traccia Order Block su M15.
-
-Un OB e' l'ultima candela contraria prima di un displacement
-che causa un BOS o CHOCH. Un OB senza displacement precedente
-NON viene identificato — e' la differenza fondamentale rispetto
-a un semplice "cluster di pivot".
-
-Modalita': LIVE MODE — osserva, produce snapshot, salva nel DB.
-Non modifica il comportamento delle strategie.
-
-5 criteri di qualita' dal doc 005:
-    1. Presenza FVG dopo l'OB
-    2. Sweep precedente alla formazione
-    3. Ultimo OB del movimento (non il primo)
-    4. Mai mitigato (fresco)
-    5. Sessione ad alta volatilita' (LONDON/NY)
-
-Dipendenze: pandas, numpy, sqlite3, logging.
-Consuma StructureSnapshot — non ricalcola struttura.
+Modalita': LIVE MODE.
 """
 
 from __future__ import annotations
@@ -38,37 +26,28 @@ import pandas as pd
 
 logger = logging.getLogger("order_block_engine")
 
-# ============================================================
-# Configurazione
-# ============================================================
-
-SNAPSHOT_VERSION = "1.0.0"
+SNAPSHOT_VERSION = "2.0.0"
 
 DEFAULT_CONFIG = {
-    "ob_lookback": 20,              # candele indietro per cercare OB
-    "ob_max_tracked": 20,           # max OB tracciati per asset
-    "ob_max_age_bars": 200,         # OB piu' vecchio di 200 candele = scartato
-    "disp_body_pct": 0.60,         # corpo minimo per candela impulsiva
-    "mitigation_touch_pct": 0.002,  # prezzo entro 0.2% della zona = touch
+    "ob_lookback": 20,
+    "ob_max_tracked": 30,
+    "ob_max_age_bars": 300,
+    "ob_body_min_pct": 0.30,
+    "mitigation_touch_pct": 0.002,
+    "historical_scan_bars": 200,
 }
-
-
-# ============================================================
-# Schema DB
-# ============================================================
 
 OB_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS order_block_snapshots (
     snapshot_id         TEXT PRIMARY KEY,
     asset               TEXT NOT NULL,
     timestamp_snapshot  DATETIME NOT NULL,
-    snapshot_version    TEXT DEFAULT '1.0.0',
+    snapshot_version    TEXT DEFAULT '2.0.0',
     fresh_bullish       INTEGER DEFAULT 0,
     fresh_bearish       INTEGER DEFAULT 0,
     total_tracked       INTEGER DEFAULT 0,
     snapshot_json       TEXT
 );
-
 CREATE INDEX IF NOT EXISTS idx_ob_asset_ts
     ON order_block_snapshots(asset, timestamp_snapshot);
 
@@ -84,6 +63,7 @@ CREATE TABLE IF NOT EXISTS order_blocks (
     quality_score       INTEGER DEFAULT 0,
     has_fvg             BOOLEAN DEFAULT 0,
     has_sweep_before    BOOLEAN DEFAULT 0,
+    has_displacement    BOOLEAN DEFAULT 0,
     is_last_ob          BOOLEAN DEFAULT 0,
     session_quality     TEXT,
     displacement_atr    REAL DEFAULT 0,
@@ -95,7 +75,6 @@ CREATE TABLE IF NOT EXISTS order_blocks (
     in_discount         BOOLEAN DEFAULT 0,
     in_premium          BOOLEAN DEFAULT 0
 );
-
 CREATE INDEX IF NOT EXISTS idx_ob_asset_status
     ON order_blocks(asset, status);
 """
@@ -103,101 +82,193 @@ CREATE INDEX IF NOT EXISTS idx_ob_asset_status
 
 def init_ob_schema(conn: sqlite3.Connection):
     conn.executescript(OB_SCHEMA_SQL)
+    # Aggiungi colonna has_displacement se non esiste (migrazione)
+    try:
+        conn.execute("ALTER TABLE order_blocks ADD COLUMN has_displacement BOOLEAN DEFAULT 0")
+        conn.commit()
+    except Exception:
+        pass  # colonna gia' presente
     conn.commit()
 
 
 # ============================================================
-# OB Identification
+# OB Detection — su QUALSIASI evento strutturale
 # ============================================================
 
-def _find_order_blocks(df_m15: pd.DataFrame, structure_snapshot: dict,
-                        session: str, cfg: dict) -> list:
+def _find_contrary_candle(df_m15: pd.DataFrame, event_direction: str,
+                           event_idx: int, max_search: int = 6) -> dict | None:
     """
-    Cerca Order Block nelle candele recenti.
+    Cerca l'ultima candela contraria PRIMA di un evento strutturale.
 
-    Un OB bullish: ultima candela BEARISH prima di un displacement UP.
-    Un OB bearish: ultima candela BULLISH prima di un displacement DOWN.
-
-    Richiede che il displacement sia confermato nello snapshot.
+    Per un evento BULLISH (BOS up / CHOCH up): cerca candela bearish
+    Per un evento BEARISH (BOS down / CHOCH down): cerca candela bullish
     """
-    obs = []
-    disp = structure_snapshot.get("displacement", {})
+    for i in range(event_idx - 1, max(event_idx - max_search - 1, -1), -1):
+        if i < 0 or i >= len(df_m15):
+            continue
 
-    if not disp.get("confirmed", False):
-        return obs  # nessun displacement = nessun OB
-
-    disp_dir = disp.get("direction")
-    lookback = cfg.get("ob_lookback", 20)
-
-    if len(df_m15) < lookback:
-        return obs
-
-    recent = df_m15.iloc[-lookback:]
-    disp_candles = disp.get("candle_count", 2)
-    disp_atr = disp.get("magnitude_atr", 0)
-
-    # Cerchiamo l'ultima candela contraria PRIMA del displacement
-    # Il displacement e' nelle ultime disp_candles candele
-    # L'OB e' la candela immediatamente prima
-
-    search_end = len(recent) - disp_candles
-    if search_end < 1:
-        return obs
-
-    # Cerchiamo andando indietro dalla fine del pre-displacement
-    for i in range(search_end - 1, max(search_end - 6, -1), -1):
-        if i < 0:
-            break
-
-        candle = recent.iloc[i]
+        candle = df_m15.iloc[i]
         open_ = float(candle["open"])
         close = float(candle["close"])
-        high = float(candle["high"])
-        low = float(candle["low"])
 
-        is_bullish_candle = close > open_
-        is_bearish_candle = close < open_
+        if event_direction == "BULLISH" and close < open_:
+            return {"candle": candle, "index": i}
+        if event_direction == "BEARISH" and close > open_:
+            return {"candle": candle, "index": i}
 
-        # OB Bullish: displacement UP, cerco ultima candela bearish
-        if disp_dir == "BULLISH" and is_bearish_candle:
-            ob = _build_ob(candle, "BULLISH", structure_snapshot,
-                           session, disp_atr, cfg)
+    return None
+
+
+def _find_new_obs(df_m15: pd.DataFrame, structure_snapshot: dict,
+                   session: str, cfg: dict) -> list:
+    """
+    Cerca OB basandosi su TUTTI gli eventi strutturali (BOS, CHOCH),
+    non solo sul displacement.
+    """
+    obs = []
+    events = structure_snapshot.get("events", [])
+    structural_events = [e for e in events if e.get("type") in ("BOS", "CHOCH")]
+
+    if not structural_events:
+        return obs
+
+    disp = structure_snapshot.get("displacement", {})
+    disp_confirmed = disp.get("confirmed", False)
+    disp_atr = disp.get("magnitude_atr", 0) if disp_confirmed else 0
+
+    for event in structural_events:
+        direction = event.get("direction")
+        if not direction:
+            continue
+
+        # Cerca la candela contraria nelle ultime candele
+        search_from = len(df_m15) - 1
+        result = _find_contrary_candle(df_m15, direction, search_from)
+
+        if result:
+            ob = _build_ob(
+                result["candle"], direction, structure_snapshot,
+                session, disp_atr, disp_confirmed, event.get("type", "BOS"), cfg
+            )
             obs.append(ob)
-            break
-
-        # OB Bearish: displacement DOWN, cerco ultima candela bullish
-        if disp_dir == "BEARISH" and is_bullish_candle:
-            ob = _build_ob(candle, "BEARISH", structure_snapshot,
-                           session, disp_atr, cfg)
-            obs.append(ob)
-            break
 
     return obs
 
 
-def _build_ob(candle, direction: str, snapshot: dict,
-              session: str, disp_atr: float, cfg: dict) -> dict:
-    """Costruisce il dict di un Order Block."""
+def _scan_historical_obs(df_m15: pd.DataFrame, cfg: dict,
+                          session: str) -> list:
+    """
+    Scansione storico: cerca OB nelle candele passate.
+    Identifica movimenti impulsivi (3+ candele nella stessa direzione
+    con corpo significativo) e trova la candela contraria precedente.
+    """
+    obs = []
+    scan_bars = cfg.get("historical_scan_bars", 200)
+    body_min = cfg.get("ob_body_min_pct", 0.30)
+
+    if len(df_m15) < 20:
+        return obs
+
+    n = min(scan_bars, len(df_m15))
+    df = df_m15.iloc[-n:]
+
+    i = 3
+    while i < len(df) - 1:
+        # Cerca sequenze impulsive: 3+ candele nella stessa direzione
+        c0 = df.iloc[i]
+        o0, c0_close, h0, l0 = float(c0["open"]), float(c0["close"]), float(c0["high"]), float(c0["low"])
+        range0 = h0 - l0
+
+        if range0 <= 0:
+            i += 1
+            continue
+
+        body_pct = abs(c0_close - o0) / range0
+        is_bull = c0_close > o0 and body_pct >= body_min
+        is_bear = c0_close < o0 and body_pct >= body_min
+
+        if not is_bull and not is_bear:
+            i += 1
+            continue
+
+        # Conta candele consecutive nella stessa direzione
+        consecutive = 1
+        for j in range(i - 1, max(i - 4, -1), -1):
+            cj = df.iloc[j]
+            oj, cj_close = float(cj["open"]), float(cj["close"])
+            if is_bull and cj_close > oj:
+                consecutive += 1
+            elif is_bear and cj_close < oj:
+                consecutive += 1
+            else:
+                break
+
+        if consecutive >= 2:
+            # Movimento impulsivo trovato — cerca candela contraria PRIMA
+            search_start = i - consecutive
+            ob_direction = "BULLISH" if is_bull else "BEARISH"
+
+            for k in range(search_start, max(search_start - 6, -1), -1):
+                if k < 0:
+                    break
+                ck = df.iloc[k]
+                ok, ck_close = float(ck["open"]), float(ck["close"])
+
+                found = (ob_direction == "BULLISH" and ck_close < ok) or \
+                        (ob_direction == "BEARISH" and ck_close > ok)
+
+                if found:
+                    high = float(ck["high"])
+                    low = float(ck["low"])
+                    ts = str(ck.get("timestamp", ""))
+
+                    obs.append({
+                        "id": str(uuid.uuid4())[:8],
+                        "direction": ob_direction,
+                        "timeframe": "M15",
+                        "zone_high": high,
+                        "zone_low": low,
+                        "zone_midpoint": round((high + low) / 2, 4),
+                        "formation_timestamp": ts,
+                        "status": "FRESH",
+                        "quality_score": 2,
+                        "has_fvg": False,
+                        "has_sweep_before": False,
+                        "has_displacement": consecutive >= 3,
+                        "is_last_ob_of_move": True,
+                        "session_quality": session,
+                        "displacement_atr": 0,
+                        "mitigation_count": 0,
+                        "first_mitigation_ts": None,
+                        "age_bars": len(df) - k,
+                        "trend_at_formation": "UNKNOWN",
+                        "in_discount": False,
+                        "in_premium": False,
+                    })
+                    break
+
+            i += consecutive
+        else:
+            i += 1
+
+    return obs
+
+
+def _build_ob(candle, direction: str, snapshot: dict, session: str,
+              disp_atr: float, has_displacement: bool,
+              event_type: str, cfg: dict) -> dict:
     high = float(candle["high"])
     low = float(candle["low"])
     ts = str(candle.get("timestamp", ""))
 
-    # Premium / Discount dalla posizione nel range
     pd_info = snapshot.get("premium_discount", {})
     in_discount = pd_info.get("zone") == "DISCOUNT"
     in_premium = pd_info.get("zone") == "PREMIUM"
-
-    # Session quality
     session_quality = session if session in ("LONDON", "NEW_YORK") else "OTHER"
-
-    # Trend al momento della formazione
     trend = snapshot.get("trend_health", {}).get("current_trend", "NEUTRAL")
 
-    # Quality Score (0-5) — 5 criteri dal doc 005
+    # Quality Score (0-5)
     quality = 0
-    # Criterio 1: FVG presente — sarà popolato dal FVG Engine (Sprint 5)
-    has_fvg = False  # placeholder fino a Sprint 5
-    # Criterio 2: sweep prima — check dagli eventi recenti
     events = snapshot.get("event_history", [])
     has_sweep = any(
         e.get("type") in ("BOS", "CHOCH") and e.get("displacement", False)
@@ -205,16 +276,11 @@ def _build_ob(candle, direction: str, snapshot: dict,
     )
     if has_sweep:
         quality += 1
-    # Criterio 3: ultimo OB del movimento (per ora sempre True — singolo OB)
-    is_last = True
-    quality += 1
-    # Criterio 4: fresco (appena creato)
-    quality += 1
-    # Criterio 5: sessione London/NY
+    quality += 1  # ultimo OB (singolo)
+    quality += 1  # fresco
     if session_quality in ("LONDON", "NEW_YORK"):
         quality += 1
-    # Displacement forte (> 2 ATR)
-    if disp_atr > 2.0:
+    if has_displacement:
         quality += 1
 
     return {
@@ -227,9 +293,10 @@ def _build_ob(candle, direction: str, snapshot: dict,
         "formation_timestamp": ts,
         "status": "FRESH",
         "quality_score": min(quality, 5),
-        "has_fvg": has_fvg,
+        "has_fvg": False,
         "has_sweep_before": has_sweep,
-        "is_last_ob_of_move": is_last,
+        "has_displacement": has_displacement,
+        "is_last_ob_of_move": True,
         "session_quality": session_quality,
         "displacement_atr": round(disp_atr, 3),
         "mitigation_count": 0,
@@ -242,13 +309,12 @@ def _build_ob(candle, direction: str, snapshot: dict,
 
 
 # ============================================================
-# OB State Management
+# State Management
 # ============================================================
 
 def _load_active_obs(conn: sqlite3.Connection, asset: str) -> list:
-    """Carica gli OB attivi (FRESH) dal DB."""
     rows = conn.execute(
-        "SELECT * FROM order_blocks WHERE asset = ? AND status = 'FRESH' "
+        "SELECT * FROM order_blocks WHERE asset = ? AND status IN ('FRESH', 'MITIGATED') "
         "ORDER BY formation_ts DESC",
         (asset,)
     ).fetchall()
@@ -256,26 +322,22 @@ def _load_active_obs(conn: sqlite3.Connection, asset: str) -> list:
     if not rows:
         return []
 
-    cols = [d[0] for d in conn.execute(
-        "SELECT * FROM order_blocks WHERE 1=0"
-    ).description]
-
+    cols = [d[0] for d in conn.execute("SELECT * FROM order_blocks WHERE 1=0").description]
     return [dict(zip(cols, row)) for row in rows]
 
 
 def _save_ob(conn: sqlite3.Connection, asset: str, ob: dict):
-    """Salva o aggiorna un OB nel DB."""
     conn.execute("""
         INSERT OR REPLACE INTO order_blocks (
             ob_id, asset, direction, timeframe,
             zone_high, zone_low, formation_ts,
             status, quality_score,
-            has_fvg, has_sweep_before, is_last_ob,
+            has_fvg, has_sweep_before, has_displacement, is_last_ob,
             session_quality, displacement_atr,
             mitigation_count, first_mitigation_ts, invalidation_ts,
             age_bars, trend_at_formation,
             in_discount, in_premium
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         ob.get("id") or ob.get("ob_id"),
         asset,
@@ -288,6 +350,7 @@ def _save_ob(conn: sqlite3.Connection, asset: str, ob: dict):
         ob.get("quality_score", 0),
         ob.get("has_fvg", False),
         ob.get("has_sweep_before", False),
+        ob.get("has_displacement", False),
         ob.get("is_last_ob_of_move") or ob.get("is_last_ob", False),
         ob.get("session_quality"),
         ob.get("displacement_atr", 0),
@@ -304,14 +367,8 @@ def _save_ob(conn: sqlite3.Connection, asset: str, ob: dict):
 
 def _update_ob_states(active_obs: list, current_price: float,
                        cfg: dict) -> list:
-    """
-    Aggiorna lo stato degli OB attivi:
-    - Se il prezzo entra nella zona OB → MITIGATED (primo touch)
-    - Se l'OB e' troppo vecchio → rimuovilo dalla lista attiva
-    - Incrementa age_bars per ogni OB
-    """
     touch_pct = cfg.get("mitigation_touch_pct", 0.002)
-    max_age = cfg.get("ob_max_age_bars", 200)
+    max_age = cfg.get("ob_max_age_bars", 300)
     updated = []
 
     for ob in active_obs:
@@ -325,7 +382,6 @@ def _update_ob_states(active_obs: list, current_price: float,
         zone_high = ob["zone_high"]
         zone_low = ob["zone_low"]
 
-        # Check mitigation: prezzo entra nella zona OB
         in_zone = zone_low <= current_price <= zone_high
         near_zone = False
         if not in_zone and zone_high > 0:
@@ -338,12 +394,22 @@ def _update_ob_states(active_obs: list, current_price: float,
                 ob["first_mitigation_ts"] = datetime.now(timezone.utc).isoformat()
             if ob["mitigation_count"] >= 3:
                 ob["status"] = "INVALIDATED"
-            else:
+                ob["invalidation_ts"] = datetime.now(timezone.utc).isoformat()
+            elif ob["status"] == "FRESH":
                 ob["status"] = "MITIGATED"
 
         updated.append(ob)
 
     return updated
+
+
+def _is_duplicate(new_ob: dict, existing_obs: list, tolerance: float = 0.003) -> bool:
+    mid = new_ob.get("zone_midpoint", (new_ob["zone_high"] + new_ob["zone_low"]) / 2)
+    for ex in existing_obs:
+        ex_mid = ex.get("zone_midpoint") or ex.get("zone_high", 0)
+        if ex_mid > 0 and abs(mid - ex_mid) / ex_mid < tolerance:
+            return True
+    return False
 
 
 # ============================================================
@@ -359,15 +425,6 @@ def produce_ob_snapshot(
     now: datetime = None,
     config: dict = None,
 ) -> dict:
-    """
-    Produce l'OrderBlockSnapshot per un asset.
-
-    1. Carica OB attivi dal DB
-    2. Cerca nuovi OB (se c'e' displacement)
-    3. Aggiorna stato OB esistenti (mitigation, age)
-    4. Salva tutto nel DB
-    5. Ritorna lo snapshot
-    """
     if now is None:
         now = datetime.now(timezone.utc)
     if config is None:
@@ -377,44 +434,46 @@ def produce_ob_snapshot(
     now_iso = now.isoformat()
     current_price = float(df_m15.iloc[-1]["close"]) if len(df_m15) > 0 else 0
 
-    # ── 1. Carica OB attivi ──────────────────────────────────
+    # ── 1. Carica OB attivi dal DB ───────────────────────────
     active_obs = _load_active_obs(conn, asset)
 
-    # ── 2. Cerca nuovi OB ────────────────────────────────────
-    new_obs = _find_order_blocks(df_m15, structure_snapshot, session, cfg)
+    # ── 2. Scansione storico (solo se DB vuoto per questo asset) ─
+    if not active_obs and len(df_m15) >= 50:
+        historical = _scan_historical_obs(df_m15, cfg, session)
+        for ob in historical:
+            if not _is_duplicate(ob, active_obs):
+                active_obs.append(ob)
+                _save_ob(conn, asset, ob)
+        if historical:
+            logger.info("OB Engine [%s]: scansione storico → %d OB trovati", asset, len(historical))
 
-    # Deduplicazione: non aggiungere OB nella stessa zona di uno esistente
-    for new_ob in new_obs:
-        is_duplicate = any(
-            abs(new_ob["zone_midpoint"] - existing.get("zone_high", 0)) /
-            max(existing.get("zone_high", 1), 1) < 0.003
-            for existing in active_obs
-        )
-        if not is_duplicate:
-            active_obs.append(new_ob)
-            _save_ob(conn, asset, new_ob)
-            logger.info(
-                "OB Engine [%s]: NUOVO %s OB @ %.2f-%.2f quality=%d disp=%.1fATR",
-                asset, new_ob["direction"],
-                new_ob["zone_low"], new_ob["zone_high"],
-                new_ob["quality_score"], new_ob["displacement_atr"],
-            )
+    # ── 3. Cerca nuovi OB dagli eventi correnti ──────────────
+    if structure_snapshot:
+        new_obs = _find_new_obs(df_m15, structure_snapshot, session, cfg)
+        for ob in new_obs:
+            if not _is_duplicate(ob, active_obs):
+                active_obs.append(ob)
+                _save_ob(conn, asset, ob)
+                logger.info(
+                    "OB Engine [%s]: NUOVO %s OB @ %.2f-%.2f q=%d disp=%s",
+                    asset, ob["direction"],
+                    ob["zone_low"], ob["zone_high"],
+                    ob["quality_score"], ob["has_displacement"],
+                )
 
-    # ── 3. Aggiorna stato OB esistenti ───────────────────────
+    # ── 4. Aggiorna stato ────────────────────────────────────
     updated_obs = _update_ob_states(active_obs, current_price, cfg)
-
     for ob in updated_obs:
         _save_ob(conn, asset, ob)
 
-    # ── 4. Filtra per lo snapshot ────────────────────────────
-    max_tracked = cfg.get("ob_max_tracked", 20)
-    all_obs = [ob for ob in updated_obs if ob["status"] != "EXPIRED"]
+    # ── 5. Filtra per snapshot ───────────────────────────────
+    max_tracked = cfg.get("ob_max_tracked", 30)
+    all_obs = [ob for ob in updated_obs if ob["status"] not in ("EXPIRED",)]
     all_obs = all_obs[-max_tracked:]
 
     fresh_bullish = [ob for ob in all_obs if ob["status"] == "FRESH" and ob["direction"] == "BULLISH"]
     fresh_bearish = [ob for ob in all_obs if ob["status"] == "FRESH" and ob["direction"] == "BEARISH"]
 
-    # Nearest fresh OB
     nearest_bull = None
     nearest_bear = None
     if fresh_bullish and current_price > 0:
@@ -426,14 +485,11 @@ def produce_ob_snapshot(
         if above:
             nearest_bear = min(above, key=lambda ob: ob["zone_low"] - current_price)
 
-    # ── 5. Costruisci snapshot ───────────────────────────────
     snapshot = {
         "asset": asset,
         "timestamp": now_iso,
         "snapshot_version": SNAPSHOT_VERSION,
-
         "order_blocks": all_obs,
-
         "fresh_bullish_count": len(fresh_bullish),
         "fresh_bearish_count": len(fresh_bearish),
         "nearest_fresh_bullish": nearest_bull,
@@ -441,24 +497,21 @@ def produce_ob_snapshot(
         "total_tracked": len(all_obs),
     }
 
-    # ── 6. Salva snapshot ────────────────────────────────────
     try:
-        snapshot_id = str(uuid.uuid4())
         conn.execute("""
             INSERT INTO order_block_snapshots (
                 snapshot_id, asset, timestamp_snapshot, snapshot_version,
                 fresh_bullish, fresh_bearish, total_tracked, snapshot_json
             ) VALUES (?,?,?,?,?,?,?,?)
         """, (
-            snapshot_id, asset, now_iso, SNAPSHOT_VERSION,
+            str(uuid.uuid4()), asset, now_iso, SNAPSHOT_VERSION,
             len(fresh_bullish), len(fresh_bearish),
             len(all_obs), json.dumps(snapshot, default=str),
         ))
         conn.commit()
     except Exception as e:
-        logger.warning("OB Engine [%s]: errore salvataggio snapshot: %s", asset, e)
+        logger.warning("OB Engine [%s]: errore salvataggio: %s", asset, e)
 
-    # ── Log ──────────────────────────────────────────────────
     nb = nearest_bull
     nbe = nearest_bear
     logger.info(
