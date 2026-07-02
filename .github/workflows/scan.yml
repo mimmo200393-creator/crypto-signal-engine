@@ -1,144 +1,98 @@
-"""
-cleanup_snapshots.py
-Pulizia automatica del database — rimuove dati time-series vecchi
-mantenendo tutti i dati analitici (segnali, order_blocks, esiti).
-
-NON tocca MAI: v41p1_signals, v41_signals, edge_lab_signals,
-trb_signals, lh_signals, order_blocks, v3_signals, signals.
-"""
-
-import sqlite3
-import os
-
-DB_PATH = "data/signals.db"
-
-if not os.path.exists(DB_PATH):
-    print(f"DB non trovato: {DB_PATH}")
-    exit(0)
-
-conn = sqlite3.connect(DB_PATH)
-
-size_before = os.path.getsize(DB_PATH) / (1024 * 1024)
-print(f"DB size prima: {size_before:.1f} MB")
-
-total_deleted = 0
-
-# ── 1. Snapshot engine (14 giorni) ────────────────────────────
-for table, ts_col in [
-    ("structure_snapshots",       "timestamp_snapshot"),
-    ("volatility_snapshots",      "timestamp_snapshot"),
-    ("order_block_snapshots",     "timestamp_snapshot"),
-    ("fvg_snapshots",             "timestamp_snapshot"),
-    ("liquidity_snapshots",       "timestamp_snapshot"),
-    ("session_sweep_snapshots",   "timestamp_snapshot"),
-    ("reaction_map_snapshots",    "timestamp_snapshot"),
-    ("candlestick_snapshots",     "timestamp_snapshot"),
-    ("macro_snapshots",           "timestamp_snapshot"),
-    ("market_state_snapshots",    "timestamp_snapshot"),
-]:
-    try:
-        deleted = conn.execute(
-            f"DELETE FROM {table} WHERE {ts_col} < datetime('now', '-14 days')"
-        ).rowcount
-        total_deleted += deleted
-        if deleted > 0:
-            print(f"  {table}: {deleted} righe rimosse")
-    except Exception as e:
-        print(f"  {table}: skip ({e})")
-
-# ── 2. MFM snapshots — alto volume, tieni 7 giorni ───────────
-for table, ts_col in [
-    ("v41p1_mfm_snapshots",      "timestamp_snapshot"),
-    ("market_context_snapshots",  "timestamp_snapshot"),
-]:
-    try:
-        before_count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        deleted = conn.execute(
-            f"DELETE FROM {table} WHERE {ts_col} < datetime('now', '-7 days')"
-        ).rowcount
-        total_deleted += deleted
-        if deleted > 0:
-            print(f"  {table}: {deleted} righe rimosse (era {before_count})")
-    except Exception as e:
-        print(f"  {table}: skip ({e})")
-
-# ── 3. Candles cache — tieni 2000 per timeframe ──────────────
-for table in ["candles_cache", "v3_candles_cache"]:
-    try:
-        before_count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        # Tieni solo le ultime 2000 righe per asset+timeframe
-        deleted = conn.execute(f"""
-            DELETE FROM {table} WHERE rowid NOT IN (
-                SELECT rowid FROM {table} ORDER BY rowid DESC LIMIT 2000
-            )
-        """).rowcount
-        total_deleted += deleted
-        if deleted > 0:
-            print(f"  {table}: {deleted} righe rimosse (era {before_count})")
-    except Exception as e:
-        print(f"  {table}: skip ({e})")
-
-# ── 4. Watchlist alerts vecchi (30 giorni) ────────────────────
-for table, ts_col in [
-    ("v41p1_watchlist_alerts", "timestamp_alert"),
-    ("v41_watchlist_alerts",   "timestamp_alert"),
-]:
-    try:
-        deleted = conn.execute(
-            f"DELETE FROM {table} WHERE {ts_col} < datetime('now', '-30 days')"
-        ).rowcount
-        total_deleted += deleted
-        if deleted > 0:
-            print(f"  {table}: {deleted} righe rimosse")
-    except Exception as e:
-        pass
-
-# ── 5. Order blocks expired/vecchi invalidati ─────────────────
-try:
-    deleted = conn.execute(
-        "DELETE FROM order_blocks WHERE status = 'EXPIRED' "
-        "OR (status = 'INVALIDATED' AND age_bars > 1000)"
-    ).rowcount
-    total_deleted += deleted
-    if deleted > 0:
-        print(f"  order_blocks (expired/old): {deleted} righe rimosse")
-except Exception:
-    pass
-
-# ── 6. FVG zones vecchie ─────────────────────────────────────
-try:
-    deleted = conn.execute(
-        "DELETE FROM fvg_zones WHERE status = 'FILLED' "
-        "OR created_at < datetime('now', '-14 days')"
-    ).rowcount
-    total_deleted += deleted
-    if deleted > 0:
-        print(f"  fvg_zones: {deleted} righe rimosse")
-except Exception:
-    pass
-
-# ── 7. Macro cache ────────────────────────────────────────────
-try:
-    deleted = conn.execute(
-        "DELETE FROM macro_cache WHERE timestamp < datetime('now', '-7 days')"
-    ).rowcount
-    total_deleted += deleted
-    if deleted > 0:
-        print(f"  macro_cache: {deleted} righe rimosse")
-except Exception:
-    pass
-
-conn.commit()
-
-# ── VACUUM ────────────────────────────────────────────────────
-print(f"\nTotale righe rimosse: {total_deleted}")
-print("VACUUM in corso...")
-conn.execute("VACUUM")
-conn.close()
-
-size_after = os.path.getsize(DB_PATH) / (1024 * 1024)
-saved = size_before - size_after
-print(f"DB size dopo: {size_after:.1f} MB (risparmiati {saved:.1f} MB)")
-
-if size_after > 50:
-    print(f"⚠️  DB ancora sopra 50 MB — controllare tabelle grandi manualmente")
+name: Crypto Signal Engine — Scan
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      send_test_alert:
+        description: "Invia alert di TEST con dati finti (non fa scan)"
+        type: boolean
+        default: false
+permissions:
+  contents: write
+concurrency:
+  group: signal-engine-scan
+  cancel-in-progress: false
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+      - name: Install dependencies
+        run: pip install -r requirements.txt --break-system-packages || pip install -r requirements.txt
+      - name: Fetch candele H4/H1 (BTC_USDT + PAXG_USDT)
+        run: python3 candles_runner.py
+      - name: Daily Brief (08:00 UTC)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          HOUR=$(date -u +%H)
+          MINUTE=$(date -u +%M)
+          if [ "$HOUR" = "08" ] && [ "$MINUTE" -lt "05" ]; then
+            python3 daily_brief_runner.py
+          fi
+      - name: Fetch candele M15/D1 (BTC_USDT + PAXG_USDT)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 v3_scanner_runner.py
+      - name: Institutional Scanner V4.1 Intraday Wave (PAXG_USDT + BTC_USDT)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 v41_scanner_runner.py
+      - name: Institutional Scanner V4.1 Phase 1 (PAXG_USDT + BTC_USDT)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 v41p1_scanner_runner.py
+      - name: Liquidity Hunter (BTC_USDT + PAXG_USDT)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 lh_scanner_runner.py
+      - name: Institutional Edge Lab — OTE-SC (BTC_USDT + PAXG_USDT)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 edge_lab_runner.py
+      - name: Cleanup old snapshots
+        run: python3 cleanup_snapshots.py
+      - name: Commit database e dashboard
+        run: |
+          git config user.name "signal-engine-bot"
+          git config user.email "actions@github.com"
+          git add data/signals.db
+          DB_CHANGED=false
+          git diff --staged --quiet || DB_CHANGED=true
+          if [ "$DB_CHANGED" = "true" ]; then
+            python3 generate_unified_dashboard.py
+            python3 generate_analytics_dashboard.py
+            git add data/signals.db \
+                    docs/unified_dashboard.html \
+                    docs/analytics_dashboard.html
+            git commit -m "Scanner + Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            git pull --rebase origin main && git push
+          else
+            echo "DB non cambiato, nessun commit"
+          fi
