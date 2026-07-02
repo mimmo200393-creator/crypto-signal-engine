@@ -2,16 +2,26 @@
 core/edge_lab_runner.py
 Edge Lab — Runner (Step 10) + NMC Trend Rider Balanced
 
+Sprint 13: MIE Context Enrichment
+    - Ogni segnale OTE-SC riceve lo snapshot completo di tutti
+      gli engine MIE (Structure, Volatility, OB, FVG, Liquidity,
+      Session Sweep, Reaction Map, Candlestick, Macro, Market State)
+    - Salvato in market_snapshot JSON per analisi statistica futura
+    - Filtri statistici (OVERLAP, risk floor)
+    - Tradeability flags bloccanti
+
 Per ogni asset:
     1. Carica candele
     2. Monitora segnali aperti OTE-SC
     3. Costruisce Market Context
-    4. Valuta OTE-SC
-    5. Valuta TRB (riusa stesso Market Context)
+    4. Legge MIE context da snapshot DB
+    5. Valuta OTE-SC (arricchito con MIE)
+    6. Valuta TRB (riusa stesso Market Context + MIE)
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -31,6 +41,75 @@ logger = logging.getLogger("edge_lab.runner")
 EDGE_LAB_ASSETS     = ["BTC_USDT", "PAXG_USDT"]
 EDGE_LAB_TIMEFRAMES = {"H4": "4h", "H1": "1h", "M15": "15m", "D1": "1D"}
 
+
+# ============================================================
+# MIE Context Reader (Sprint 13)
+# ============================================================
+
+_MIE_SNAPSHOT_TABLES = [
+    ("structure",    "structure_snapshots"),
+    ("volatility",   "volatility_snapshots"),
+    ("order_block",  "order_block_snapshots"),
+    ("fvg",          "fvg_snapshots"),
+    ("liquidity",    "liquidity_snapshots"),
+    ("session_sweep","session_sweep_snapshots"),
+    ("reaction_map", "reaction_map_snapshots"),
+    ("candlestick",  "candlestick_snapshots"),
+    ("macro",        "macro_snapshots"),
+    ("market_state", "market_state_snapshots"),
+]
+
+
+def _read_mie_context(conn, asset: str) -> dict:
+    """
+    Legge l'ultimo snapshot di ogni engine MIE dal DB.
+    Restituisce un dizionario con tutti i campi rilevanti,
+    pronto per essere serializzato in market_snapshot JSON.
+
+    NON ricalcola nulla — consuma ciò che v41p1_runner.py
+    produce ad ogni scan e salva nelle tabelle snapshot.
+    """
+    context = {}
+
+    for prefix, table in _MIE_SNAPSHOT_TABLES:
+        try:
+            row = conn.execute(
+                f"SELECT snapshot_json FROM {table} "
+                f"WHERE asset = ? ORDER BY timestamp_snapshot DESC LIMIT 1",
+                (asset,)
+            ).fetchone()
+
+            if row and row[0]:
+                snapshot = json.loads(row[0])
+                if isinstance(snapshot, dict):
+                    for key, value in snapshot.items():
+                        context[f"mie_{prefix}_{key}"] = value
+                context[f"mie_{prefix}_available"] = True
+            else:
+                context[f"mie_{prefix}_available"] = False
+
+        except Exception as e:
+            logger.debug("MIE context [%s/%s]: %s", asset, table, e)
+            context[f"mie_{prefix}_available"] = False
+
+    return context
+
+
+def _get_session(now: datetime) -> str:
+    """Sessione di mercato in UTC."""
+    t = now.hour * 60 + now.minute
+    if 8 * 60 <= t < 13 * 60 + 30:
+        return "LONDON"
+    if 13 * 60 + 30 <= t <= 16 * 60 + 30:
+        return "OVERLAP"
+    if 16 * 60 + 31 <= t <= 22 * 60:
+        return "NEW_YORK"
+    return "ASIA"
+
+
+# ============================================================
+# DataFrame preparation
+# ============================================================
 
 def _prepare_dataframes(conn, asset: str, config: dict):
     limit       = config.get("BOOTSTRAP_TARGET_CANDLES", 300)
@@ -53,6 +132,10 @@ def _prepare_dataframes(conn, asset: str, config: dict):
 
     return df_h4, df_h1, df_m15, df_d1
 
+
+# ============================================================
+# Per-asset runner
+# ============================================================
 
 def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
     logger.info("Edge Lab: inizio ciclo per %s", asset)
@@ -97,7 +180,11 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
     except Exception as e:
         logger.warning("Edge Lab [%s]: errore snapshot: %s", asset, e)
 
-    # Salva context per TRB
+    # ── Leggi MIE context (Sprint 13) ────────────────────────
+    mie_context = _read_mie_context(conn, asset)
+
+    # Salva context per TRB (ora include MIE)
+    market_ctx["mie_context"] = mie_context
     market_contexts[asset] = market_ctx
 
     # ── OTE-SC ──────────────────────────────────────────────
@@ -114,7 +201,7 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
                 logger.debug("Edge Lab [%s %s]: segnale OPEN già presente, skip.", asset, direction)
                 continue
 
-            # Genera il segnale — serve la candela di conferma per il check duplicati
+            # Genera il segnale
             try:
                 result = generate_ote_sc_signal(market_ctx, df_m15, direction)
             except Exception as e:
@@ -129,8 +216,46 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
                     asset, direction, diag.get("rejection", "UNKNOWN"))
                 continue
 
-            # Check 2: stessa candela di conferma già usata in precedenza
-            # Una candela di conferma = un solo segnale (prevenzione duplicati strutturali)
+            # ══════════════════════════════════════════════════
+            # ── Filtri statistici (Sprint 13) ────────────────
+            # ══════════════════════════════════════════════════
+
+            current_session = _get_session(now)
+            signal["session"] = signal.get("session", current_session)
+
+            # OVERLAP: WR 8.7% cross-strategy
+            if signal.get("session") == "OVERLAP":
+                logger.info(
+                    "Edge Lab [%s %s]: REJECT SESSION_OVERLAP",
+                    asset, direction,
+                )
+                continue
+
+            # Risk floor: SL troppo stretto → MAE_R esplosivo
+            entry = signal.get("entry", 0)
+            sl = signal.get("stop_loss", 0)
+            if entry and sl:
+                risk_pct = abs(entry - sl) / entry
+                if risk_pct < 0.002:
+                    logger.info(
+                        "Edge Lab [%s %s]: REJECT RISK_TOO_TIGHT (%.4f)",
+                        asset, direction, risk_pct,
+                    )
+                    continue
+
+            # Tradeability flags bloccanti
+            # (prima erano informativi, ora bloccano)
+            flags = signal.get("tradeability_flags", [])
+            if flags:
+                logger.info(
+                    "Edge Lab [%s %s]: REJECT TRADEABILITY_FLAGS %s",
+                    asset, direction, flags,
+                )
+                continue
+
+            # ══════════════════════════════════════════════════
+
+            # Check 2: stessa candela di conferma già usata
             conf_ts = signal.get("confirmation_candle_ts")
             if conf_ts and edge_lab_db.has_signal_from_confirmation_candle(
                 conn, asset, direction, conf_ts
@@ -141,6 +266,13 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
                 )
                 continue
 
+            # ══════════════════════════════════════════════════
+            # ── MIE Context Enrichment (Sprint 13) ───────────
+            # ══════════════════════════════════════════════════
+            signal["market_snapshot"] = json.dumps(
+                mie_context, default=str
+            )
+
             # Inserisce il segnale
             try:
                 signal_id = edge_lab_db.insert_el_signal(conn, signal)
@@ -150,10 +282,13 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
 
             logger.info(
                 "Edge Lab [%s %s]: SEGNALE entry=%.4f sl=%.4f tp=%.4f rr=%.2f "
-                "quality=%d/%s (id=%s)",
+                "quality=%d/%s mie=%d engines (id=%s)",
                 asset, direction,
                 signal["entry"], signal["stop_loss"], signal["tp"], signal["rr"],
-                signal["quality_score"], signal["quality_label"], signal_id,
+                signal["quality_score"], signal["quality_label"],
+                sum(1 for k, v in mie_context.items()
+                    if k.endswith("_available") and v),
+                signal_id,
             )
             _notify_otesc(signal, config)
 
@@ -218,6 +353,7 @@ def run_edge_lab_scan(config: dict):
     conn.close()
 
     # TRB usa gli stessi market_contexts già calcolati
+    # (ora includono mie_context per l'enrichment)
     try:
         trend_rider_runner.run_trb_scan(config, market_contexts)
     except Exception as e:
