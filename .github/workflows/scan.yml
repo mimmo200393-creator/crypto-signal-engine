@@ -74,6 +74,8 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 edge_lab_runner.py
+      - name: Cleanup old snapshots
+        run: python3 cleanup_snapshots.py
       - name: Commit database e dashboard
         run: |
           git config user.name "signal-engine-bot"
