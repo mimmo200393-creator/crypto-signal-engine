@@ -49,15 +49,15 @@ DEFAULT_CONFIG = {
     "volume_avg_period": 20,
     # Event History
     "event_history_max": 20,
-    # Trend Health (Sprint 2)
+    # Trend Health (Sprint 2 — recalibrato Sprint 15)
     "max_impulses_tracked": 10,
-    "amplitude_similar_pct": 20,
-    "neutral_reset_scans": 10,
-    "min_impulse_atr": 0.5,
-    # Displacement (Sprint 3)
+    "amplitude_similar_pct": 15,      # era 20 → più sensibile a ACCELERATING/EXHAUSTING
+    "neutral_reset_scans": 25,        # era 10 → più tollerante, non resetta il trend subito
+    "min_impulse_atr": 0.3,           # era 0.5 → rileva impulsi più piccoli su M15
+    # Displacement (Sprint 3 — recalibrato Sprint 15)
     "disp_body_pct": 0.50,
-    "disp_min_candles": 2,
-    "disp_atr_mult": 1,
+    "disp_min_candles": 1,            # era 2 → singola candela impulsiva conta come displacement
+    "disp_atr_mult": 1.0,            # confermato (era già 1.0 nel DEFAULT, 1.5 nel fallback)
     "disp_lookback": 5,
 }
 
@@ -272,6 +272,12 @@ def _detect_choch(df: pd.DataFrame, prev_structure: str,
 # ============================================================
 
 def _check_pullback_status(df_h4: pd.DataFrame, structure_h4: dict) -> dict:
+    """
+    Sprint 15: usa i pivot H4 direttamente come riferimento quando
+    la struttura è NEUTRAL e last_hl/last_lh sono None.
+    Prima: buy_valid=True al 100% perché last_hl era sempre None
+    quando H4 era NEUTRAL. Ora usa il pivot low/high più recente.
+    """
     result = {
         "buy_valid": True,
         "sell_valid": True,
@@ -279,18 +285,29 @@ def _check_pullback_status(df_h4: pd.DataFrame, structure_h4: dict) -> dict:
         "sell_ref_level": None,
     }
 
-    if len(df_h4) < 2:
+    if len(df_h4) < 4:
         return result
 
     price = float(df_h4.iloc[-1]["close"])
 
+    # Priorità 1: usa last_hl / last_lh dalla struttura classificata
     hl = structure_h4.get("last_hl")
+    lh = structure_h4.get("last_lh")
+
+    # Priorità 2: se la struttura è NEUTRAL e non ha hl/lh,
+    # usa i pivot H4 più recenti come riferimento
+    if hl is None or lh is None:
+        pivots = _find_pivots(df_h4, 3)
+        if hl is None and len(pivots["lows"]) >= 1:
+            hl = pivots["lows"][-1]["price"]
+        if lh is None and len(pivots["highs"]) >= 1:
+            lh = pivots["highs"][-1]["price"]
+
     if hl is not None:
         result["buy_ref_level"] = hl
         if price < hl:
             result["buy_valid"] = False
 
-    lh = structure_h4.get("last_lh")
     if lh is not None:
         result["sell_ref_level"] = lh
         if price > lh:
@@ -580,7 +597,7 @@ def _detect_displacement(df: pd.DataFrame, atr: float, cfg: dict) -> dict:
     lookback = cfg.get("disp_lookback", 5)
     body_pct = cfg.get("disp_body_pct", 0.60)
     min_candles = cfg.get("disp_min_candles", 2)
-    atr_mult = cfg.get("disp_atr_mult", 1.5)
+    atr_mult = cfg.get("disp_atr_mult", 1.0)
 
     if len(df) < lookback + 1 or atr <= 0:
         return result
