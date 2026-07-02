@@ -2,15 +2,22 @@
 core/trend_rider_runner.py
 NMC Trend Rider Balanced — Runner
 
+Sprint 13: MIE Context Enrichment
+    - Ogni segnale TRB riceve lo snapshot completo di tutti
+      gli engine MIE salvato in market_snapshot JSON
+    - MIE context arriva da market_contexts (calcolato in edge_lab_runner)
+    - Filtri statistici (OVERLAP, risk floor)
+
 Per ogni asset (BTC_USDT, PAXG_USDT):
     1. Carica candele H4/H1 da candles_cache, M15 da v3_candles_cache
     2. Monitora segnali aperti (TP1/TP2/SL/EXPIRED)
     3. Genera segnale TRB per BUY e SELL
-    4. Se segnale valido e nessun duplicato → inserisce e notifica
+    4. Se segnale valido e nessun duplicato → arricchisce con MIE, inserisce e notifica
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -23,6 +30,18 @@ logger = logging.getLogger("trend_rider.runner")
 
 TRB_ASSETS     = ["BTC_USDT", "PAXG_USDT"]
 TRB_TIMEFRAMES = {"H4": "4h", "H1": "1h", "M15": "15m"}
+
+
+def _get_session(now: datetime) -> str:
+    """Sessione di mercato in UTC."""
+    t = now.hour * 60 + now.minute
+    if 8 * 60 <= t < 13 * 60 + 30:
+        return "LONDON"
+    if 13 * 60 + 30 <= t <= 16 * 60 + 30:
+        return "OVERLAP"
+    if 16 * 60 + 31 <= t <= 22 * 60:
+        return "NEW_YORK"
+    return "ASIA"
 
 
 def _prepare_dataframes(conn, asset: str, config: dict):
@@ -62,6 +81,9 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
     except Exception as e:
         logger.error("TRB Monitor [%s]: errore: %s", asset, e)
 
+    # ── MIE context (arriva da edge_lab_runner via market_ctx) ─
+    mie_context = market_ctx.get("mie_context", {})
+
     # ── Genera segnale BUY e SELL ────────────────────────────
     for direction in ("BUY", "SELL"):
 
@@ -70,7 +92,7 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
             logger.debug("TRB [%s %s]: segnale OPEN già presente, skip.", asset, direction)
             continue
 
-        # Genera il segnale prima — serve l'entry per il check duplicati
+        # Genera il segnale
         try:
             result = generate_trb_signal(market_ctx, df_h4, df_h1, df_m15, direction)
         except Exception as e:
@@ -87,7 +109,36 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
             )
             continue
 
-        # Check 2: duplicato — stesso asset/direzione/entry nelle ultime 4 ore
+        # ══════════════════════════════════════════════════════
+        # ── Filtri statistici (Sprint 13) ────────────────────
+        # ══════════════════════════════════════════════════════
+
+        current_session = _get_session(now)
+        signal["session"] = signal.get("session", current_session)
+
+        # OVERLAP: WR 8.7% cross-strategy
+        if signal.get("session") == "OVERLAP":
+            logger.info(
+                "TRB [%s %s]: REJECT SESSION_OVERLAP",
+                asset, direction,
+            )
+            continue
+
+        # Risk floor: SL troppo stretto
+        entry = signal.get("entry", 0)
+        sl = signal.get("stop_loss", 0)
+        if entry and sl:
+            risk_pct = abs(entry - sl) / entry
+            if risk_pct < 0.002:
+                logger.info(
+                    "TRB [%s %s]: REJECT RISK_TOO_TIGHT (%.4f)",
+                    asset, direction, risk_pct,
+                )
+                continue
+
+        # ══════════════════════════════════════════════════════
+
+        # Check 2: duplicato
         if trend_rider_db.has_recent_trb_signal(
             conn, asset, direction, signal["entry"], hours=4
         ):
@@ -96,6 +147,11 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
                 asset, direction, signal["entry"],
             )
             continue
+
+        # ══════════════════════════════════════════════════════
+        # ── MIE Context Enrichment (Sprint 13) ───────────────
+        # ══════════════════════════════════════════════════════
+        signal["market_snapshot"] = json.dumps(mie_context, default=str)
 
         # Inserisce il segnale
         try:
@@ -106,11 +162,14 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
 
         logger.info(
             "TRB [%s %s]: SEGNALE entry=%.4f sl=%.4f tp1=%.4f tp2=%.4f "
-            "score=%d (%s) adx=%.1f (id=%s)",
+            "score=%d (%s) adx=%.1f mie=%d engines (id=%s)",
             asset, direction,
             signal["entry"], signal["stop_loss"], signal["tp1"], signal["tp2"],
             signal["quality_score"], signal["quality_label"],
-            signal["adx"], signal_id,
+            signal["adx"],
+            sum(1 for k, v in mie_context.items()
+                if k.endswith("_available") and v),
+            signal_id,
         )
 
         _notify(signal, config)
@@ -173,6 +232,7 @@ def run_trb_scan(config: dict, market_contexts: dict):
     Args:
         config:          config.yaml
         market_contexts: dict {asset: market_ctx} già calcolati da Edge Lab runner
+                         (ora include mie_context per ogni asset)
     """
     conn = core_db.get_connection(config["DB_PATH"])
     trend_rider_db.init_trb_schema(conn)
