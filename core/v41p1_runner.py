@@ -6,6 +6,7 @@ Money Flow & Intraday Edge Validation.
 Sprint 1: integrazione Structure Engine V2.
 Sprint 2: Trend Health + Volatility Regime Engine.
 Sprint 13: Audit fix — market_snapshot persistence + filtri statistici.
+Sprint 13b: Fix mfm_sweep_confirmed (era sempre 0).
 """
 
 import json
@@ -195,6 +196,27 @@ def _enrich_signal_with_mfm(signal: dict, mfm: dict) -> dict:
         signal["expected_move_points"]  = None
         signal["expected_move_pct"]     = None
         signal["expected_move_barrier"] = None
+
+    # ── MFM Sweep Confirmation (Sprint 13b) ──────────────────
+    # Confronta lo sweep rilevato dal scanner (sweep_direction)
+    # con i livelli del Money Flow Map. Se lo sweep ha toccato
+    # un livello MFM entro la soglia di prossimità, conferma.
+    # Prima: mfm_sweep_confirmed era sempre 0 su tutti i segnali.
+    sweep_dir = signal.get("sweep_direction")
+    if sweep_dir and mfm.get("levels"):
+        sweep_kind = "high" if sweep_dir == "BEARISH" else "low"
+        for lv in mfm["levels"]:
+            if lv["kind"] != sweep_kind:
+                continue
+            if lv["price"] == 0:
+                continue
+            dist = abs(entry - lv["price"]) / lv["price"]
+            if dist <= 0.005:
+                signal["mfm_sweep_confirmed"] = True
+                signal["mfm_sweep_level"] = lv["label"]
+                signal["mfm_sweep_price"] = lv["price"]
+                signal["mfm_sweep_priority"] = lv.get("priority_label", "UNKNOWN")
+                break
 
     return signal
 
@@ -471,8 +493,6 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
     # ── Filtri statistici (Audit 02/07/2026) ─────────────────
     # ══════════════════════════════════════════════════════════
 
-    # OVERLAP: WR 8.7% su n=23, CI 95% [2-27%], interamente
-    # sotto il breakeven del 33.3% necessario a RR 2.0.
     if signal["session"] == "OVERLAP":
         logger.info(
             "V41P1 Scanner [%s]: REJECT SESSION_OVERLAP "
@@ -481,10 +501,6 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
         )
         return
 
-    # BUY + dow_theory NEUTRAL: WR 17.9% su n=78.
-    # 39% del volume totale, genera ~70% delle perdite nette.
-    # BUY con dow_theory confermato (BEARISH=reversal, BULLISH=trend)
-    # ha WR 56%+. Senza struttura H4 chiara, i BUY sono rumore.
     if (signal["direction"] == "BUY"
             and signal.get("dow_theory_h4") == "NEUTRAL"):
         logger.info(
@@ -494,8 +510,6 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
         )
         return
 
-    # Risk cap: SL troppo stretto (< 0.2% del prezzo) ha
-    # MAE_R mediana 1.67 → quasi doppia perdita. Scartare.
     risk_pct = abs(signal["entry"] - signal["stop_loss"]) / signal["entry"]
     if risk_pct < 0.002:
         logger.info(
