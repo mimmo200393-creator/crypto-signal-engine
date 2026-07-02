@@ -42,7 +42,7 @@ def init_v41p1_schema(conn: sqlite3.Connection,
 def insert_v41p1_signal(conn: sqlite3.Connection, signal: dict) -> str:
     signal_id = signal.get("signal_id") or str(uuid.uuid4())
     trigger_json = json.dumps(signal.get("trigger_types", []))
-    snapshot_json = json.dumps(signal.get("market_snapshot")) if signal.get("market_snapshot") else None
+    snapshot_json = signal.get("market_snapshot") if signal.get("market_snapshot") else None
 
     conn.execute("""
         INSERT INTO v41p1_signals (
