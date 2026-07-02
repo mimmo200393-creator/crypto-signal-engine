@@ -3,12 +3,9 @@ core/edge_lab_runner.py
 Edge Lab — Runner (Step 10) + NMC Trend Rider Balanced
 
 Sprint 13: MIE Context Enrichment
-    - Ogni segnale OTE-SC riceve lo snapshot completo di tutti
-      gli engine MIE (Structure, Volatility, OB, FVG, Liquidity,
-      Session Sweep, Reaction Map, Candlestick, Macro, Market State)
-    - Salvato in market_snapshot JSON per analisi statistica futura
-    - Filtri statistici (OVERLAP, risk floor)
-    - Tradeability flags bloccanti
+Sprint 13b: Fix anti-duplicati (notifiche ripetute)
+    - Check 3: stesso entry nelle ultime 4 ore → SKIP
+    - Risolve il problema di 3+ notifiche identiche per scan
 
 Per ogni asset:
     1. Carica candele
@@ -61,16 +58,7 @@ _MIE_SNAPSHOT_TABLES = [
 
 
 def _read_mie_context(conn, asset: str) -> dict:
-    """
-    Legge l'ultimo snapshot di ogni engine MIE dal DB.
-    Restituisce un dizionario con tutti i campi rilevanti,
-    pronto per essere serializzato in market_snapshot JSON.
-
-    NON ricalcola nulla — consuma ciò che v41p1_runner.py
-    produce ad ogni scan e salva nelle tabelle snapshot.
-    """
     context = {}
-
     for prefix, table in _MIE_SNAPSHOT_TABLES:
         try:
             row = conn.execute(
@@ -78,7 +66,6 @@ def _read_mie_context(conn, asset: str) -> dict:
                 f"WHERE asset = ? ORDER BY timestamp_snapshot DESC LIMIT 1",
                 (asset,)
             ).fetchone()
-
             if row and row[0]:
                 snapshot = json.loads(row[0])
                 if isinstance(snapshot, dict):
@@ -87,16 +74,13 @@ def _read_mie_context(conn, asset: str) -> dict:
                 context[f"mie_{prefix}_available"] = True
             else:
                 context[f"mie_{prefix}_available"] = False
-
         except Exception as e:
             logger.debug("MIE context [%s/%s]: %s", asset, table, e)
             context[f"mie_{prefix}_available"] = False
-
     return context
 
 
 def _get_session(now: datetime) -> str:
-    """Sessione di mercato in UTC."""
     t = now.hour * 60 + now.minute
     if 8 * 60 <= t < 13 * 60 + 30:
         return "LONDON"
@@ -244,7 +228,6 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
                     continue
 
             # Tradeability flags bloccanti
-            # (prima erano informativi, ora bloccano)
             flags = signal.get("tradeability_flags", [])
             if flags:
                 logger.info(
@@ -265,6 +248,31 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
                     asset, direction, conf_ts,
                 )
                 continue
+
+            # ══════════════════════════════════════════════════
+            # ── Check 3: anti-duplicato per entry (Sprint 13b)
+            # ══════════════════════════════════════════════════
+            # Blocca segnali con stesso asset+direction+entry
+            # emessi nelle ultime 4 ore. Risolve il problema
+            # delle 3+ notifiche identiche per scan quando
+            # confirmation_candle_ts è None.
+            try:
+                recent_dup = conn.execute(
+                    "SELECT COUNT(*) FROM edge_lab_signals "
+                    "WHERE asset = ? AND direction = ? "
+                    "AND abs(entry - ?) < 0.01 "
+                    "AND timestamp_setup > datetime('now', '-4 hours')",
+                    (asset, direction, signal["entry"]),
+                ).fetchone()[0]
+                if recent_dup > 0:
+                    logger.info(
+                        "Edge Lab [%s %s]: SKIP RECENT_DUPLICATE (entry=%.2f, "
+                        "già %d segnali nelle ultime 4h)",
+                        asset, direction, signal["entry"], recent_dup,
+                    )
+                    continue
+            except Exception as e:
+                logger.debug("Edge Lab dedup check: %s", e)
 
             # ══════════════════════════════════════════════════
             # ── MIE Context Enrichment (Sprint 13) ───────────
@@ -352,8 +360,6 @@ def run_edge_lab_scan(config: dict):
 
     conn.close()
 
-    # TRB usa gli stessi market_contexts già calcolati
-    # (ora includono mie_context per l'enrichment)
     try:
         trend_rider_runner.run_trb_scan(config, market_contexts)
     except Exception as e:
