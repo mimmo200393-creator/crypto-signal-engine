@@ -6,7 +6,8 @@ Money Flow & Intraday Edge Validation.
 Sprint 1: integrazione Structure Engine V2.
 Sprint 2: Trend Health + Volatility Regime Engine.
 Sprint 13: Audit fix — market_snapshot persistence + filtri statistici.
-Sprint 13b: Fix mfm_sweep_confirmed (era sempre 0).
+Sprint 13b: Fix mfm_sweep_confirmed.
+Sprint 13c: Fix risk filter ATR-based + watchlist disabilitata.
 """
 
 import json
@@ -86,65 +87,6 @@ def _get_session_range(df_m15, now: datetime) -> tuple[float, float]:
 
 
 # ============================================================
-# Watchlist
-# ============================================================
-
-def _check_watchlist(conn, asset: str, mfm: dict, now: datetime, config: dict):
-    timestamp_str = now.isoformat()
-
-    proximities = [
-        lv for lv in mfm["levels"]
-        if lv["distance_pct"] <= WATCHLIST_PROXIMITY_PCT
-    ]
-
-    proximities_by_label = {p["label"]: p for p in proximities}
-
-    for label, level in proximities_by_label.items():
-        was_inside = v41p1_db.get_watchlist_state(conn, asset, label)
-        if not was_inside:
-            alert_id = v41p1_db.insert_watchlist_alert(conn, asset, level, timestamp_str)
-            logger.info(
-                "V41P1 Watchlist [%s]: ALERT %s @ %.4f dist=%.3f%% "
-                "[%s %.2f] touches=%d (id=%s)",
-                asset, label, level["price"],
-                level["distance_pct"] * 100,
-                level["priority_label"], level["priority_score"],
-                level["historical_touches"], alert_id,
-            )
-
-            bot_token  = config.get("TELEGRAM_BOT_TOKEN", "")
-            chat_id    = config.get("TELEGRAM_CHAT_ID", "")
-            ntfy_topic = config.get("NTFY_TOPIC", "")
-
-            if bot_token and chat_id:
-                sent = v41p1_telegram.send_v41p1_watchlist_alert(
-                    bot_token, chat_id, asset, level
-                )
-                logger.info("V41P1 Watchlist [%s]: Telegram inviato=%s", asset, sent)
-            if ntfy_topic:
-                from notifications import v41_telegram
-                proximity_for_ntfy = {
-                    "label": label,
-                    "price": level["price"],
-                    "distance_pct": level["distance_pct"],
-                    "potential_direction": "SELL" if level["kind"] == "high" else "BUY",
-                }
-                title, body = v41_telegram.format_v41_watchlist_alert_plain(
-                    asset, proximity_for_ntfy
-                )
-                ntfy_sent = ntfy_bot.send_message(ntfy_topic, title, body)
-                logger.info("V41P1 Watchlist [%s]: ntfy inviato=%s", asset, ntfy_sent)
-
-        v41p1_db.set_watchlist_state(conn, asset, label, True, timestamp_str)
-
-    all_labels = {lv["label"] for lv in mfm["levels"]}
-    for label in all_labels:
-        if label not in proximities_by_label:
-            if v41p1_db.get_watchlist_state(conn, asset, label):
-                v41p1_db.set_watchlist_state(conn, asset, label, False, timestamp_str)
-
-
-# ============================================================
 # MFM enrichment
 # ============================================================
 
@@ -198,10 +140,6 @@ def _enrich_signal_with_mfm(signal: dict, mfm: dict) -> dict:
         signal["expected_move_barrier"] = None
 
     # ── MFM Sweep Confirmation (Sprint 13b) ──────────────────
-    # Confronta lo sweep rilevato dal scanner (sweep_direction)
-    # con i livelli del Money Flow Map. Se lo sweep ha toccato
-    # un livello MFM entro la soglia di prossimità, conferma.
-    # Prima: mfm_sweep_confirmed era sempre 0 su tutti i segnali.
     sweep_dir = signal.get("sweep_direction")
     if sweep_dir and mfm.get("levels"):
         sweep_kind = "high" if sweep_dir == "BEARISH" else "low"
@@ -453,11 +391,13 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
     except Exception as e:
         logger.error("V41P1 Monitor [%s]: errore: %s", asset, e)
 
-    # ── Watchlist Alert ───────────────────────────────────────
-    try:
-        _check_watchlist(conn, asset, mfm, now, config)
-    except Exception as e:
-        logger.error("V41P1 Watchlist [%s]: errore: %s", asset, e)
+    # ── Watchlist DISABILITATA (Sprint 13c) ───────────────────
+    # Le notifiche watchlist generavano flood dopo il cleanup.
+    # I dati vengono comunque salvati nel MFM snapshot.
+    # try:
+    #     _check_watchlist(conn, asset, mfm, now, config)
+    # except Exception as e:
+    #     logger.error("V41P1 Watchlist [%s]: errore: %s", asset, e)
 
     # ── Trigger ───────────────────────────────────────────────
     market_data = {
@@ -510,11 +450,15 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
         )
         return
 
-    risk_pct = abs(signal["entry"] - signal["stop_loss"]) / signal["entry"]
-    if risk_pct < 0.002:
+    # Risk floor basato su ATR (Sprint 13c)
+    # Il floor percentuale (0.2%) bloccava tutti i PAXG perché
+    # ATR M15 PAXG = 3-4 punti → 1.5*ATR = 5 punti = 0.12%.
+    # Ora: risk deve essere >= 0.8 * ATR M15.
+    risk = abs(signal["entry"] - signal["stop_loss"])
+    if atr_m15 > 0 and risk < 0.8 * atr_m15:
         logger.info(
             "V41P1 Scanner [%s]: REJECT RISK_TOO_TIGHT "
-            "(risk_pct=%.4f)", asset, risk_pct,
+            "(risk=%.2f < 0.8*ATR=%.2f)", asset, risk, 0.8 * atr_m15,
         )
         return
 
