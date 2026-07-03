@@ -1,14 +1,9 @@
 """
 cleanup_snapshots.py
-Pulizia automatica del database.
+Pulizia automatica del database — rimuove dati time-series vecchi
+mantenendo tutti i dati analitici e lo stato operativo.
 
-Prima esecuzione: reset completo delle tabelle time-series
-(snapshot, cache, zone) mantenendo SOLO i segnali con esito.
-Esecuzioni successive: manutenzione ordinaria (7-14 giorni).
-
-INTOCCABILI: v41p1_signals, v41_signals, edge_lab_signals,
-trb_signals, lh_signals, v3_signals, v3d_signals, v4_signals,
-signals, order_blocks (mappa attiva).
+NON tocca MAI: segnali, order_blocks, watchlist_state.
 """
 
 import sqlite3
@@ -27,10 +22,9 @@ print(f"DB size prima: {size_before:.1f} MB")
 total_deleted = 0
 
 # ══════════════════════════════════════════════════════════════
-# Tabelle da SVUOTARE completamente (time-series rigenerabili)
+# Tabelle time-series da pulire (snapshot rigenerati ogni scan)
 # ══════════════════════════════════════════════════════════════
 tables_to_truncate = [
-    # Snapshot engine (rigenerati ogni scan)
     "structure_snapshots",
     "volatility_snapshots",
     "order_block_snapshots",
@@ -41,18 +35,14 @@ tables_to_truncate = [
     "candlestick_snapshots",
     "macro_snapshots",
     "market_state_snapshots",
-    # MFM e market context (alto volume, dati nel signal JSON)
     "v41p1_mfm_snapshots",
     "market_context_snapshots",
-    # Candles cache (ri-scaricabili dall'API)
     "candles_cache",
     "v3_candles_cache",
-    # Zone vecchie
     "fvg_zones",
     "macro_cache",
-    # Watchlist (storico alert, non analitico)
-    "v41p1_watchlist_alerts",
-    "v41p1_watchlist_state",
+    # NON includere: v41p1_watchlist_state (serve per evitare flood notifiche)
+    # NON includere: v41p1_watchlist_alerts (storico alert)
 ]
 
 for table in tables_to_truncate:
@@ -62,13 +52,10 @@ for table in tables_to_truncate:
             conn.execute(f"DELETE FROM {table}")
             total_deleted += count
             print(f"  {table}: {count} righe rimosse")
-    except Exception as e:
-        pass  # tabella non esiste, ok
+    except Exception:
+        pass
 
-# ══════════════════════════════════════════════════════════════
-# Order blocks: tieni solo FRESH, TESTED, MITIGATED, BREAKER
-# (rimuovi INVALIDATED e EXPIRED vecchi)
-# ══════════════════════════════════════════════════════════════
+# ── Order blocks: tieni solo attivi ───────────────────────────
 try:
     deleted = conn.execute(
         "DELETE FROM order_blocks WHERE status IN ('INVALIDATED', 'EXPIRED')"
@@ -76,25 +63,24 @@ try:
     total_deleted += deleted
     remaining = conn.execute("SELECT COUNT(*) FROM order_blocks").fetchone()[0]
     if deleted > 0:
-        print(f"  order_blocks: {deleted} invalidated/expired rimossi ({remaining} attivi mantenuti)")
+        print(f"  order_blocks: {deleted} invalidated/expired rimossi ({remaining} attivi)")
 except Exception:
     pass
 
-# ══════════════════════════════════════════════════════════════
-# Reset alert state (per evitare falsi duplicati post-reset)
-# ══════════════════════════════════════════════════════════════
-for table in ["v41p1_last_alert_state", "v41_last_alert_state"]:
-    try:
-        conn.execute(f"DELETE FROM {table}")
-        print(f"  {table}: reset")
-    except Exception:
-        pass
+# ── Watchlist alerts vecchi (>30 giorni, NON lo state) ────────
+try:
+    deleted = conn.execute(
+        "DELETE FROM v41p1_watchlist_alerts WHERE timestamp_alert < datetime('now', '-30 days')"
+    ).rowcount
+    total_deleted += deleted
+    if deleted > 0:
+        print(f"  v41p1_watchlist_alerts: {deleted} alert vecchi rimossi")
+except Exception:
+    pass
 
 conn.commit()
 
-# ══════════════════════════════════════════════════════════════
-# VACUUM — recupera spazio su disco
-# ══════════════════════════════════════════════════════════════
+# ── VACUUM ────────────────────────────────────────────────────
 print(f"\nTotale righe rimosse: {total_deleted}")
 print("VACUUM in corso...")
 conn.execute("VACUUM")
@@ -104,13 +90,12 @@ size_after = os.path.getsize(DB_PATH) / (1024 * 1024)
 saved = size_before - size_after
 print(f"DB size dopo: {size_after:.1f} MB (risparmiati {saved:.1f} MB)")
 
-# ══════════════════════════════════════════════════════════════
-# Sommario dati PRESERVATI
-# ══════════════════════════════════════════════════════════════
+# ── Sommario dati preservati ──────────────────────────────────
 conn2 = sqlite3.connect(DB_PATH)
 print("\nDati preservati:")
 for table in ["v41p1_signals", "v41_signals", "edge_lab_signals",
-              "trb_signals", "lh_signals", "order_blocks"]:
+              "trb_signals", "lh_signals", "order_blocks",
+              "v41p1_watchlist_state"]:
     try:
         count = conn2.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         if count > 0:
