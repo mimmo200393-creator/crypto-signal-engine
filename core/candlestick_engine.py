@@ -2,19 +2,21 @@
 core/candlestick_engine.py
 Candlestick Confirmation Engine — Sprint 9
 
-Layer 2: dipende da Reaction Map (Layer 2).
-Cerca pattern candlestick SOLO nelle zone della Reaction Map.
-Un pattern fuori da una zona ad alta confluenza non viene registrato.
+Sprint 16: Fix detection — cerca pattern SEMPRE, poi valuta
+se il pattern è in una zona della Reaction Map.
+Prima: cercava pattern SOLO in zone ad alta confluenza, ma il
+campo distance_from_price_pct non esisteva nelle zone → sempre False.
+
+Ora produce:
+    has_confirmation: True se un pattern è stato rilevato (qualsiasi)
+    in_reaction_zone: True se il pattern è in una zona RM vicina
+    confirmation_quality: HIGH (in zona) / LOW (fuori zona)
 
 Pattern supportati (dal doc 008):
     - Hammer / Inverted Hammer
     - Engulfing (Bullish / Bearish)
     - Doji
-    - Morning Star / Evening Star (3 candele)
     - Pin Bar
-
-Modalita': LIVE MODE.
-Dipendenze: pandas, sqlite3, logging. Consuma ReactionMapSnapshot.
 """
 
 from __future__ import annotations
@@ -29,13 +31,14 @@ import pandas as pd
 
 logger = logging.getLogger("candlestick_engine")
 
-SNAPSHOT_VERSION = "1.0.0"
+SNAPSHOT_VERSION = "2.0.0"
 
 DEFAULT_CONFIG = {
-    "min_confluence_for_search": 30,  # cerca pattern solo in zone con score >= 30
-    "doji_body_max_pct": 0.10,        # corpo < 10% del range = doji
-    "pin_bar_wick_min_pct": 0.60,     # wick > 60% del range = pin bar
-    "engulfing_min_body_pct": 0.50,   # corpo engulfing > 50% del range
+    "zone_proximity_pct": 0.01,       # zona RM entro 1% del prezzo = "vicina"
+    "min_confluence_for_high": 25,    # score >= 25 per confirmation_quality HIGH
+    "doji_body_max_pct": 0.10,
+    "pin_bar_wick_min_pct": 0.60,
+    "engulfing_min_body_pct": 0.50,
 }
 
 CS_SCHEMA_SQL = """
@@ -64,7 +67,6 @@ def init_candlestick_schema(conn: sqlite3.Connection):
 # ============================================================
 
 def _detect_hammer(candle: dict) -> dict | None:
-    """Hammer: corpo piccolo in alto, wick lungo sotto."""
     o, c, h, l = candle["open"], candle["close"], candle["high"], candle["low"]
     range_ = h - l
     if range_ <= 0:
@@ -75,7 +77,6 @@ def _detect_hammer(candle: dict) -> dict | None:
     lower_wick = min(o, c) - l
     upper_wick = h - max(o, c)
 
-    # Hammer: lower wick > 60% range, body < 30%, corpo in alto
     if lower_wick / range_ > 0.60 and body_pct < 0.30 and upper_wick / range_ < 0.15:
         return {
             "pattern": "HAMMER",
@@ -85,7 +86,6 @@ def _detect_hammer(candle: dict) -> dict | None:
             "upper_wick_pct": round(upper_wick / range_, 3),
         }
 
-    # Inverted Hammer: upper wick > 60%, corpo in basso
     if upper_wick / range_ > 0.60 and body_pct < 0.30 and lower_wick / range_ < 0.15:
         return {
             "pattern": "INVERTED_HAMMER",
@@ -99,7 +99,6 @@ def _detect_hammer(candle: dict) -> dict | None:
 
 
 def _detect_engulfing(prev: dict, curr: dict, cfg: dict) -> dict | None:
-    """Engulfing: la candela corrente ingloba completamente la precedente."""
     p_o, p_c = prev["open"], prev["close"]
     c_o, c_c = curr["open"], curr["close"]
     c_h, c_l = curr["high"], curr["low"]
@@ -112,7 +111,6 @@ def _detect_engulfing(prev: dict, curr: dict, cfg: dict) -> dict | None:
     c_body_pct = c_body / c_range
     min_body = cfg.get("engulfing_min_body_pct", 0.50)
 
-    # Bullish Engulfing: prev bearish, curr bullish, curr ingloba prev
     if p_c < p_o and c_c > c_o and c_body_pct >= min_body:
         if c_o <= p_c and c_c >= p_o:
             return {
@@ -123,7 +121,6 @@ def _detect_engulfing(prev: dict, curr: dict, cfg: dict) -> dict | None:
                 "upper_wick_pct": round((c_h - max(c_o, c_c)) / c_range, 3),
             }
 
-    # Bearish Engulfing
     if p_c > p_o and c_c < c_o and c_body_pct >= min_body:
         if c_o >= p_c and c_c <= p_o:
             return {
@@ -138,7 +135,6 @@ def _detect_engulfing(prev: dict, curr: dict, cfg: dict) -> dict | None:
 
 
 def _detect_doji(candle: dict, cfg: dict) -> dict | None:
-    """Doji: corpo piccolissimo, indecisione."""
     o, c, h, l = candle["open"], candle["close"], candle["high"], candle["low"]
     range_ = h - l
     if range_ <= 0:
@@ -160,7 +156,6 @@ def _detect_doji(candle: dict, cfg: dict) -> dict | None:
 
 
 def _detect_pin_bar(candle: dict, cfg: dict) -> dict | None:
-    """Pin Bar: wick molto lungo in una direzione."""
     o, c, h, l = candle["open"], candle["close"], candle["high"], candle["low"]
     range_ = h - l
     if range_ <= 0:
@@ -192,6 +187,47 @@ def _detect_pin_bar(candle: dict, cfg: dict) -> dict | None:
 
 
 # ============================================================
+# Zone proximity check
+# ============================================================
+
+def _find_nearest_zone(current_price: float, zones: list,
+                        proximity_pct: float, min_confluence: float) -> dict | None:
+    """
+    Cerca la zona RM più vicina al prezzo corrente.
+    Calcola la distanza direttamente da zone_high/zone_low
+    invece di affidarsi a un campo pre-calcolato.
+    """
+    best = None
+    best_dist = float('inf')
+
+    for z in zones:
+        zh = z.get("zone_high", z.get("high", 0))
+        zl = z.get("zone_low", z.get("low", 0))
+        score = z.get("confluence_score", 0)
+
+        if zh <= 0 or zl <= 0 or current_price <= 0:
+            continue
+
+        # Distanza: 0 se dentro la zona, altrimenti distanza dal bordo più vicino
+        if zl <= current_price <= zh:
+            dist = 0
+        else:
+            dist = min(abs(current_price - zh), abs(current_price - zl)) / current_price
+
+        if dist <= proximity_pct and score >= min_confluence:
+            if dist < best_dist:
+                best_dist = dist
+                best = {
+                    "zone_high": zh,
+                    "zone_low": zl,
+                    "confluence_score": score,
+                    "distance_pct": round(dist, 6),
+                }
+
+    return best
+
+
+# ============================================================
 # Entry Point
 # ============================================================
 
@@ -210,22 +246,12 @@ def produce_candlestick_snapshot(
 
     cfg = {**DEFAULT_CONFIG, **config}
     now_iso = now.isoformat()
-    min_conf = cfg.get("min_confluence_for_search", 30)
 
     patterns = []
     current_price = float(df_m15.iloc[-1]["close"]) if len(df_m15) > 0 else 0
 
-    # Cerca pattern SOLO se il prezzo e' dentro o vicino a una zona ad alta confluenza
-    zones = reaction_map_snapshot.get("zones", []) if reaction_map_snapshot else []
-    relevant_zones = [
-        z for z in zones
-        if z.get("confluence_score", 0) >= min_conf
-        and z.get("distance_from_price_pct", 1) < 0.01  # entro 1%
-    ]
-
-    if relevant_zones and len(df_m15) >= 3:
-        best_zone = max(relevant_zones, key=lambda z: z["confluence_score"])
-
+    # ── Step 1: Cerca pattern SEMPRE (indipendente dalle zone) ─
+    if len(df_m15) >= 3:
         last = df_m15.iloc[-1]
         prev = df_m15.iloc[-2]
 
@@ -242,7 +268,6 @@ def produce_candlestick_snapshot(
             "low": float(prev["low"]),
         }
 
-        # Test tutti i pattern
         for detector in [
             lambda: _detect_hammer(candle),
             lambda: _detect_engulfing(prev_candle, candle, cfg),
@@ -251,13 +276,42 @@ def produce_candlestick_snapshot(
         ]:
             result = detector()
             if result:
-                result["in_reaction_zone"] = True
-                result["zone_confluence_score"] = best_zone["confluence_score"]
                 patterns.append(result)
 
-    # ── Risultato ────────────────────────────────────────────
+    # ── Step 2: Valuta se il pattern è in una zona RM ────────
+    zones = reaction_map_snapshot.get("zones", []) if reaction_map_snapshot else []
+    proximity_pct = cfg.get("zone_proximity_pct", 0.01)
+    min_confluence = cfg.get("min_confluence_for_high", 25)
+
+    nearest_zone = _find_nearest_zone(current_price, zones, proximity_pct, min_confluence)
+
+    for p in patterns:
+        if nearest_zone:
+            p["in_reaction_zone"] = True
+            p["zone_confluence_score"] = nearest_zone["confluence_score"]
+            p["zone_distance_pct"] = nearest_zone["distance_pct"]
+        else:
+            p["in_reaction_zone"] = False
+            p["zone_confluence_score"] = 0
+            p["zone_distance_pct"] = None
+
+    # ── Step 3: Risultato ────────────────────────────────────
     has_confirmation = len(patterns) > 0
-    strongest = max(patterns, key=lambda p: p.get("zone_confluence_score", 0)) if patterns else None
+
+    # Priorità: pattern in zona > pattern fuori zona
+    # Tra pattern nella stessa categoria: prendi quello con zone_confluence più alto
+    if patterns:
+        in_zone = [p for p in patterns if p.get("in_reaction_zone")]
+        strongest = max(in_zone, key=lambda p: p["zone_confluence_score"]) if in_zone else patterns[0]
+    else:
+        strongest = None
+
+    confirmation_quality = "NONE"
+    if strongest:
+        if strongest.get("in_reaction_zone"):
+            confirmation_quality = "HIGH"
+        else:
+            confirmation_quality = "LOW"
 
     snapshot = {
         "asset": asset,
@@ -265,8 +319,12 @@ def produce_candlestick_snapshot(
         "snapshot_version": SNAPSHOT_VERSION,
         "patterns_detected": patterns,
         "has_confirmation": has_confirmation,
+        "confirmation_quality": confirmation_quality,
         "strongest_pattern": strongest.get("pattern") if strongest else None,
         "strongest_direction": strongest.get("direction") if strongest else None,
+        "in_reaction_zone": strongest.get("in_reaction_zone", False) if strongest else False,
+        "zone_confluence_score": strongest.get("zone_confluence_score", 0) if strongest else 0,
+        "total_patterns": len(patterns),
     }
 
     # ── Salva ────────────────────────────────────────────────
@@ -292,13 +350,15 @@ def produce_candlestick_snapshot(
 
     if has_confirmation:
         logger.info(
-            "Candlestick [%s]: CONFIRMED %s (%s) in zone score=%.0f",
+            "Candlestick [%s]: %s %s (%s) zone=%s score=%.0f",
             asset,
             strongest["pattern"],
             strongest["direction"],
-            strongest["zone_confluence_score"],
+            confirmation_quality,
+            "YES" if strongest.get("in_reaction_zone") else "NO",
+            strongest.get("zone_confluence_score", 0),
         )
     else:
-        logger.info("Candlestick [%s]: no pattern in relevant zones", asset)
+        logger.info("Candlestick [%s]: no pattern detected", asset)
 
     return snapshot
