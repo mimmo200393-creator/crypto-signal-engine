@@ -55,9 +55,9 @@ DEFAULT_CONFIG = {
     "neutral_reset_scans": 25,        # era 10 → più tollerante, non resetta il trend subito
     "min_impulse_atr": 0.3,           # era 0.5 → rileva impulsi più piccoli su M15
     # Displacement (Sprint 3 — recalibrato Sprint 15)
-    "disp_body_pct": 0.50,
+    "disp_body_pct": 0.35,
     "disp_min_candles": 1,            # era 2 → singola candela impulsiva conta come displacement
-    "disp_atr_mult": 1.0,            # confermato (era già 1.0 nel DEFAULT, 1.5 nel fallback)
+    "disp_atr_mult": 0.6,            # confermato (era già 1.0 nel DEFAULT, 1.5 nel fallback)
     "disp_lookback": 5,
 }
 
