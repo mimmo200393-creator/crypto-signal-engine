@@ -10,17 +10,22 @@ AGGIORNATO: Structure Engine V2.0 Sprint 2 (29 Giugno 2026)
     - Rimosso doppio calcolo di: evaluate_choch_v2(), classify_m15_structure(),
       compute_volume_ratio(), compute_premium_discount(), check_displacement(),
       is_pullback_valid().
-    - I campi del signal dict sono identici a Sprint 1: nessun consumatore
-      (Telegram, DB) richiede modifiche.
-    - Import da core.structure_engine mantenuti solo per BOS detection
-      (Sprint 3) e funzioni non ancora migrate.
 
-Sprint 3 sostituirà: BOS detection con snapshot["events"], pullback con
-    snapshot["pullback_status"], confidence con snapshot["structure_confidence"].
-Sprint 4 rimuoverà: gli import residui da core.structure_engine.
+Sprint 16 (05 Luglio 2026): Fix Stop Loss strutturale.
+    PROBLEMA IDENTIFICATO (audit su signals__12_.db, 11 segnali post-Sprint13):
+    - 75% degli SL avevano risk<0.23%, 3 segnali con risk=0 esatto (entry==SL)
+    - Causa A: min(structural_swing, sl_atr) per SELL / max(...) per BUY
+      sceglieva il livello PIÙ VICINO invece del floor di sicurezza —
+      comparazione invertita rispetto all'intento protettivo.
+    - Causa B: _find_m15_swing() con lookback=3 su M15 trova micro-fractal
+      di rumore (7 candele = <2h price action), non swing strutturali.
+    FIX: SL = il PIÙ LONTANO tra (swing strutturale + buffer 0.5×ATR) e
+    (floor 1.5×ATR), con cap a 3.0×ATR e sanity check anti risk-zero.
+    Principio: lo SL va OLTRE il punto di invalidazione, con margine per
+    il rumore — mai un punto arbitrario più vicino per "ottimizzare" il RR.
 
 Filosofia invariata: Trigger → genera il segnale. Contesto → qualità.
-News → hard gate.
+News → hard gate. SL → invalidazione strutturale, non formula isolata.
 """
 
 from datetime import datetime, timezone
@@ -48,11 +53,6 @@ from strategies.institutional_scanner_v4 import (
     combine_h4_trend,
 )
 
-# ── Structure Engine — solo funzioni ancora attive in Sprint 2 ──
-# evaluate_bos_v2: rimane fino a Sprint 3
-# Le altre (evaluate_choch_v2, classify_m15_structure, compute_volume_ratio,
-# compute_premium_discount, check_displacement, is_pullback_valid) sono
-# ora consumate tramite snapshot — import rimossi.
 from core.structure_engine import evaluate_bos_v2
 
 logger = logging.getLogger("institutional_scanner_v41")
@@ -106,6 +106,19 @@ MAX_STOP_DISTANCE_PAXG_POINTS = 30.0
 MAX_STOP_DISTANCE_BTC_PCT = 0.01
 
 # ============================================================
+# Stop Loss strutturale (Sprint 16)
+# ============================================================
+# Floor: distanza minima garantita, indipendente dallo swing trovato.
+# Serve a compensare micro-fractal di rumore da _find_m15_swing()
+# (lookback=3 su M15 = pivot generabili da appena 7 candele).
+SL_FLOOR_ATR_MULT = 1.5
+# Cap: distanza massima, evita risk eccessivo su swing molto lontani.
+SL_CAP_ATR_MULT = 3.0
+# Buffer oltre lo swing strutturale: lo SL non sta AL livello,
+# sta OLTRE, per assorbire il normale rumore di mercato.
+SL_STRUCT_BUFFER_ATR_MULT = 0.5
+
+# ============================================================
 # News Filter (hard gate)
 # ============================================================
 NEWS_BLACKOUT_WINDOW_MINUTES = 30
@@ -150,22 +163,14 @@ def evaluate_ema_trend(df: pd.DataFrame) -> str:
 # ============================================================
 
 def _choch_from_snapshot(snapshot: dict) -> Optional[str]:
-    """
-    Estrae la direzione del CHOCH dagli eventi dello snapshot.
-    Ritorna la direzione dell'evento CHOCH più recente, o None.
-    """
     events = snapshot.get("events", [])
     choch_events = [e for e in events if e.get("type") == "CHOCH"]
     if not choch_events:
         return None
-    return choch_events[-1].get("direction")  # "BULLISH" o "BEARISH"
+    return choch_events[-1].get("direction")
 
 
 def _choch_detail_from_snapshot(snapshot: dict) -> dict:
-    """
-    Ritorna i campi di dettaglio CHOCH dallo snapshot per il signal dict.
-    Equivalente a evaluate_choch_v2() ma senza ricalcolo.
-    """
     events = snapshot.get("events", [])
     choch_events = [e for e in events if e.get("type") == "CHOCH"]
     if not choch_events:
@@ -400,6 +405,72 @@ def is_stop_too_wide(asset: str, entry: float, stop_loss: float) -> bool:
 
 
 # ============================================================
+# Stop Loss strutturale (Sprint 16)
+# ============================================================
+
+def calculate_structural_stop_loss(direction: str, entry: float, atr_m15: float,
+                                    structural_swing: Optional[float]) -> dict:
+    """
+    Calcola lo Stop Loss secondo il principio: OLTRE il punto di
+    invalidazione strutturale, con buffer anti-rumore, entro un
+    range di rischio sostenibile (floor-cap in ATR).
+
+    Non sceglie mai il livello più vicino tra swing e ATR (bug
+    precedente) — sceglie sempre il più PROTETTIVO (più lontano),
+    poi lo vincola dentro [floor, cap] per evitare risk insufficiente
+    o eccessivo.
+
+    Ritorna un dict con stop_loss e diagnostica per audit.
+    """
+    sl_floor_dist = SL_FLOOR_ATR_MULT * atr_m15
+    sl_cap_dist   = SL_CAP_ATR_MULT * atr_m15
+    buffer_dist   = SL_STRUCT_BUFFER_ATR_MULT * atr_m15
+
+    if direction == "BUY":
+        sl_floor = entry - sl_floor_dist
+        sl_cap   = entry - sl_cap_dist
+
+        if structural_swing is not None:
+            sl_struct = structural_swing - buffer_dist
+            # Il più PROTETTIVO = il più lontano dall'entry = il più BASSO
+            stop_loss = min(sl_struct, sl_floor)
+        else:
+            stop_loss = sl_floor
+            sl_struct = None
+
+        # Cap: non oltre 3×ATR anche se lo swing è molto lontano
+        stop_loss = max(stop_loss, sl_cap)
+
+        # Sanity check: SL deve stare sotto l'entry
+        if stop_loss >= entry:
+            stop_loss = sl_floor
+
+    else:  # SELL
+        sl_floor = entry + sl_floor_dist
+        sl_cap   = entry + sl_cap_dist
+
+        if structural_swing is not None:
+            sl_struct = structural_swing + buffer_dist
+            stop_loss = max(sl_struct, sl_floor)
+        else:
+            stop_loss = sl_floor
+            sl_struct = None
+
+        stop_loss = min(stop_loss, sl_cap)
+
+        if stop_loss <= entry:
+            stop_loss = sl_floor
+
+    return {
+        "stop_loss": stop_loss,
+        "sl_floor": sl_floor,
+        "sl_cap": sl_cap,
+        "sl_struct": sl_struct,
+        "used_floor": abs(stop_loss - sl_floor) < 1e-9,
+    }
+
+
+# ============================================================
 # Pipeline principale
 # ============================================================
 
@@ -411,7 +482,7 @@ def generate_v41_signal(market_data: dict) -> dict:
     df_d1         = market_data.get("df_d1")
     now           = market_data.get("timestamp", datetime.now(timezone.utc))
     macro_provider = market_data.get("macro_provider")
-    snapshot      = market_data.get("structure_snapshot")  # ← Sprint 2
+    snapshot      = market_data.get("structure_snapshot")
 
     diagnostics = {
         "asset": asset,
@@ -428,8 +499,6 @@ def generate_v41_signal(market_data: dict) -> dict:
         return {"signal": None, "diagnostics": diagnostics}
 
     # ── Hard gate: snapshot assente (Option A) ────────────────
-    # Structure Engine V2 è la singola fonte di verità. Senza snapshot
-    # non possiamo validare la struttura: il segnale non viene emesso.
     if snapshot is None:
         diagnostics["rejections"].append("NO_STRUCTURE_SNAPSHOT")
         return {"signal": None, "diagnostics": diagnostics}
@@ -474,11 +543,6 @@ def generate_v41_signal(market_data: dict) -> dict:
     pullback_status = snapshot.get("pullback_status", {})
     pd_zone = snapshot.get("premium_discount", {"zone": "EQUILIBRIUM", "position": 0.5})
 
-    # Pullback invalidated: dipende dalla direzione strutturale
-    # (calcoliamo dopo aver determinato direction, più in basso)
-
-    # Displacement: dall'evento più recente nello snapshot (se Sprint 3
-    # non è ancora attivo, leggiamo dal campo displacement placeholder)
     disp_raw = snapshot.get("displacement", {})
     displacement = {
         "confirmed":       disp_raw.get("confirmed", False),
@@ -530,7 +594,7 @@ def generate_v41_signal(market_data: dict) -> dict:
     current_price = float(df_m15.iloc[-1]["close"])
     liquidity_map = build_liquidity_map(df_h4, df_d1 if df_d1 is not None else pd.DataFrame())
 
-    liquidity_source = find_liquidity_source(liquidity_map, current_price, direction)  # fix bug Sprint 1
+    liquidity_source = find_liquidity_source(liquidity_map, current_price, direction)
     liquidity_target = find_liquidity_target(liquidity_map, current_price, direction)
 
     diagnostics["liquidity_source"] = liquidity_source["label"] if liquidity_source else None
@@ -591,26 +655,32 @@ def generate_v41_signal(market_data: dict) -> dict:
     diagnostics["quality_score"] = score
     diagnostics["quality_label"] = quality_label
 
-    # ── Stop Loss ─────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════
+    # ── Stop Loss strutturale (Sprint 16) ────────────────────
+    # ══════════════════════════════════════════════════════════
     entry = current_price
-
-    swing_type      = "low" if direction == "BUY" else "high"
-    structural_swing = _find_m15_swing(df_m15.iloc[:-1], swing_type, M15_BOS_LOOKBACK)
 
     if atr_m15 <= 0:
         diagnostics["rejections"].append("ATR_ZERO")
         return {"signal": None, "diagnostics": diagnostics}
 
-    if direction == "BUY":
-        sl_atr    = entry - 1.5 * atr_m15
-        stop_loss = max(structural_swing, sl_atr) if structural_swing is not None else sl_atr
-    else:
-        sl_atr    = entry + 1.5 * atr_m15
-        stop_loss = min(structural_swing, sl_atr) if structural_swing is not None else sl_atr
+    swing_type       = "low" if direction == "BUY" else "high"
+    structural_swing = _find_m15_swing(df_m15.iloc[:-1], swing_type, M15_BOS_LOOKBACK)
+
+    sl_result = calculate_structural_stop_loss(direction, entry, atr_m15, structural_swing)
+    stop_loss = sl_result["stop_loss"]
+
+    diagnostics["sl_used_floor"] = sl_result["used_floor"]
+    diagnostics["sl_structural_swing"] = structural_swing
 
     risk = abs(entry - stop_loss)
-    if risk <= 0:
-        diagnostics["rejections"].append("RISK_ZERO")
+
+    # Guardrail esplicito: mai emettere un segnale con risk trascurabile.
+    # Un risk < 1.0×ATR indica che sia lo swing sia il fallback hanno
+    # fallito (caso limite: atr_m15 anomalo o dati corrotti).
+    if risk <= 0 or risk < 0.9 * atr_m15:
+        diagnostics["rejections"].append("RISK_INSUFFICIENT")
+        diagnostics["risk_computed"] = risk
         return {"signal": None, "diagnostics": diagnostics}
 
     if is_stop_too_wide(asset, entry, stop_loss):
@@ -680,6 +750,12 @@ def generate_v41_signal(market_data: dict) -> dict:
         "premium_discount_position": pd_zone.get("position"),
         "displacement_confirmed":    displacement["confirmed"],
         "displacement_magnitude_atr": displacement["magnitude_atr"],
+
+        # ── SL diagnostics (Sprint 16) — per audit statistico ─
+        "sl_used_floor":     sl_result["used_floor"],
+        "sl_structural_swing": structural_swing,
+        "sl_floor_price":    sl_result["sl_floor"],
+        "sl_cap_price":      sl_result["sl_cap"],
     }
 
     # ── Log ───────────────────────────────────────────────────
@@ -725,6 +801,13 @@ def generate_v41_signal(market_data: dict) -> dict:
         pd_zone.get("zone"), pd_zone.get("position", 0),
         displacement["confirmed"], displacement["magnitude_atr"],
         snapshot.get("structure_confidence", 0),
+    )
+    logger.info(
+        "%s | Stop Loss strutturale: entry=%.4f sl=%.4f risk=%.4f (%.3f%%) "
+        "swing=%s used_floor=%s floor=%.4f cap=%.4f",
+        asset, entry, stop_loss, risk, risk / entry * 100 if entry else 0,
+        f"{structural_swing:.4f}" if structural_swing else "N/A",
+        sl_result["used_floor"], sl_result["sl_floor"], sl_result["sl_cap"],
     )
 
     return {"signal": signal, "diagnostics": diagnostics}
