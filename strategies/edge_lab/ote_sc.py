@@ -12,6 +12,25 @@ Flusso a 2 fasi:
     Fase 2 — Fill Check: monitora se il prezzo raggiunge il livello → FILLED
 
 Consuma market_context + structure_snapshot (dal MIE Layer 0).
+
+Sprint 17 (double-check Fase 1/Fase 2): il runner in produzione chiama
+solo generate_ote_sc_signal() (wrapper di compatibilità), che finora
+convertiva un setup PENDING in segnale OPEN nello stesso istante del
+calcolo — senza mai verificare che il prezzo avesse davvero raggiunto
+pending_entry. Causa diretta del pattern osservato nel DB: entry fuori
+dalla zona OTE dichiarata su una parte consistente dei trade OTE-SC.
+
+Fix minimo (non invasivo): il wrapper ora verifica, con lo stesso
+criterio di fill usato da check_pending_setup() nel vero flusso a due
+fasi, che l'ultima candela M15 abbia effettivamente raggiunto il
+livello di entry finale (post eventuale aggiustamento su Order Block)
+prima di emettere il segnale. Se non l'ha raggiunto, il setup viene
+scartato con motivo esplicito — non tenuto in attesa (lo schema DB
+attuale non supporta uno stato PENDING), ma nemmeno più spacciato per
+un trade già eseguito quando non lo è.
+detect_ote_setup() e check_pending_setup() restano invariate: sono già
+corrette per un futuro flusso a due fasi completo (richiede anche
+migrazione schema DB edge_lab_signals, non fatta in questo fix).
 """
 
 from __future__ import annotations
@@ -519,13 +538,26 @@ def generate_ote_sc_signal(market_ctx: dict, df_m15: pd.DataFrame,
                             direction: str) -> dict:
     """
     Wrapper di compatibilita' con il runner esistente.
-    Chiama detect_ote_setup e, se trova un setup, lo ritorna
-    come segnale (per il flusso attuale senza pending).
+    Chiama detect_ote_setup e, se trova un setup, verifica che il
+    prezzo abbia REALMENTE raggiunto il livello di entry calcolato
+    (stesso criterio di fill di check_pending_setup) prima di
+    convertirlo in segnale.
 
-    Il runner edge_lab puo' usare direttamente detect_ote_setup
-    + check_pending_setup per il flusso a 2 fasi.
+    Sprint 17: prima di questo fix, il setup PENDING veniva convertito
+    in segnale OPEN nello stesso istante del calcolo, indipendentemente
+    da dove fosse il prezzo — causa diretta di entry registrate fuori
+    dalla zona OTE dichiarata. Ora il wrapper scarta il setup se
+    l'ultima candela M15 non ha ancora toccato pending_entry.
+
+    Non implementa il vero flusso a due fasi (il setup scartato non
+    viene mantenuto in attesa fino a PENDING_EXPIRY_BARS) — soluzione
+    minima e reversibile in attesa di eventuale migrazione schema DB
+    per supportare lo stato PENDING in edge_lab_signals.
+
+    Il runner edge_lab puo' in futuro usare direttamente
+    detect_ote_setup + check_pending_setup per il flusso a 2 fasi
+    completo — quelle funzioni restano invariate e già corrette.
     """
-    # Prova a ottenere structure_snapshot dal market_ctx
     structure_snapshot = market_ctx.get("structure_snapshot")
 
     result = detect_ote_setup(
@@ -533,11 +565,44 @@ def generate_ote_sc_signal(market_ctx: dict, df_m15: pd.DataFrame,
         structure_snapshot=structure_snapshot,
     )
 
-    if result["setup"] is None:
+    setup = result["setup"]
+    if setup is None:
         return {"signal": None, "diagnostics": result["diagnostics"]}
 
-    # Per compatibilita': converti setup in segnale immediato
-    signal = create_signal_from_setup(result["setup"])
+    # ── Fill gate (Sprint 17) ────────────────────────────────
+    # Stesso criterio di check_pending_setup(): il prezzo deve aver
+    # raggiunto pending_entry sull'ultima candela M15 disponibile.
+    if len(df_m15) < 1:
+        result["diagnostics"]["rejection"] = "NO_CANDLE_FOR_FILL_CHECK"
+        return {"signal": None, "diagnostics": result["diagnostics"]}
+
+    last = df_m15.iloc[-1]
+    current_high = float(last["high"])
+    current_low  = float(last["low"])
+    entry_level  = setup["pending_entry"]
+
+    if direction == "SELL":
+        filled = current_high >= entry_level
+    else:
+        filled = current_low <= entry_level
+
+    if not filled:
+        result["diagnostics"]["rejection"] = (
+            f"ENTRY_NOT_TOUCHED_YET (entry={entry_level:.4f} "
+            f"candle_range=[{current_low:.4f}-{current_high:.4f}])"
+        )
+        logger.info(
+            "OTE-SC [%s %s]: REJECT ENTRY_NOT_TOUCHED_YET "
+            "(entry=%.4f candle=[%.4f-%.4f])",
+            setup["asset"], direction, entry_level, current_low, current_high,
+        )
+        return {"signal": None, "diagnostics": result["diagnostics"]}
+
+    # Fill confermato sulla candela corrente: registra filled_at
+    setup["filled_at"] = datetime.now(timezone.utc).isoformat()
+    setup["bars_waiting"] = 0
+
+    signal = create_signal_from_setup(setup)
     return {"signal": signal, "diagnostics": result["diagnostics"]}
 
 
