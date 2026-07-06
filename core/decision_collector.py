@@ -1,0 +1,383 @@
+"""
+core/decision_ledger/decision_collector.py
+Sprint 0 — Decision Collector
+
+Genera il Decision ID, interroga ogni Engine tramite report() ESTERNO
+(legge gli snapshot già prodotti, senza toccare il codice degli Engine),
+assembla il record e lo passa al Ledger Writer.
+
+Le strategie e gli Engine NON conoscono questo modulo.
+È il collettore che li osserva.
+
+Modifiche Design Review integrate:
+  M1 — Decision ID = ULID
+  M3 — raw_features_json (feature grezze per ML futuro)
+  M5 — code_version
+  M6 — regime (classificatore minimale che usa engine esistenti)
+
+Filosofia: raccolta passiva. Non modifica MAI la decisione di trading.
+Ogni operazione è in try/except: un fallimento del collector non
+deve mai impedire un trade.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import time
+import secrets
+from datetime import datetime, timezone
+from typing import Optional
+
+from core.decision_ledger import ledger_writer
+
+logger = logging.getLogger("decision_ledger.collector")
+
+# ============================================================
+# M1 — ULID (Universally Unique Lexicographically Sortable ID)
+# Implementazione minimale senza dipendenze esterne.
+# 48 bit timestamp (ms) + 80 bit random → 26 char Crockford base32.
+# Univoco in concorrenza, ordinabile temporalmente.
+# ============================================================
+_CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def generate_ulid() -> str:
+    ts_ms = int(time.time() * 1000)
+    # 48 bit timestamp
+    ts_part = ""
+    for _ in range(10):
+        ts_part = _CROCKFORD[ts_ms & 0x1F] + ts_part
+        ts_ms >>= 5
+    # 80 bit random
+    rand = secrets.randbits(80)
+    rand_part = ""
+    for _ in range(16):
+        rand_part = _CROCKFORD[rand & 0x1F] + rand_part
+        rand >>= 5
+    return ts_part + rand_part
+
+
+def get_code_version() -> str:
+    """M5 — legge il git short hash, con fallback."""
+    try:
+        head = os.popen("git rev-parse --short HEAD 2>/dev/null").read().strip()
+        if head:
+            return head
+    except Exception:
+        pass
+    return os.environ.get("MIE_CODE_VERSION", "unknown")
+
+
+# ============================================================
+# M6 — Regime classifier minimale (usa engine ESISTENTI)
+# Non è il Market Regime Layer completo: è una classificazione
+# a-priori robusta che cattura il regime all'ingresso, così è
+# analizzabile a posteriori. TRENDING / RANGING / TRANSITIONAL.
+# ============================================================
+
+def classify_regime(structure_snapshot: dict, vol_snapshot: dict) -> str:
+    try:
+        if not structure_snapshot:
+            return "UNKNOWN"
+        th = structure_snapshot.get("trend_health", {})
+        phase = th.get("phase", "NEUTRAL")
+        h4 = structure_snapshot.get("structure_h4", {}).get("classification", "NEUTRAL")
+        vol_regime = (vol_snapshot or {}).get("regime", "NORMAL")
+
+        # Trending: struttura H4 direzionale + trend in salute
+        if h4 in ("BULLISH", "BEARISH") and phase in ("HEALTHY", "ACCELERATING"):
+            return "TRENDING"
+        # Ranging: struttura neutra + volatilità contratta
+        if h4 == "NEUTRAL" or vol_regime == "CONTRACTING":
+            return "RANGING"
+        # Transitional: tutto il resto (esaurimento, cambio in corso)
+        return "TRANSITIONAL"
+    except Exception:
+        return "UNKNOWN"
+
+
+# ============================================================
+# report() ESTERNO — deriva la tripletta dagli snapshot esistenti
+# Nessun file Engine viene toccato. Ogni funzione legge lo snapshot
+# che l'Engine ha già prodotto e ne deriva {state, conf, value}.
+# state: +1 favorevole / 0 neutro / -1 contrario RISPETTO a direction.
+# ============================================================
+
+def _vote_from_classification(cls: str, direction: str) -> int:
+    """Helper: BULLISH/BEARISH/NEUTRAL → voto rispetto a direction."""
+    if cls == "BULLISH":
+        return 1 if direction == "BUY" else -1
+    if cls == "BEARISH":
+        return 1 if direction == "SELL" else -1
+    return 0
+
+
+def report_structure(snap: dict, direction: str) -> dict:
+    if not snap:
+        return {"state": 0, "conf": 0, "value": None, "value2": None}
+    h4 = snap.get("structure_h4", {}).get("classification", "NEUTRAL")
+    conf = snap.get("structure_confidence", 0)
+    pd_pos = snap.get("premium_discount", {}).get("position", 0.5)
+    return {
+        "state": _vote_from_classification(h4, direction),
+        "conf": int(conf),
+        "value": conf,
+        "value2": pd_pos,   # eccezione: premium/discount position
+    }
+
+
+def report_trend_health(snap: dict, direction: str) -> dict:
+    if not snap:
+        return {"state": 0, "conf": 0, "value": None}
+    th = snap.get("trend_health", {})
+    phase = th.get("phase", "NEUTRAL")
+    trend = th.get("current_trend", "NEUTRAL")
+    state = _vote_from_classification(trend, direction)
+    # Confidence proporzionale al numero di impulsi confermati
+    conf = min(100, th.get("impulse_count", 0) * 20)
+    healthy = phase in ("HEALTHY", "ACCELERATING")
+    if not healthy:
+        state = 0  # trend non in salute → neutro
+    return {"state": state, "conf": int(conf), "value": th.get("impulse_count", 0)}
+
+
+def report_volatility(snap: dict, direction: str) -> dict:
+    if not snap:
+        return {"state": 0, "conf": 0, "value": None}
+    regime = snap.get("regime", "NORMAL")
+    atr_ratio = snap.get("atr_ratio_m15", 1.0)
+    # La volatilità non ha direzione: è favorevole se espande, ostile se spike
+    state = 0
+    if regime == "EXPANDING":
+        state = 1
+    elif regime == "SPIKE":
+        state = -1
+    return {"state": state, "conf": 50, "value": atr_ratio}
+
+
+def report_displacement(snap: dict, direction: str) -> dict:
+    if not snap:
+        return {"state": 0, "conf": 0, "value": None}
+    disp = snap.get("displacement", {})
+    confirmed = disp.get("confirmed", False)
+    disp_dir = disp.get("direction")
+    mag = disp.get("magnitude_atr", 0)
+    if not confirmed:
+        return {"state": 0, "conf": 0, "value": mag}
+    state = _vote_from_classification(
+        "BULLISH" if disp_dir == "BULLISH" else "BEARISH" if disp_dir == "BEARISH" else "NEUTRAL",
+        direction)
+    return {"state": state, "conf": min(100, int(mag * 50)), "value": mag}
+
+
+def report_order_block(snap: dict, direction: str) -> dict:
+    if not snap:
+        return {"state": 0, "conf": 0, "value": None}
+    fresh = snap.get("fresh_bullish_count", 0) + snap.get("fresh_bearish_count", 0)
+    nb = snap.get("nearest_fresh_bullish")
+    nbe = snap.get("nearest_fresh_bearish")
+    quality = 0
+    state = 0
+    if direction == "BUY" and nb:
+        state = 1
+        quality = nb.get("quality_score", 0)
+    elif direction == "SELL" and nbe:
+        state = 1
+        quality = nbe.get("quality_score", 0)
+    return {"state": state, "conf": int(quality * 10), "value": fresh}
+
+
+def report_fvg(snap: dict, direction: str) -> dict:
+    if not snap:
+        return {"state": 0, "conf": 0, "value": None}
+    open_count = snap.get("open_bullish_count", 0) + snap.get("open_bearish_count", 0)
+    if direction == "BUY":
+        state = 1 if snap.get("open_bullish_count", 0) > 0 else 0
+    else:
+        state = 1 if snap.get("open_bearish_count", 0) > 0 else 0
+    return {"state": state, "conf": 40, "value": open_count}
+
+
+def report_liquidity(snap: dict, direction: str) -> dict:
+    if not snap:
+        return {"state": 0, "conf": 0, "value": None}
+    n_levels = snap.get("total_levels", 0)
+    has_target = snap.get("nearest_target") is not None
+    return {"state": 1 if has_target else 0, "conf": 50 if has_target else 0, "value": n_levels}
+
+
+def report_session_sweep(snap: dict, direction: str) -> dict:
+    if not snap:
+        return {"state": 0, "conf": 0, "value": None}
+    la = snap.get("london_action", {})
+    true_dir = la.get("true_direction")
+    reversed_ = la.get("sweep_reversed", False)
+    state = _vote_from_classification(
+        "BULLISH" if true_dir == "BULLISH" else "BEARISH" if true_dir == "BEARISH" else "NEUTRAL",
+        direction)
+    return {"state": state, "conf": 60 if reversed_ else 20,
+            "value": 1 if reversed_ else 0}
+
+
+def report_reaction_map(snap: dict, direction: str) -> dict:
+    if not snap:
+        return {"state": 0, "conf": 0, "value": None}
+    in_zone = snap.get("in_high_confluence_zone", False)
+    below = snap.get("strongest_below", {})
+    conf_score = below.get("confluence_score", 0) if below else 0
+    return {"state": 1 if in_zone else 0, "conf": int(conf_score), "value": conf_score}
+
+
+def report_candlestick(snap: dict, direction: str) -> dict:
+    if not snap:
+        return {"state": 0, "conf": 0, "value": None}
+    has_conf = snap.get("has_confirmation", False)
+    cs_dir = snap.get("strongest_direction")
+    state = _vote_from_classification(
+        "BULLISH" if cs_dir == "BULLISH" else "BEARISH" if cs_dir == "BEARISH" else "NEUTRAL",
+        direction)
+    return {"state": state if has_conf else 0,
+            "conf": 50 if has_conf else 0,
+            "value": 1 if has_conf else 0}
+
+
+def report_macro(snap: dict, direction: str) -> dict:
+    # Macro è inerte oggi (nessun feed): neutro. Ma raccolto per il futuro.
+    if not snap:
+        return {"state": 0, "conf": 0, "value": None}
+    return {"state": 0, "conf": 0, "value": None}
+
+
+def report_market_state(snap: dict, direction: str) -> dict:
+    if not snap:
+        return {"state": 0, "conf": 0, "value": None, "value2": None}
+    bias = snap.get("bias", "NEUTRAL")
+    bias_conf = snap.get("bias_confidence", 0)
+    quality = snap.get("market_quality_score", 0)
+    state = _vote_from_classification(bias, direction)
+    return {"state": state, "conf": int(bias_conf),
+            "value": quality, "value2": bias_conf}  # eccezione: bias_confidence
+
+
+def report_money_flow(snap: dict, direction: str) -> dict:
+    if not snap:
+        return {"state": 0, "conf": 0, "value": None}
+    # MFM: favorevole se c'è un target di liquidità nella direzione
+    above = snap.get("nearest_above")
+    below = snap.get("nearest_below")
+    if direction == "BUY" and above:
+        return {"state": 1, "conf": int(above.get("priority_score", 0) * 100), "value": above.get("priority_score", 0)}
+    if direction == "SELL" and below:
+        return {"state": 1, "conf": int(below.get("priority_score", 0) * 100), "value": below.get("priority_score", 0)}
+    return {"state": 0, "conf": 0, "value": None}
+
+
+# Registro degli engine: nome → funzione report
+ENGINE_REPORTERS = {
+    "structure": report_structure,
+    "trend_health": report_trend_health,
+    "volatility": report_volatility,
+    "displacement": report_displacement,
+    "order_block": report_order_block,
+    "fvg": report_fvg,
+    "liquidity": report_liquidity,
+    "session_sweep": report_session_sweep,
+    "reaction_map": report_reaction_map,
+    "candlestick": report_candlestick,
+    "macro": report_macro,
+    "market_state": report_market_state,
+    "money_flow": report_money_flow,
+}
+
+
+# ============================================================
+# COLLECTOR — assembla il record completo
+# ============================================================
+
+def collect_decision(
+    *,
+    decision_id: Optional[str] = None,
+    asset: str,
+    strategy: str,
+    direction: Optional[str],
+    decision_type: str,              # EXECUTED / REJECTED
+    reject_gate: Optional[str] = None,
+    snapshots: dict,                 # {"structure": {...}, "volatility": {...}, ...}
+    trade: Optional[dict] = None,    # entry/sl/tp/rr/quality/session/trigger
+    ledger_path: str = ledger_writer.DEFAULT_LEDGER_PATH,
+) -> Optional[str]:
+    """
+    Assembla e persiste un Decision Snapshot. Ritorna il decision_id
+    (nuovo o passato) oppure None se la raccolta è fallita.
+
+    NON solleva mai eccezioni: la raccolta è passiva e non deve
+    poter bloccare il runner.
+    """
+    try:
+        if decision_id is None:
+            decision_id = generate_ulid()
+
+        # Direzione può mancare in alcuni rifiuti pre-direzione: default BUY per il voto
+        dir_for_vote = direction or "BUY"
+
+        now = datetime.now(timezone.utc)
+        record = {
+            "decision_id": decision_id,
+            "ts_micro": int(time.time() * 1_000_000),
+            "ts_iso": now.isoformat(),
+            "code_version": get_code_version(),
+            "regime": classify_regime(
+                snapshots.get("structure"), snapshots.get("volatility")),
+            "asset": asset,
+            "strategy": strategy,
+            "direction": direction,
+            "decision_type": decision_type,
+            "reject_gate": reject_gate,
+            "outcome": "PENDING",
+            "created_ts_iso": now.isoformat(),
+            "last_checked_ts": int(time.time() * 1_000_000),
+        }
+
+        # ── Vettore engine: tripletta per ognuno ──────────────
+        for eng_name, reporter in ENGINE_REPORTERS.items():
+            snap = snapshots.get(eng_name)
+            try:
+                r = reporter(snap, dir_for_vote)
+            except Exception as e:
+                logger.warning("report %s fallito: %s", eng_name, e)
+                r = {"state": 0, "conf": 0, "value": None}
+            record[f"{eng_name}_state"] = r.get("state", 0)
+            record[f"{eng_name}_conf"] = r.get("conf", 0)
+            record[f"{eng_name}_value"] = r.get("value")
+            if "value2" in r:
+                record[f"{eng_name}_value2"] = r.get("value2")
+
+        # M3: raw features per il ML futuro.
+        # NON duplica la tripletta (già in colonne). Salva solo i valori
+        # grezzi aggiuntivi che un modello ML richiederebbe e che NON sono
+        # ricostruibili a posteriori — chiavi compatte per minimizzare spazio.
+        # Passato esplicitamente dal runner via snapshots["_raw_ml"] se presente,
+        # altrimenti vuoto (raccolta attivabile quando serve, senza refactoring).
+        raw_ml = snapshots.get("_raw_ml")
+        record["raw_features_json"] = json.dumps(raw_ml, default=str, separators=(",", ":")) if raw_ml else None
+
+        # ── Decisione di trade ────────────────────────────────
+        if trade:
+            record["entry"] = trade.get("entry")
+            record["stop_loss"] = trade.get("stop_loss")
+            record["take_profit"] = trade.get("take_profit")
+            record["rr_planned"] = trade.get("rr")
+            record["quality_score"] = trade.get("quality_score")
+            record["quality_label"] = trade.get("quality_label")
+            record["session"] = trade.get("session")
+            tt = trade.get("trigger_types")
+            record["trigger_types"] = json.dumps(tt) if tt is not None else None
+
+        ok = ledger_writer.write_decision(record, ledger_path)
+        return decision_id if ok else None
+
+    except Exception as e:
+        logger.error("collect_decision fallito (non-blocking): %s", e)
+        return None
