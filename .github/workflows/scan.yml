@@ -82,13 +82,16 @@ jobs:
         run: |
           git config user.name "signal-engine-bot"
           git config user.email "actions@github.com"
-          git add data/signals.db
+          # Sprint 0: il Decision Ledger (data/decision_ledger.db) persiste
+          # con lo stesso meccanismo di signals.db. Senza questa aggiunta,
+          # il Ledger verrebbe ricreato vuoto ad ogni scan.
+          git add data/signals.db data/decision_ledger.db
           DB_CHANGED=false
           git diff --staged --quiet || DB_CHANGED=true
           if [ "$DB_CHANGED" = "true" ]; then
             python3 generate_unified_dashboard.py
             python3 generate_analytics_dashboard.py
-            git add data/signals.db \
+            git add data/signals.db data/decision_ledger.db \
                     docs/unified_dashboard.html \
                     docs/analytics_dashboard.html
             git commit -m "Scanner + Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
