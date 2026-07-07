@@ -13,6 +13,12 @@ import sqlite3
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
+# Sprint 0 — Decision Ledger (collegamento esito, raccolta passiva)
+try:
+    from core.decision_ledger import v41p1_integration as _ledger_link
+except Exception:
+    _ledger_link = None
+
 
 def init_v41p1_schema(conn: sqlite3.Connection,
                        schema_path: str = "storage/v41p1_schema.sql"):
@@ -242,6 +248,18 @@ def monitor_open_signals(conn: sqlite3.Connection, asset: str,
             (direction == "SELL" and current_low  <= tp1)
         )
 
+        # Sprint 0: durata in barre M15 (elapsed_minutes / 15)
+        _dur_bars = int(elapsed_minutes / 15) if elapsed_minutes else None
+        # RR pianificato ricostruito da tp2/entry/sl originali per il Ledger.
+        # Nota: se il BE ha spostato sl a entry, questo RR usa l'sl corrente,
+        # quindi il writer del Ledger gestisce il caso breakeven separatamente.
+        _rr_planned = None
+        try:
+            if tp2 and entry and sl and abs(entry - sl) > 1e-9:
+                _rr_planned = round(abs(tp2 - entry) / abs(entry - sl), 3)
+        except Exception:
+            _rr_planned = None
+
         if sl_hit:
             update_v41p1_signal_outcome(
                 conn, sid, "SL", now_iso,
@@ -252,6 +270,13 @@ def monitor_open_signals(conn: sqlite3.Connection, asset: str,
             )
             updated.append({"signal_id": sid, "outcome": "SL",
                              "tp1_hit": bool(tp1_hit_now), "tp2_hit": False})
+            if _ledger_link:
+                # Se il breakeven era scattato (sl spostato a entry), l'esito
+                # reale è BE, non SL. Il Ledger lo distingue per l'analisi.
+                _outcome_ledger = "BE" if abs(sl - entry) < 1e-9 else "SL"
+                # Per il calcolo R usa lo SL originale se disponibile
+                _ledger_link.link_outcome(sid, _outcome_ledger, entry, sl,
+                                          mae=new_mae, mfe=new_mfe, duration_bars=_dur_bars, rr_planned=_rr_planned)
         elif tp2_hit_now:
             update_v41p1_signal_outcome(
                 conn, sid, "TP", now_iso,
@@ -261,6 +286,9 @@ def monitor_open_signals(conn: sqlite3.Connection, asset: str,
             )
             updated.append({"signal_id": sid, "outcome": "TP2",
                              "tp1_hit": True, "tp2_hit": True})
+            if _ledger_link:
+                _ledger_link.link_outcome(sid, "TP", entry, sl,
+                                          mae=new_mae, mfe=new_mfe, duration_bars=_dur_bars, rr_planned=_rr_planned)
         elif expired:
             update_v41p1_signal_outcome(
                 conn, sid, "EXPIRED", now_iso,
@@ -270,6 +298,9 @@ def monitor_open_signals(conn: sqlite3.Connection, asset: str,
             )
             updated.append({"signal_id": sid, "outcome": "EXPIRED",
                              "tp1_hit": bool(tp1_hit_now), "tp2_hit": False})
+            if _ledger_link:
+                _ledger_link.link_outcome(sid, "EXPIRED", entry, sl,
+                                          mae=new_mae, mfe=new_mfe, duration_bars=_dur_bars, rr_planned=_rr_planned)
         else:
             new_tp1_hit = bool(tp1_hit_db or tp1_hit_now)
             conn.execute(
