@@ -21,7 +21,12 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          # fetch-depth ridotto da 0 (storia completa) a 1.
+          # Causa del checkout lento (~2m49s): la storia git contiene
+          # migliaia di versioni dei .db committati ad ogni scan.
+          # fetch-depth: 1 scarica solo l'ultimo stato.
+          # Se il "git pull --rebase" in fondo fallisce, alza a 20.
+          fetch-depth: 1
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -83,8 +88,7 @@ jobs:
           git config user.name "signal-engine-bot"
           git config user.email "actions@github.com"
           # Sprint 0: il Decision Ledger (data/decision_ledger.db) persiste
-          # con lo stesso meccanismo di signals.db. Senza questa aggiunta,
-          # il Ledger verrebbe ricreato vuoto ad ogni scan.
+          # con lo stesso meccanismo di signals.db.
           git add data/signals.db data/decision_ledger.db
           DB_CHANGED=false
           git diff --staged --quiet || DB_CHANGED=true
