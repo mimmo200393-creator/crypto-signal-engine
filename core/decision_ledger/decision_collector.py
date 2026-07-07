@@ -82,17 +82,21 @@ def classify_regime(structure_snapshot: dict, vol_snapshot: dict) -> str:
         if not structure_snapshot:
             return "UNKNOWN"
         th = structure_snapshot.get("trend_health", {})
-        phase = th.get("phase", "NEUTRAL")
+        # campo reale: current_trend (non "phase")
+        current_trend = th.get("current_trend", "NEUTRAL")
+        impulse_count = th.get("impulse_count", 0)
         h4 = structure_snapshot.get("structure_h4", {}).get("classification", "NEUTRAL")
         vol_regime = (vol_snapshot or {}).get("regime", "NORMAL")
+        expanding = (vol_snapshot or {}).get("expanding", False)
+        contracting = (vol_snapshot or {}).get("contracting", False)
 
-        # Trending: struttura H4 direzionale + trend in salute
-        if h4 in ("BULLISH", "BEARISH") and phase in ("HEALTHY", "ACCELERATING"):
+        # Trending: struttura H4 direzionale + trend attivo con impulsi
+        if h4 in ("BULLISH", "BEARISH") and current_trend == h4 and impulse_count >= 1:
             return "TRENDING"
-        # Ranging: struttura neutra + volatilità contratta
-        if h4 == "NEUTRAL" or vol_regime == "CONTRACTING":
+        # Ranging: struttura neutra o volatilità contratta
+        if h4 == "NEUTRAL" or contracting or vol_regime == "CONTRACTING":
             return "RANGING"
-        # Transitional: tutto il resto (esaurimento, cambio in corso)
+        # Transitional: tutto il resto (disaccordo trend/struttura, cambio in corso)
         return "TRANSITIONAL"
     except Exception:
         return "UNKNOWN"
@@ -132,15 +136,12 @@ def report_trend_health(snap: dict, direction: str) -> dict:
     if not snap:
         return {"state": 0, "conf": 0, "value": None}
     th = snap.get("trend_health", {})
-    phase = th.get("phase", "NEUTRAL")
     trend = th.get("current_trend", "NEUTRAL")
+    impulse_count = th.get("impulse_count", 0)
     state = _vote_from_classification(trend, direction)
     # Confidence proporzionale al numero di impulsi confermati
-    conf = min(100, th.get("impulse_count", 0) * 20)
-    healthy = phase in ("HEALTHY", "ACCELERATING")
-    if not healthy:
-        state = 0  # trend non in salute → neutro
-    return {"state": state, "conf": int(conf), "value": th.get("impulse_count", 0)}
+    conf = min(100, impulse_count * 25)
+    return {"state": state, "conf": int(conf), "value": impulse_count}
 
 
 def report_volatility(snap: dict, direction: str) -> dict:
@@ -148,13 +149,17 @@ def report_volatility(snap: dict, direction: str) -> dict:
         return {"state": 0, "conf": 0, "value": None}
     regime = snap.get("regime", "NORMAL")
     atr_ratio = snap.get("atr_ratio_m15", 1.0)
-    # La volatilità non ha direzione: è favorevole se espande, ostile se spike
+    expanding = snap.get("expanding", False)
+    contracting = snap.get("contracting", False)
+    # La volatilità non ha direzione: favorevole se espande, ostile se spike/contrae
     state = 0
-    if regime == "EXPANDING":
+    if expanding or regime == "EXPANDING":
         state = 1
     elif regime == "SPIKE":
         state = -1
-    return {"state": state, "conf": 50, "value": atr_ratio}
+    elif contracting or regime == "CONTRACTING":
+        state = -1
+    return {"state": state, "conf": 60, "value": atr_ratio}
 
 
 def report_displacement(snap: dict, direction: str) -> dict:
@@ -204,8 +209,18 @@ def report_liquidity(snap: dict, direction: str) -> dict:
     if not snap:
         return {"state": 0, "conf": 0, "value": None}
     n_levels = snap.get("total_levels", 0)
-    has_target = snap.get("nearest_target") is not None
-    return {"state": 1 if has_target else 0, "conf": 50 if has_target else 0, "value": n_levels}
+    # target nella direzione del trade: BUY punta a liquidità sopra, SELL sotto
+    if direction == "BUY":
+        target = snap.get("nearest_above")
+    else:
+        target = snap.get("nearest_below")
+    has_target = target is not None
+    score = 0
+    if has_target and isinstance(target, dict):
+        score = int(target.get("structural_score", 0) * 100)
+    return {"state": 1 if has_target else 0,
+            "conf": score if score else (40 if has_target else 0),
+            "value": n_levels}
 
 
 def report_session_sweep(snap: dict, direction: str) -> dict:
@@ -225,9 +240,21 @@ def report_reaction_map(snap: dict, direction: str) -> dict:
     if not snap:
         return {"state": 0, "conf": 0, "value": None}
     in_zone = snap.get("in_high_confluence_zone", False)
-    below = snap.get("strongest_below", {})
-    conf_score = below.get("confluence_score", 0) if below else 0
-    return {"state": 1 if in_zone else 0, "conf": int(conf_score), "value": conf_score}
+    # zona rilevante per la direzione: BUY reagisce da una zona sotto (supporto),
+    # SELL da una zona sopra (resistenza)
+    zone = snap.get("strongest_below") if direction == "BUY" else snap.get("strongest_above")
+    conf_score = 0
+    state = 0
+    if zone and isinstance(zone, dict):
+        conf_score = zone.get("confluence_score", 0)
+        expected = zone.get("expected_reaction")  # BULLISH/BEARISH atteso dalla zona
+        if expected == "BULLISH" and direction == "BUY":
+            state = 1
+        elif expected == "BEARISH" and direction == "SELL":
+            state = 1
+        elif expected in ("BULLISH", "BEARISH"):
+            state = -1
+    return {"state": state, "conf": int(conf_score), "value": conf_score}
 
 
 def report_candlestick(snap: dict, direction: str) -> dict:
@@ -238,16 +265,23 @@ def report_candlestick(snap: dict, direction: str) -> dict:
     state = _vote_from_classification(
         "BULLISH" if cs_dir == "BULLISH" else "BEARISH" if cs_dir == "BEARISH" else "NEUTRAL",
         direction)
-    return {"state": state if has_conf else 0,
-            "conf": 50 if has_conf else 0,
+    if not has_conf:
+        state = 0
+    conf_score = snap.get("zone_confluence_score", 0) or 0
+    return {"state": state,
+            "conf": int(conf_score) if has_conf else 0,
             "value": 1 if has_conf else 0}
 
 
 def report_macro(snap: dict, direction: str) -> dict:
-    # Macro è inerte oggi (nessun feed): neutro. Ma raccolto per il futuro.
+    # Macro oggi è quasi inerte (feed esterni spesso None), ma raccolto per il futuro.
     if not snap:
         return {"state": 0, "conf": 0, "value": None}
-    return {"state": 0, "conf": 0, "value": None}
+    sentiment = snap.get("news_sentiment", 0) or 0
+    is_blackout = snap.get("is_blackout", False)
+    # blackout = ostile (evento macro imminente)
+    state = -1 if is_blackout else 0
+    return {"state": state, "conf": 30 if is_blackout else 0, "value": sentiment}
 
 
 def report_market_state(snap: dict, direction: str) -> dict:
@@ -255,7 +289,7 @@ def report_market_state(snap: dict, direction: str) -> dict:
         return {"state": 0, "conf": 0, "value": None, "value2": None}
     bias = snap.get("bias", "NEUTRAL")
     bias_conf = snap.get("bias_confidence", 0)
-    quality = snap.get("market_quality_score", 0)
+    quality = snap.get("market_quality_score", 0)  # campo reale
     state = _vote_from_classification(bias, direction)
     return {"state": state, "conf": int(bias_conf),
             "value": quality, "value2": bias_conf}  # eccezione: bias_confidence
