@@ -38,6 +38,11 @@ from strategies.money_flow_map import (
 from notifications import v41p1_telegram
 from notifications import ntfy_bot
 
+# Sprint 0 — Decision Ledger (raccolta passiva, non modifica la decisione)
+from core.decision_ledger import v41p1_integration as ledger_link
+from core.decision_ledger import decision_collector as _dc
+from core.decision_ledger import ledger_writer as _lw
+
 logger = logging.getLogger("v41p1_runner")
 
 V41P1_TIMEFRAMES = {"H4": "4h", "H1": "1h", "M15": "15m"}
@@ -372,6 +377,23 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
     except Exception as e:
         logger.error("V41P1 MarketState [%s]: errore: %s", asset, e)
 
+    # ══════════════════════════════════════════════════════════
+    # ── Decision Ledger: prepara ID + snapshots (Sprint 0) ───
+    # ══════════════════════════════════════════════════════════
+    # decision_id generato ORA, prima di qualsiasi decisione, così
+    # anche i rifiuti hanno un ID. Usato come signal_id se eseguito.
+    # Raccolta passiva: NON modifica nessuna logica di trading.
+    try:
+        _decision_id = _dc.generate_ulid()
+        _ledger_snapshots = ledger_link.build_snapshots_dict(
+            structure_snapshot, vol_snapshot, ob_snapshot, fvg_snapshot,
+            liq_snapshot, ss_snapshot, rm_snapshot, cs_snapshot,
+            macro_snapshot, ms_snapshot, mfm)
+    except Exception as e:
+        logger.warning("V41P1 [%s]: Ledger prep fallita (non-blocking): %s", asset, e)
+        _decision_id = None
+        _ledger_snapshots = {}
+
     # ── Monitoraggio segnali aperti ───────────────────────────
     try:
         last_m15 = df_m15.iloc[-1]
@@ -439,6 +461,8 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
             "(dir=%s quality=%d)",
             asset, signal["direction"], signal["quality_score"],
         )
+        ledger_link.capture_rejected(_decision_id, asset, signal.get("direction"),
+                                     "SESSION_OVERLAP", _ledger_snapshots, signal)
         return
 
     if (signal["direction"] == "BUY"
@@ -448,6 +472,8 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
             "(quality=%d momentum=%s)",
             asset, signal["quality_score"], signal.get("momentum"),
         )
+        ledger_link.capture_rejected(_decision_id, asset, signal.get("direction"),
+                                     "BUY_DOW_NEUTRAL", _ledger_snapshots, signal)
         return
 
     # Risk floor basato su ATR (Sprint 13c)
@@ -460,6 +486,8 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
             "V41P1 Scanner [%s]: REJECT RISK_TOO_TIGHT "
             "(risk=%.2f < 0.8*ATR=%.2f)", asset, risk, 0.8 * atr_m15,
         )
+        ledger_link.capture_rejected(_decision_id, asset, signal.get("direction"),
+                                     "RISK_TOO_TIGHT", _ledger_snapshots, signal)
         return
 
     # ══════════════════════════════════════════════════════════
@@ -583,9 +611,18 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
             "V41P1 Scanner [%s]: REJECT DUPLICATE_SIGNAL (dir=%s trigger=%s source=%s)",
             asset, signal["direction"], current_trigger_type, current_liquidity_source
         )
+        ledger_link.capture_rejected(_decision_id, asset, signal.get("direction"),
+                                     "DUPLICATE_SIGNAL", _ledger_snapshots, signal)
         return
 
+    # Sprint 0: usa il decision_id (ULID) come signal_id → chiave condivisa
+    # col Ledger, nessuna colonna bridge necessaria.
+    if _decision_id:
+        signal["signal_id"] = _decision_id
     signal_id = v41p1_db.insert_v41p1_signal(conn, signal)
+
+    # Sprint 0: registra la decisione ESEGUITA nel Ledger (passivo)
+    ledger_link.capture_executed(signal_id, asset, signal, _ledger_snapshots)
     logger.info(
         "V41P1 Scanner [%s]: ALERT [%s] trigger=%s quality=%d/12 (%s) "
         "source=%s target=%s em=%s session=%s sweep=%s "
@@ -648,6 +685,13 @@ def run_v41p1_scan(config: dict):
     init_candlestick_schema(conn)
     init_macro_schema(conn)
     init_market_state_schema(conn)
+
+    # Sprint 0 — Decision Ledger: init file separato (WAL) + sweep orfani
+    try:
+        _lw.init_ledger()
+        _lw.sweep_expired(expiry_hours=24)
+    except Exception as e:
+        logger.warning("Decision Ledger init/sweep fallito (non-blocking): %s", e)
 
     macro_provider = macro.get_provider(config)
     now = datetime.now(timezone.utc)
