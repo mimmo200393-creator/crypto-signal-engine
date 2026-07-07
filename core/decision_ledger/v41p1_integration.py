@@ -135,17 +135,26 @@ def capture_rejected(decision_id: str, asset: str, direction: Optional[str],
 def link_outcome(decision_id: str, outcome: str, entry: float, stop_loss: float,
                  mae: float = None, mfe: float = None,
                  duration_bars: int = None,
+                 rr_planned: float = None,
                  ledger_path: str = ledger_writer.DEFAULT_LEDGER_PATH) -> None:
     """
     Collega l'esito di un trade chiuso al Ledger (M4: idempotente).
     Chiamata dal monitor quando un trade V41P1 si chiude.
 
-    Converte l'outcome V41P1 (SL/TP/EXPIRED) nel formato Ledger e
-    calcola r_realized/mfe_r/mae_r in unità R.
+    Sprint 0 fix: gestisce il caso breakeven, dove lo stop_loss è stato
+    spostato a entry (risk corrente = 0). In quel caso il risk per il
+    calcolo R viene ricostruito dall'MFE/MAE disponibili o dall'rr_planned,
+    evitando divisioni per zero che lasciavano r_realized a None.
     """
     try:
         risk = abs(entry - stop_loss) if (entry and stop_loss) else None
-        # Mappa outcome V41P1 → Ledger
+
+        # Se il breakeven ha spostato lo SL a entry, risk corrente = 0.
+        # Il Ledger non può ricostruire il risk originale dai soli entry/sl,
+        # quindi in quel caso NON normalizza in R (lascia i valori assoluti
+        # in mfe/mae e deriva r_realized dal contesto disponibile).
+        be_moved = (risk is not None and risk < 1e-9)
+
         ledger_outcome = {
             "SL": "SL", "TP": "TP", "TP2": "TP",
             "EXPIRED": "EXPIRED", "BE": "BE",
@@ -154,12 +163,22 @@ def link_outcome(decision_id: str, outcome: str, entry: float, stop_loss: float,
         r_realized = None
         mfe_r = None
         mae_r = None
-        # BE ha sempre r_realized=0, anche se risk=0 (sl spostato a entry)
+
         if ledger_outcome == "BE":
             r_realized = 0.0
-        if risk and risk > 0:
+        elif be_moved:
+            # SL spostato a breakeven ma trade chiuso: se TP, ha raggiunto il
+            # target → usa rr_planned se disponibile; se SL dopo BE, è ~0.
             if ledger_outcome == "TP":
-                r_realized = round((mfe or 0) / risk, 3) if mfe else None
+                r_realized = rr_planned if rr_planned else None
+            elif ledger_outcome == "SL":
+                r_realized = 0.0  # SL scattato a breakeven = pareggio
+                ledger_outcome = "BE"
+        elif risk and risk > 0:
+            if ledger_outcome == "TP":
+                # TP raggiunto: r_realized = RR pianificato (ha toccato il target)
+                r_realized = rr_planned if rr_planned else (
+                    round((mfe or 0) / risk, 3) if mfe else None)
             elif ledger_outcome == "SL":
                 r_realized = -1.0
             mfe_r = round((mfe or 0) / risk, 3) if mfe is not None else None
