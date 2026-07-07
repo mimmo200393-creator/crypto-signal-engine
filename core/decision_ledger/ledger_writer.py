@@ -118,27 +118,83 @@ def update_outcome(decision_id: str,
                    mfe_r: Optional[float] = None,
                    mae_r: Optional[float] = None,
                    duration_bars: Optional[int] = None,
+                   mae_abs: Optional[float] = None,
+                   mfe_abs: Optional[float] = None,
                    ledger_path: str = DEFAULT_LEDGER_PATH) -> bool:
     """
     Aggiorna l'esito di un record PENDING (M4).
     IDEMPOTENTE: aggiorna solo se il record è ancora PENDING.
-    Un esito terminale non viene mai riscritto.
+
+    Sprint 0 fix (trade completo): il risk ORIGINALE (entry, stop_loss,
+    rr_planned) è già salvato nel record all'ingresso. Se r_realized/mfe_r/
+    mae_r non sono forniti, li ricostruisce dai valori originali del record
+    — così il breakeven (che altera lo SL nella tabella segnali) non
+    corrompe il calcolo R nel Ledger. Questa è la ragione per cui il Ledger
+    salva entry/sl/rr all'ingresso: restano la fonte di verità dell'Outcome.
     """
     now_iso = datetime.now(timezone.utc).isoformat()
     now_micro = int(time.time() * 1_000_000)
 
-    # WHERE outcome='PENDING' garantisce l'idempotenza: se già terminale, 0 righe.
+    conn = None
+    try:
+        conn = _connect(ledger_path)
+        conn.row_factory = sqlite3.Row
+        rec = conn.execute(
+            "SELECT entry, stop_loss, take_profit, rr_planned, outcome "
+            "FROM decision_ledger WHERE decision_id=?", (decision_id,)
+        ).fetchone()
+
+        if rec is None:
+            conn.close()
+            return False
+        if rec["outcome"] != "PENDING":
+            conn.close()
+            return True  # già terminale: idempotente, non riscrive
+
+        # Risk originale dal record (immune al breakeven)
+        entry = rec["entry"]
+        sl_orig = rec["stop_loss"]
+        rr_planned = rec["rr_planned"]
+        risk_orig = abs(entry - sl_orig) if (entry and sl_orig) else None
+
+        norm = {"SL": "SL", "TP": "TP", "TP2": "TP",
+                "EXPIRED": "EXPIRED", "BE": "BE",
+                "VIRTUAL_TP": "VIRTUAL_TP", "VIRTUAL_SL": "VIRTUAL_SL"}
+        ledger_outcome = norm.get(outcome, "EXPIRED")
+
+        # Ricostruzione R dai valori originali se non forniti
+        if r_realized is None:
+            if ledger_outcome == "TP":
+                r_realized = rr_planned  # TP raggiunto = RR pianificato
+            elif ledger_outcome == "SL":
+                r_realized = -1.0
+            elif ledger_outcome == "BE":
+                r_realized = 0.0
+        if mfe_r is None and mfe_abs is not None and risk_orig and risk_orig > 0:
+            mfe_r = round(mfe_abs / risk_orig, 3)
+        if mae_r is None and mae_abs is not None and risk_orig and risk_orig > 0:
+            mae_r = round(mae_abs / risk_orig, 3)
+
+        conn.close()
+    except Exception as e:
+        if conn:
+            conn.close()
+        logger.error("Ledger update_outcome lettura fallita: %s", e)
+        # fallback: procede con i valori passati
+        norm = {"SL": "SL", "TP": "TP", "TP2": "TP", "EXPIRED": "EXPIRED", "BE": "BE"}
+        ledger_outcome = norm.get(outcome, "EXPIRED")
+
     sql = """
         UPDATE decision_ledger
         SET outcome=?, r_realized=?, mfe_r=?, mae_r=?, duration_bars=?,
             outcome_ts_iso=?, last_checked_ts=?
         WHERE decision_id=? AND outcome='PENDING'
     """
-    params = (outcome, r_realized, mfe_r, mae_r, duration_bars,
+    params = (ledger_outcome, r_realized, mfe_r, mae_r, duration_bars,
               now_iso, now_micro, decision_id)
     ok = _execute_with_retry(ledger_path, sql, params)
     if ok:
-        logger.info("Ledger: outcome %s → %s", decision_id[:12], outcome)
+        logger.info("Ledger: outcome %s → %s (r=%s)", decision_id[:12], ledger_outcome, r_realized)
     return ok
 
 
@@ -202,4 +258,3 @@ def get_pending_ids(ledger_path: str = DEFAULT_LEDGER_PATH) -> list[dict]:
     finally:
         if conn:
             conn.close()
-                     
