@@ -33,6 +33,10 @@ from strategies.edge_lab.market_context_engine import (
 )
 from strategies.edge_lab.ote_sc import generate_ote_sc_signal
 
+# Decision Ledger (Sprint 0) — raccolta passiva, mai bloccante
+from core.decision_ledger import edge_lab_integration as ledger_el
+from core.decision_ledger.decision_collector import generate_ulid
+
 logger = logging.getLogger("edge_lab.runner")
 
 EDGE_LAB_ASSETS     = ["BTC_USDT", "PAXG_USDT"]
@@ -144,6 +148,27 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
                 "Edge Lab Monitor [%s]: %s → outcome=%s bars=%d",
                 asset, upd["signal_id"][:8], upd["outcome"], upd["bars_open"],
             )
+            # ── Decision Ledger: collega l'outcome (non-bloccante) ──
+            try:
+                if upd["outcome"] in ("TP", "SL", "EXPIRED"):
+                    rec = conn.execute(
+                        "SELECT entry, stop_loss, rr FROM edge_lab_signals "
+                        "WHERE signal_id = ?",
+                        (upd["signal_id"],),
+                    ).fetchone()
+                    if rec:
+                        ledger_el.link_outcome(
+                            decision_id=upd["signal_id"],
+                            outcome=upd["outcome"],
+                            entry=rec[0],
+                            stop_loss=rec[1],
+                            mae=upd.get("mae"),
+                            mfe=upd.get("mfe"),
+                            duration_bars=upd.get("bars_open"),
+                            rr_planned=rec[2],
+                        )
+            except Exception as e:
+                logger.debug("Ledger link_outcome OTE-SC [%s]: %s", asset, e)
     except Exception as e:
         logger.error("Edge Lab Monitor [%s]: errore: %s", asset, e)
 
@@ -196,8 +221,19 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
             diag   = result["diagnostics"]
 
             if signal is None:
+                rej = diag.get("rejection", "UNKNOWN")
                 logger.info("Edge Lab [%s %s]: no signal — %s",
-                    asset, direction, diag.get("rejection", "UNKNOWN"))
+                    asset, direction, rej)
+                # ── Decision Ledger: REJECTED significativo (non-bloccante) ──
+                try:
+                    ledger_el.capture_rejected(
+                        decision_id=generate_ulid(),
+                        asset=asset, direction=direction,
+                        reject_gate=rej, mie_context=mie_context,
+                        market_ctx=market_ctx,
+                    )
+                except Exception as e:
+                    logger.debug("Ledger capture_rejected [%s]: %s", asset, e)
                 continue
 
             # ══════════════════════════════════════════════════
@@ -213,6 +249,14 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
                     "Edge Lab [%s %s]: REJECT SESSION_OVERLAP",
                     asset, direction,
                 )
+                try:
+                    ledger_el.capture_rejected(
+                        decision_id=generate_ulid(), asset=asset,
+                        direction=direction, reject_gate="SESSION_OVERLAP",
+                        mie_context=mie_context, market_ctx=market_ctx, signal=signal,
+                    )
+                except Exception as e:
+                    logger.debug("Ledger rejected [%s]: %s", asset, e)
                 continue
 
             # Risk floor: SL troppo stretto → MAE_R esplosivo
@@ -225,6 +269,14 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
                         "Edge Lab [%s %s]: REJECT RISK_TOO_TIGHT (%.4f)",
                         asset, direction, risk_pct,
                     )
+                    try:
+                        ledger_el.capture_rejected(
+                            decision_id=generate_ulid(), asset=asset,
+                            direction=direction, reject_gate="RISK_TOO_TIGHT",
+                            mie_context=mie_context, market_ctx=market_ctx, signal=signal,
+                        )
+                    except Exception as e:
+                        logger.debug("Ledger rejected [%s]: %s", asset, e)
                     continue
 
             # Tradeability flags bloccanti
@@ -234,6 +286,14 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
                     "Edge Lab [%s %s]: REJECT TRADEABILITY_FLAGS %s",
                     asset, direction, flags,
                 )
+                try:
+                    ledger_el.capture_rejected(
+                        decision_id=generate_ulid(), asset=asset,
+                        direction=direction, reject_gate="TRADEABILITY_FLAGS",
+                        mie_context=mie_context, market_ctx=market_ctx, signal=signal,
+                    )
+                except Exception as e:
+                    logger.debug("Ledger rejected [%s]: %s", asset, e)
                 continue
 
             # ══════════════════════════════════════════════════
@@ -281,12 +341,29 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
                 mie_context, default=str
             )
 
+            # ── Decision Ledger: un unico ID per tutto il ciclo ──
+            # Il decision_id (ULID) diventa il signal_id della strategia,
+            # così l'outcome si ricollega senza tabelle di bridge (Opzione 1).
+            try:
+                signal["signal_id"] = generate_ulid()
+            except Exception as e:
+                logger.debug("Ledger ulid [%s]: %s", asset, e)
+
             # Inserisce il segnale
             try:
                 signal_id = edge_lab_db.insert_el_signal(conn, signal)
             except Exception as e:
                 logger.error("Edge Lab [%s %s]: errore insert: %s", asset, direction, e)
                 continue
+
+            # ── Decision Ledger: cattura EXECUTED (non-bloccante) ──
+            try:
+                ledger_el.capture_executed(
+                    decision_id=signal_id, asset=asset, signal=signal,
+                    mie_context=mie_context, market_ctx=market_ctx,
+                )
+            except Exception as e:
+                logger.debug("Ledger capture_executed [%s]: %s", asset, e)
 
             logger.info(
                 "Edge Lab [%s %s]: SEGNALE entry=%.4f sl=%.4f tp=%.4f rr=%.2f "
