@@ -45,6 +45,7 @@ LIQUIDITY_PROXIMITY_PCT   = 0.003   # 0.30%
 LIQUIDITY_SWEEP_LOOKBACK  = 4       # candele M15
 SWEEP_PENETRATION_MIN_PCT = 0.0003  # penetrazione minima oltre il livello
 SL_BUFFER_PCT             = 0.001   # 0.10% buffer dietro peak sweep (era 0.05%)
+ATR_SL_FLOOR_MULT         = 0.8     # floor distanza SL = 0.8×ATR M15 (propagato da V41P1 Sprint 13c)
 MIN_RR                    = 1.5     # RR minimo — evita trade sbilanciati
 
 # Quality Score bonus
@@ -111,10 +112,14 @@ def check_liquidity_sweep(
     kind      = level["kind"]
     tol       = lvl_price * SWEEP_PENETRATION_MIN_PCT
 
+    # Fix off-by-one: l'ultima candela (iloc[-1]) è trattata come CHIUSA
+    # ovunque nel runner (monitoring stop, current_price), quindi deve
+    # essere inclusa anche nella ricerca sweep. end punta all'ultima riga
+    # valida; il range la include (era range(end-1, ...) che la escludeva).
     end   = len(df_m15) - 1
     start = max(1, end - LIQUIDITY_SWEEP_LOOKBACK)
 
-    for i in range(end - 1, start - 1, -1):
+    for i in range(end, start - 1, -1):
         candle  = df_m15.iloc[i]
         c_high  = float(candle["high"])
         c_low   = float(candle["low"])
@@ -170,9 +175,14 @@ def find_post_sweep_trigger(
     """
     sweep_idx    = sweep["candle_idx"]
     search_start = sweep_idx + 1
+    # Fix off-by-one: l'ultima candela è chiusa e va valutata come possibile
+    # trigger. loop_end = len(df_m15) è il bound ESCLUSIVO per range(), così
+    # range(search_start, loop_end) include l'ultimo indice len-1.
+    # search_end resta il bound per gli slice iloc[:search_end] (già corretto).
+    loop_end     = len(df_m15)
     search_end   = len(df_m15) - 1
 
-    if search_start >= search_end:
+    if search_start >= loop_end:
         return None
 
     pre_sweep = df_m15.iloc[:sweep_idx]
@@ -187,7 +197,7 @@ def find_post_sweep_trigger(
             return None
         ref_high = highs[-1][1]
 
-        for i in range(search_start, search_end):
+        for i in range(search_start, loop_end):
             c_close = float(df_m15.iloc[i]["close"])
             if c_close > ref_high:
                 return {
@@ -200,7 +210,7 @@ def find_post_sweep_trigger(
         post_sweep = df_m15.iloc[sweep_idx:search_end]
         if len(post_sweep) >= 3:
             swing_high = float(post_sweep["high"].max())
-            for i in range(search_start, search_end):
+            for i in range(search_start, loop_end):
                 c_close = float(df_m15.iloc[i]["close"])
                 if c_close > swing_high * 0.998:
                     return {
@@ -216,7 +226,7 @@ def find_post_sweep_trigger(
             return None
         ref_low = lows[-1][1]
 
-        for i in range(search_start, search_end):
+        for i in range(search_start, loop_end):
             c_close = float(df_m15.iloc[i]["close"])
             if c_close < ref_low:
                 return {
@@ -229,7 +239,7 @@ def find_post_sweep_trigger(
         post_sweep = df_m15.iloc[sweep_idx:search_end]
         if len(post_sweep) >= 3:
             swing_low = float(post_sweep["low"].min())
-            for i in range(search_start, search_end):
+            for i in range(search_start, loop_end):
                 c_close = float(df_m15.iloc[i]["close"])
                 if c_close < swing_low * 1.002:
                     return {
@@ -246,7 +256,38 @@ def find_post_sweep_trigger(
 # Step 4: SL e TP
 # ============================================================
 
-def compute_sl(sweep: dict, direction: str) -> float:
+def _compute_atr_m15(df_m15: pd.DataFrame, period: int = 14) -> float | None:
+    """
+    ATR M15 (Wilder/SMA semplice su True Range) calcolato in modo
+    autocontenuto: LH non riceve ATR dal runner, quindi lo derivo qui
+    dal df_m15 già disponibile. Ritorna None se dati insufficienti.
+    """
+    if df_m15 is None or len(df_m15) < period + 1:
+        return None
+    try:
+        high  = df_m15["high"].astype(float)
+        low   = df_m15["low"].astype(float)
+        close = df_m15["close"].astype(float)
+        prev_close = close.shift(1)
+        tr = pd.concat([
+            (high - low),
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ], axis=1).max(axis=1)
+        atr = tr.rolling(window=period, min_periods=period).mean().iloc[-1]
+        if pd.isna(atr) or atr <= 0:
+            return None
+        return float(atr)
+    except Exception:
+        return None
+
+
+def compute_sl(
+    sweep: dict,
+    direction: str,
+    entry: float | None = None,
+    atr_m15: float | None = None,
+) -> float:
     """
     SL dietro il peak dello sweep con buffer SL_BUFFER_PCT.
 
@@ -254,14 +295,32 @@ def compute_sl(sweep: dict, direction: str) -> float:
     SELL: peak = massimo dello sweep → SL = peak + buffer
 
     Buffer minimo garantito per evitare SL troppo stretti.
+
+    Floor ATR (propagato da V41P1, Sprint 13c):
+        Il buffer percentuale fisso (0.10%) è tarato sulla volatilità di BTC.
+        Su asset a bassa volatilità come PAXG (ATR M15 ~3-4 punti), 0.10% può
+        essere più stretto del rumore normale → stop-out prematuri che
+        sembrano segnali errati ma sono solo SL mal posizionati.
+        Se entry e atr_m15 sono forniti, si impone che la distanza entry→SL
+        sia almeno ATR_SL_FLOOR_MULT * atr_m15.
     """
     peak   = sweep["peak_price"]
     buffer = peak * SL_BUFFER_PCT
 
     if direction == "BUY":
-        return peak - buffer
+        sl = peak - buffer
     else:
-        return peak + buffer
+        sl = peak + buffer
+
+    # Floor ATR: garantisce una distanza minima strutturale entry→SL
+    if entry is not None and atr_m15 is not None and atr_m15 > 0:
+        min_dist = ATR_SL_FLOOR_MULT * atr_m15
+        if direction == "BUY":
+            sl = min(sl, entry - min_dist)
+        else:
+            sl = max(sl, entry + min_dist)
+
+    return sl
 
 
 def find_tp_target(
@@ -385,6 +444,9 @@ def generate_lh_signal(
 
     current_price = float(df_m15.iloc[-1]["close"])
 
+    # ATR M15 per il floor sullo SL (fix propagato da V41P1)
+    atr_m15 = _compute_atr_m15(df_m15)
+
     # ── Step 1: Liquidity Pools attive ──────────────────────
     active_pools = find_active_liquidity_pools(mfm, current_price)
     diag["active_pools"] = [lv["label"] for lv in active_pools]
@@ -412,8 +474,8 @@ def generate_lh_signal(
 
         entry = trigger["entry"]
 
-        # ── Fix Bug 2: SL con buffer adeguato ───────────────
-        sl   = compute_sl(sweep, direction)
+        # ── Fix Bug 2: SL con buffer adeguato + floor ATR ───
+        sl   = compute_sl(sweep, direction, entry=entry, atr_m15=atr_m15)
         risk = abs(entry - sl)
 
         # Validità SL
