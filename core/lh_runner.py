@@ -135,12 +135,6 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     # ── Leggi MIE context (Sprint 13) ────────────────────────
     mie_context = _read_mie_context(conn, asset)
 
-    # Check segnale aperto
-    for direction in ("BUY", "SELL"):
-        if lh_db.has_open_lh_signal(conn, asset, direction):
-            logger.debug("LH [%s %s]: segnale OPEN già presente, skip.", asset, direction)
-            continue
-
     # Genera segnale
     try:
         result = generate_lh_signal(asset, df_m15, mfm, now)
@@ -156,6 +150,17 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         return
 
     direction = signal["direction"]
+
+    # ── Check posizione già aperta (fix: prima era un ciclo morto) ──
+    # LH genera un solo segnale per asset e la direzione emerge dallo
+    # sweep, quindi il check va fatto QUI (direzione nota) e con return,
+    # non in un for anticipato il cui `continue` non bloccava l'insert.
+    if lh_db.has_open_lh_signal(conn, asset, direction):
+        logger.info(
+            "LH [%s %s]: segnale OPEN già presente, skip (no duplicato).",
+            asset, direction,
+        )
+        return
 
     # ══════════════════════════════════════════════════════════
     # ── Filtri statistici (Sprint 13) ────────────────────────
