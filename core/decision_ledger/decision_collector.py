@@ -197,25 +197,12 @@ def report_order_block(snap: dict, direction: str) -> dict:
 def report_fvg(snap: dict, direction: str) -> dict:
     if not snap:
         return {"state": 0, "conf": 0, "value": None}
-    # Prima votava 1 per l'ESISTENZA di un FVG aperto (conf fissa 40) → quasi
-    # sempre 1, non discriminava. Ora usa il gap aperto PIU VICINO nella
-    # direzione e ne pesa la qualità: un gap non riempito, non invalidato,
-    # formato durante displacement e agganciato a struttura vale di più.
     open_count = snap.get("open_bullish_count", 0) + snap.get("open_bearish_count", 0)
-    nearest = (snap.get("nearest_open_bullish") if direction == "BUY"
-               else snap.get("nearest_open_bearish"))
-    if not nearest or not isinstance(nearest, dict):
-        return {"state": 0, "conf": 0, "value": open_count}
-    if nearest.get("is_invalidated"):
-        return {"state": 0, "conf": 0, "value": open_count}
-    fill = nearest.get("fill_percentage", 0) or 0
-    unfilled = max(0.0, 1.0 - float(fill))
-    conf = 30 * unfilled
-    if nearest.get("during_displacement"):
-        conf += 25
-    if nearest.get("associated_bos") or nearest.get("associated_choch"):
-        conf += 15
-    return {"state": 1, "conf": int(min(100, conf)), "value": open_count}
+    if direction == "BUY":
+        state = 1 if snap.get("open_bullish_count", 0) > 0 else 0
+    else:
+        state = 1 if snap.get("open_bearish_count", 0) > 0 else 0
+    return {"state": state, "conf": 40, "value": open_count}
 
 
 def report_liquidity(snap: dict, direction: str) -> dict:
@@ -260,16 +247,13 @@ def report_reaction_map(snap: dict, direction: str) -> dict:
     state = 0
     if zone and isinstance(zone, dict):
         conf_score = zone.get("confluence_score", 0)
-        expected = zone.get("expected_reaction")  # valori reali: BOUNCE_UP/BOUNCE_DOWN/UNKNOWN
-        # Semantica verificata sui dati (95% coerenza):
-        #   zona sotto (supporto) → BOUNCE_UP  = rimbalzo verso l'alto → favorevole BUY
-        #   zona sopra (resistenza) → BOUNCE_DOWN = respinta verso il basso → favorevole SELL
-        if expected == "BOUNCE_UP" and direction == "BUY":
+        expected = zone.get("expected_reaction")  # BULLISH/BEARISH atteso dalla zona
+        if expected == "BULLISH" and direction == "BUY":
             state = 1
-        elif expected == "BOUNCE_DOWN" and direction == "SELL":
+        elif expected == "BEARISH" and direction == "SELL":
             state = 1
-        elif expected in ("BOUNCE_UP", "BOUNCE_DOWN"):
-            state = -1  # la zona attende la reazione opposta alla direzione del trade
+        elif expected in ("BULLISH", "BEARISH"):
+            state = -1
     return {"state": state, "conf": int(conf_score), "value": conf_score}
 
 
@@ -314,17 +298,13 @@ def report_market_state(snap: dict, direction: str) -> dict:
 def report_money_flow(snap: dict, direction: str) -> dict:
     if not snap:
         return {"state": 0, "conf": 0, "value": None}
-    # MFM: c'è un target di liquidità nella direzione? La MFM ha quasi sempre
-    # un livello sopra E sotto, quindi lo STATE resta poco discriminante finché
-    # non avremo dati per una soglia; ma la CONFIDENCE ora riflette la priorità
-    # reale del livello (che varia), così il Ledger registra la vera forza del
-    # target invece di un valore piatto. Nessuna soglia arbitraria oggi.
+    # MFM: favorevole se c'è un target di liquidità nella direzione
     above = snap.get("nearest_above")
     below = snap.get("nearest_below")
-    target = above if direction == "BUY" else below
-    if target and isinstance(target, dict):
-        prio = target.get("priority_score", 0) or 0
-        return {"state": 1, "conf": int(prio * 100), "value": prio}
+    if direction == "BUY" and above:
+        return {"state": 1, "conf": int(above.get("priority_score", 0) * 100), "value": above.get("priority_score", 0)}
+    if direction == "SELL" and below:
+        return {"state": 1, "conf": int(below.get("priority_score", 0) * 100), "value": below.get("priority_score", 0)}
     return {"state": 0, "conf": 0, "value": None}
 
 
