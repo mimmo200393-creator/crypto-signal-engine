@@ -6,6 +6,26 @@ FRAMEWORK_NAME: "Crypto Signal Engine"
 FRAMEWORK_VERSION: "V2.1"
 
 # ============================================================
+# ASSET ATTIVI — fonte di verità unica
+# ============================================================
+# Prima gli asset erano duplicati in 7 punti (qui, nei singoli scanner,
+# e hardcoded in candles_runner.py). Ora candles_runner legge ASSETS.
+#
+# PAXG_USDT RIMOSSO: non replica i movimenti dell'oro. Verificato:
+#   oro spot a 4174 mentre PAXG massimo 4118 nello stesso momento;
+#   crollo di 60$ in 45 min sull'oro, compresso su PAXG.
+# La metodologia SMC cerca impronte istituzionali che su un token
+# ERC-20 con book sottile, scambiato da retail crypto, non esistono.
+#
+# XAU_USD: oro spot vero, via Twelve Data (vedi core/data_source.py).
+# ATTENZIONE: XAU_USD non ha volume (mercato OTC). Gli engine
+# volume-dependent producono valori privi di significato su questo
+# asset — vedi data_source.has_volume().
+ASSETS:
+  - BTC_USDT
+  - XAU_USD
+
+# ============================================================
 # Strategie abilitate
 # ============================================================
 STRATEGIES:
@@ -59,6 +79,9 @@ PIVOT_LOOKBACK: 5
 # ============================================================
 # Exchange / dati
 # ============================================================
+# EXCHANGE_BASE_URL vale per gli asset Crypto.com.
+# Per XAU_USD il provider è Twelve Data (endpoint fisso nel modulo)
+# e la chiave arriva da GitHub Secrets: TWELVEDATA_API_KEY
 EXCHANGE_BASE_URL: "https://api.crypto.com/exchange/v1"
 MAX_CANDLES_PER_CALL: 300
 REQUEST_DELAY_SECONDS: 0.75
@@ -101,7 +124,6 @@ WATCHLIST:
   - BCH_USDT
   - WIF_USDT
   - XLM_USDT
-  - PAXG_USDT
 
 # ============================================================
 # Timeframe
@@ -119,51 +141,60 @@ ATR_PERIOD: 14
 V3_SCANNER:
   enabled: true
   assets:
-    - PAXG_USDT
     - BTC_USDT
+    - XAU_USD
 
 # ============================================================
 # Institutional Scanner Framework V3.2 Dynamic (sperimentale)
-# H4_STRUCTURE_NEUTRAL non blocca la pipeline: diventa Quality Factor.
-# Confronto statistico con V3.2 Frozen su tabella v3d_signals separata.
 # ============================================================
 V3D_SCANNER:
   enabled: true
   assets:
-    - PAXG_USDT
     - BTC_USDT
+    - XAU_USD
 
 # ============================================================
 # Institutional Scanner Framework V4.0 Daily Edition (isolato)
-# Coesiste con V3.2 Frozen. Riusa le candele D1/M30/M15 scaricate
-# da V3_SCANNER (stesso ciclo), ma logica e tracking indipendenti.
 # ============================================================
 V4_SCANNER:
   enabled: true
   assets:
-    - PAXG_USDT
     - BTC_USDT
+    - XAU_USD
 
 # ============================================================
 # Institutional Scanner V4.1 Intraday Wave Edition.
-# Trigger-driven (BOS/CHOCH + Liquidity Sweep), confluence di
-# contesto solo per il Quality Score, News Filter come hard gate.
-# Riusa le candele H4/H1/M15 da V3_SCANNER (stesso ciclo), ma
-# logica e tracking completamente indipendenti (tabella v41_signals).
 # ============================================================
 V41_SCANNER:
   enabled: false
   assets:
-    - PAXG_USDT
     - BTC_USDT
+    - XAU_USD
 
 # ============================================================
 # Institutional Scanner V4.1 Phase 1 — Money Flow & Intraday Edge
-# Money Flow Map con Priority Score, Watchlist Alert arricchiti,
-# tracking separato su v41p1_signals per confronto statistico.
 # ============================================================
 V41P1_SCANNER:
   enabled: true
   assets:
-    - PAXG_USDT
     - BTC_USDT
+    - XAU_USD
+
+# ============================================================
+# Edge Lab (OTE-SC) + Trend Rider — condividono il market context
+# NOTA: questa chiave prima MANCAVA e i runner usavano il fallback
+# hardcoded ["BTC_USDT", "PAXG_USDT"] nel codice.
+# ============================================================
+EDGE_LAB:
+  assets:
+    - BTC_USDT
+    - XAU_USD
+
+# ============================================================
+# Liquidity Hunter
+# NOTA: anche questa chiave prima MANCAVA (fallback hardcoded).
+# ============================================================
+LH_SCANNER:
+  assets:
+    - BTC_USDT
+    - XAU_USD
