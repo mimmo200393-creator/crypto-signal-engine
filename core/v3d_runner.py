@@ -6,6 +6,19 @@ Identico a v3_runner.py tranne per:
 - Chiama generate_v3d_signal() invece di generate_v3_signal()
 - Salva in v3d_signals (tabella separata, stesso schema di v3_signals)
 - Logging con prefisso V3D per distinguere dai log V3.2 Frozen
+
+── MULTI-PROVIDER: perché qui NON si fetcha ──────────────────────
+v3d_runner scarica GLI STESSI timeframe (D1/M30/M15) nella STESSA
+tabella v3_candles_cache di v3_runner. Nel workflow v3_scanner_runner.py
+gira PRIMA, quindi quando parte V3D le candele sono già aggiornate.
+
+Su Crypto.com il refetch è solo spreco (chiamate gratuite).
+Su provider a consumo (Twelve Data per XAU_USD, 800 chiamate/giorno)
+RADDOPPIA i crediti: 198 → 396 chiamate/giorno per D1/M30/M15.
+
+Quindi: per gli asset a consumo il fetch viene saltato. Per Crypto.com
+resta il comportamento di prima (refetch ridondante ma innocuo, e
+protegge il caso in cui V3 non abbia girato).
 """
 
 import logging
@@ -13,7 +26,7 @@ from datetime import datetime, timezone
 
 from storage import db as core_db
 from core import indicators
-from core import v3_exchange
+from core import data_source
 from core import v3_db
 from strategies import institutional_scanner_v3_dynamic as v3d
 from notifications import v3_telegram
@@ -25,24 +38,47 @@ V3D_TIMEFRAMES = {"D1": "1D", "H4": "4h", "H1": "1h", "M30": "30m", "M15": "15m"
 
 
 def _update_candles(conn, asset: str, config: dict):
+    """
+    Aggiorna D1/M30/M15 per un asset.
+
+    NOTA: chiamata solo per gli asset NON a consumo (vedi _run_for_asset).
+    Per XAU_USD & co. le candele arrivano già da v3_runner, che gira prima
+    e scrive nella stessa tabella.
+    """
     base_url = config["EXCHANGE_BASE_URL"]
     max_per_call = config.get("MAX_CANDLES_PER_CALL", 300)
     request_delay = config.get("REQUEST_DELAY_SECONDS", 0.75)
     target_candles = config.get("BOOTSTRAP_TARGET_CANDLES", 300)
 
+    exchange = data_source.get_provider(asset, family="v3")
+
     for tf_label in ("D1", "M30", "M15"):
         tf = V3D_TIMEFRAMES[tf_label]
         existing_count = v3_db.count_v3_candles(conn, asset, tf)
+
         if existing_count < 50:
-            candles = v3_exchange.bootstrap_history(
-                base_url, asset, tf, target_candles, max_per_call, request_delay
-            )
+            try:
+                candles = exchange.bootstrap_history(
+                    base_url, asset, tf, target_candles, max_per_call, request_delay
+                )
+            except Exception as e:
+                logger.error("V3D bootstrap %s %s fallito: %s", asset, tf, e)
+                continue
             v3_db.upsert_v3_candles(conn, asset, tf, candles)
         else:
             last_ts = v3_db.get_v3_latest_timestamp(conn, asset, tf)
-            new_candles = v3_exchange.fetch_new_candles_since(
-                base_url, asset, tf, last_ts, max_per_call, request_delay
-            )
+
+            if not data_source.should_fetch(asset, tf, last_ts):
+                continue
+
+            try:
+                new_candles = exchange.fetch_new_candles_since(
+                    base_url, asset, tf, last_ts, max_per_call, request_delay
+                )
+            except Exception as e:
+                logger.error("V3D update %s %s fallito: %s", asset, tf, e)
+                continue
+
             if new_candles:
                 v3_db.upsert_v3_candles(conn, asset, tf, new_candles)
 
@@ -75,11 +111,21 @@ def _prepare_dataframes(conn, asset: str, config: dict):
 def _run_for_asset(conn, asset: str, config: dict):
     logger.info("V3D Scanner: inizio ciclo per %s", asset)
 
-    try:
-        _update_candles(conn, asset, config)
-    except Exception as e:
-        logger.error("V3D Scanner [%s]: errore update candele: %s", asset, e)
-        return
+    # ── Fetch candele ────────────────────────────────────────
+    # Per gli asset a consumo (Twelve Data) le candele D1/M30/M15 sono
+    # già state aggiornate da v3_runner: stessa tabella, gira prima nel
+    # workflow. Rifetchare qui raddoppierebbe i crediti consumati.
+    if data_source.is_metered(asset):
+        logger.info(
+            "V3D [%s]: skip fetch, candele già aggiornate da V3 (provider a consumo)",
+            asset,
+        )
+    else:
+        try:
+            _update_candles(conn, asset, config)
+        except Exception as e:
+            logger.error("V3D Scanner [%s]: errore update candele: %s", asset, e)
+            return
 
     df_d1, df_h4, df_h1, df_m30, df_m15 = _prepare_dataframes(conn, asset, config)
 
@@ -158,9 +204,11 @@ def run_v3d_scan(config: dict):
     """)
     conn.commit()
 
-    logger.info("=== V3D Scanner (Dynamic): inizio ciclo (PAXG_USDT + BTC_USDT) ===")
+    # Asset da config (fonte di verità unica). Fallback allineato al nuovo
+    # setup: BTC su Crypto.com, oro su Twelve Data. PAXG rimosso.
+    assets = config.get("V3D_SCANNER", {}).get("assets", ["BTC_USDT", "XAU_USD"])
 
-    assets = config.get("V3D_SCANNER", {}).get("assets", ["PAXG_USDT", "BTC_USDT"])
+    logger.info("=== V3D Scanner (Dynamic): inizio ciclo (%s) ===", ", ".join(assets))
 
     for asset in assets:
         try:
