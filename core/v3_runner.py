@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 
 from storage import db as core_db
 from core import indicators
-from core import v3_exchange
+from core import data_source
 from core import v3_db
 from strategies import institutional_scanner_v3 as v3
 from notifications import v3_telegram
@@ -30,11 +30,19 @@ V3_TIMEFRAMES = {"D1": "1D", "H4": "4h", "H1": "1h", "M30": "30m", "M15": "15m"}
 
 
 def _update_v3_candles(conn, asset: str, config: dict):
-    """Bootstrap o aggiornamento incrementale per D1/M30/M15 di un asset V3."""
+    """
+    Bootstrap o aggiornamento incrementale per D1/M30/M15 di un asset.
+
+    Multi-provider:
+        BTC_USDT -> Crypto.com
+        XAU_USD  -> Twelve Data
+    """
     base_url = config["EXCHANGE_BASE_URL"]
     max_per_call = config.get("MAX_CANDLES_PER_CALL", 300)
     request_delay = config.get("REQUEST_DELAY_SECONDS", 0.75)
     target_candles = config.get("BOOTSTRAP_TARGET_CANDLES", 300)
+
+    exchange = data_source.get_provider(asset, family="v3")
 
     for tf_label in ("D1", "M30", "M15"):
         tf = V3_TIMEFRAMES[tf_label]
@@ -42,16 +50,30 @@ def _update_v3_candles(conn, asset: str, config: dict):
 
         if existing_count < 50:
             logger.info("V3 bootstrap storico per %s %s...", asset, tf)
-            candles = v3_exchange.bootstrap_history(
-                base_url, asset, tf, target_candles, max_per_call, request_delay
-            )
+            try:
+                candles = exchange.bootstrap_history(
+                    base_url, asset, tf, target_candles, max_per_call, request_delay
+                )
+            except Exception as e:
+                logger.error("V3 bootstrap %s %s fallito: %s", asset, tf, e)
+                continue
             v3_db.upsert_v3_candles(conn, asset, tf, candles)
             logger.info("V3 bootstrap completato: %s %s (%d candele)", asset, tf, len(candles))
         else:
             last_ts = v3_db.get_v3_latest_timestamp(conn, asset, tf)
-            new_candles = v3_exchange.fetch_new_candles_since(
-                base_url, asset, tf, last_ts, max_per_call, request_delay
-            )
+
+            if not data_source.should_fetch(asset, tf, last_ts):
+                logger.info("V3 skip fetch %s %s (cadenza non raggiunta)", asset, tf)
+                continue
+
+            try:
+                new_candles = exchange.fetch_new_candles_since(
+                    base_url, asset, tf, last_ts, max_per_call, request_delay
+                )
+            except Exception as e:
+                logger.error("V3 update %s %s fallito: %s", asset, tf, e)
+                continue
+
             if new_candles:
                 v3_db.upsert_v3_candles(conn, asset, tf, new_candles)
                 logger.info("V3 update: +%d candele %s %s", len(new_candles), asset, tf)
@@ -147,9 +169,9 @@ def run_v3_scan(config: dict):
     conn = core_db.get_connection(config["DB_PATH"])
     v3_db.init_v3_schema(conn, "storage/v3_schema.sql")
 
-    logger.info("=== V3 Scanner: inizio ciclo completo (PAXG_USDT + BTC_USDT) ===")
-
     assets = config.get("V3_SCANNER", {}).get("assets", v3.V3_ASSETS)
+
+    logger.info("=== V3 Scanner: inizio ciclo completo (%s) ===", ", ".join(assets))
 
     for asset in assets:
         try:
