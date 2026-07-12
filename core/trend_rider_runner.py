@@ -24,12 +24,54 @@ from datetime import datetime, timezone
 from storage import db as core_db
 from core import v3_db
 from core import trend_rider_db
+from core.decision_ledger import trb_integration as ledger_link
 from strategies.edge_lab.trend_rider import generate_trb_signal
+from strategies.money_flow_map import build_money_flow_map
 
 logger = logging.getLogger("trend_rider.runner")
 
 TRB_ASSETS     = ["BTC_USDT", "PAXG_USDT"]
 TRB_TIMEFRAMES = {"H4": "4h", "H1": "1h", "M15": "15m"}
+
+
+# ============================================================
+# Decision Ledger — snapshot grezzi (Sprint 14)
+# ============================================================
+# Stessa lista tabelle di lh_runner.py: struttura nidificata originale
+# (non appiattita mie_*) richiesta dal Ledger per i voti engine.
+
+_MIE_SNAPSHOT_TABLES = [
+    ("structure",    "structure_snapshots"),
+    ("volatility",   "volatility_snapshots"),
+    ("order_block",  "order_block_snapshots"),
+    ("fvg",          "fvg_snapshots"),
+    ("liquidity",    "liquidity_snapshots"),
+    ("session_sweep","session_sweep_snapshots"),
+    ("reaction_map", "reaction_map_snapshots"),
+    ("candlestick",  "candlestick_snapshots"),
+    ("macro",        "macro_snapshots"),
+    ("market_state", "market_state_snapshots"),
+]
+
+
+def _read_raw_snapshots(conn, asset: str) -> dict:
+    """
+    Legge gli snapshot GREZZI (JSON non appiattito) di ogni engine MIE,
+    nel formato che il Decision Ledger si aspetta. Identica a
+    lh_runner._read_raw_snapshots — stesse tabelle, stesso formato.
+    """
+    raw = {}
+    for prefix, table in _MIE_SNAPSHOT_TABLES:
+        try:
+            row = conn.execute(
+                f"SELECT snapshot_json FROM {table} "
+                f"WHERE asset = ? ORDER BY timestamp_snapshot DESC LIMIT 1",
+                (asset,)
+            ).fetchone()
+            raw[prefix] = json.loads(row[0]) if row and row[0] else None
+        except Exception:
+            raw[prefix] = None
+    return raw
 
 
 def _get_session(now: datetime) -> str:
@@ -78,6 +120,23 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
                 "TRB Monitor [%s]: %s → outcome=%s bars=%d",
                 asset, upd["signal_id"][:8], upd["outcome"], upd["bars_open"],
             )
+            # ── Collega l'esito al Decision Ledger (passivo) ──
+            try:
+                row = conn.execute(
+                    "SELECT entry, stop_loss, rr2 FROM trb_signals WHERE signal_id=?",
+                    (upd["signal_id"],)
+                ).fetchone()
+                if row:
+                    ledger_link.link_outcome(
+                        decision_id=upd["signal_id"],
+                        outcome=upd["outcome"],
+                        entry=row[0], stop_loss=row[1],
+                        mae=upd.get("mae"), mfe=upd.get("mfe"),
+                        duration_bars=upd.get("bars_open"),
+                        rr_planned=row[2],
+                    )
+            except Exception as e:
+                logger.warning("TRB ledger link_outcome fallito (non-blocking): %s", e)
     except Exception as e:
         logger.error("TRB Monitor [%s]: errore: %s", asset, e)
 
@@ -165,6 +224,31 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
         except Exception as e:
             logger.error("TRB [%s %s]: errore inserimento: %s", asset, direction, e)
             continue
+
+        # ── Decision Ledger: registra i voti dei 13 engine (passivo) ──
+        # Modalita' solo-registrazione, stesso principio di LH. Non-blocking:
+        # se fallisce, TRB continua. L'MFM non serve alla generazione del
+        # segnale TRB (a differenza di LH), quindi lo calcoliamo qui al volo,
+        # solo per il Ledger, senza toccare _prepare_dataframes.
+        try:
+            raw_snaps = _read_raw_snapshots(conn, asset)
+            try:
+                df_d1 = v3_db.get_v3_candles_df(conn, asset, "1D", limit=60)
+                last_price = float(df_m15.iloc[-1]["close"])
+                mfm = build_money_flow_map(df_h4, df_d1, last_price)
+            except Exception as e_mfm:
+                logger.debug("TRB [%s]: MFM non disponibile per il Ledger: %s", asset, e_mfm)
+                mfm = None
+            snapshots = ledger_link.build_snapshots_dict(
+                raw_snaps.get("structure"), raw_snaps.get("volatility"),
+                raw_snaps.get("order_block"), raw_snaps.get("fvg"),
+                raw_snaps.get("liquidity"), raw_snaps.get("session_sweep"),
+                raw_snaps.get("reaction_map"), raw_snaps.get("candlestick"),
+                raw_snaps.get("macro"), raw_snaps.get("market_state"), mfm,
+            )
+            ledger_link.capture_executed(signal_id, asset, signal, snapshots)
+        except Exception as e:
+            logger.warning("TRB [%s %s]: ledger capture fallito (non-blocking): %s", asset, direction, e)
 
         logger.info(
             "TRB [%s %s]: SEGNALE entry=%.4f sl=%.4f tp1=%.4f tp2=%.4f "
