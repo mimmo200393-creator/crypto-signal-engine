@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Engine Edge Lab</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
+:root{
+  --bg:#0d0f14;--surface:#141720;--border:#1e2330;
+  --accent:#4fffb0;--accent2:#ff6b6b;--accent3:#ffd166;--accent4:#a78bfa;--accent5:#38bdf8;
+  --text:#e2e8f0;--dim:#5a6478;--buy:#4fffb0;--sell:#ff6b6b;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans',sans-serif;font-size:14px;line-height:1.6}
+header{border-bottom:1px solid var(--border);padding:18px 32px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+header h1{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+header .meta{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dim)}
+header a{color:var(--accent);text-decoration:none;font-family:'IBM Plex Mono',monospace;font-size:11px}
+.container{max-width:1320px;margin:0 auto;padding:24px 32px}
+.intro{font-size:13px;color:var(--dim);max-width:760px;margin-bottom:24px;line-height:1.7}
+.intro strong{color:var(--text)}
+.fw-header{padding:14px 20px;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
+.fw-tag{font-size:10px;padding:2px 8px;border-radius:4px;font-weight:600;background:rgba(90,100,120,.2);color:var(--dim)}
+.summary-grid{display:grid;gap:1px;background:var(--border)}
+.summary-grid.cols3{grid-template-columns:repeat(3,1fr)}
+.summary-grid>div{background:var(--surface);padding:14px 8px;text-align:center}
+.big{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600}
+.big.pos{color:var(--buy)} .big.neg{color:var(--sell)} .big.warn{color:var(--accent3)}
+.lbl{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);display:block;margin-top:3px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px}
+.ch{padding:10px 16px;border-bottom:1px solid var(--border);font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+table{width:100%;border-collapse:collapse}
+th{font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);padding:9px 14px;text-align:left;border-bottom:1px solid var(--border)}
+td{padding:8px 14px;border-bottom:1px solid var(--border);font-size:13px;vertical-align:middle}
+tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02)}
+.mono{font-family:'IBM Plex Mono',monospace;font-size:12px}
+.pos{color:var(--buy);font-weight:600} .neg{color:var(--sell)} .warn{color:var(--accent3)}
+.section-divider{margin:36px 0 24px;border-top:2px dashed var(--border);padding-top:8px}
+.empty{text-align:center;padding:24px;color:var(--dim);font-size:13px}
+.prov{font-size:10px;color:var(--dim);font-style:italic;margin-left:6px}
+.edge-row td{padding:10px 14px}
+.edge-name{font-weight:600;min-width:120px;display:inline-block}
+.edge-bar-wrap{display:flex;align-items:center;gap:10px;min-width:280px}
+.edge-bar-track{flex:1;height:16px;background:var(--border);border-radius:3px;position:relative;overflow:hidden}
+.edge-bar-mid{position:absolute;left:50%;top:0;bottom:0;width:1px;background:rgba(255,255,255,.15)}
+.edge-bar-fill{position:absolute;top:0;bottom:0;border-radius:2px}
+.edge-bar-fill.pos-fill{background:var(--buy)}
+.edge-bar-fill.neg-fill{background:var(--sell)}
+.edge-val{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;min-width:56px;text-align:right}
+@media(max-width:900px){.summary-grid.cols3{grid-template-columns:repeat(3,1fr)}.container{padding:12px}.edge-bar-wrap{min-width:160px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Engine Edge Lab</h1>
+  <div class="meta">2026-07-12 18:23 UTC &nbsp;|&nbsp; <a href="analytics_dashboard.html">&larr; Analytics Lab</a></div>
+</header>
+<div class="container">
+  <p class="intro">
+    Per ogni strategia, il <strong>voto</strong> di ognuno dei 13 engine MIE rispetto alla direzione
+    del trade (favorevole / neutro / contrario) viene confrontato con l'esito reale.
+    <strong>Edge % = Win Rate quando l'engine era favorevole − Win Rate quando non lo era.</strong>
+    Positivo (verde) = l'engine aiuta; negativo (rosso) = l'engine, quando favorevole, ha coinciso
+    con esiti peggiori — vale la pena capire perché, non necessariamente scartarlo.
+    Sotto 20 trade per gruppo il numero è etichettato "provvisorio": rumore statistico,
+    non un segnale su cui agire.
+  </p>
+  <div class="card"><div class="empty">Nessuna strategia con decisioni chiuse nel Decision Ledger ancora.</div></div>
+</div>
+</body>
+</html>
