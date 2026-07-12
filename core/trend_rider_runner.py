@@ -84,6 +84,12 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
     # ── MIE context (arriva da edge_lab_runner via market_ctx) ─
     mie_context = market_ctx.get("mie_context", {})
 
+    # ── Zone già segnalate e aperte ──────────────────────────
+    # Regola "una configurazione = un segnale": la strategia non deve
+    # ri-notificare una zona (Order Block / FVG) che ha già un segnale
+    # aperto, anche se il prezzo esce e rientra. Letto una volta per scan.
+    market_ctx["open_zone_refs"] = trend_rider_db.get_open_zone_refs(conn, asset)
+
     # ── Genera segnale BUY e SELL ────────────────────────────
     for direction in ("BUY", "SELL"):
 
