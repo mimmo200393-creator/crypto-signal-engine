@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from storage import db as core_db
 from core import v3_db
 from core import lh_db
+from core.decision_ledger import lh_integration as ledger_link
 from strategies.liquidity_hunter import generate_lh_signal
 from strategies.money_flow_map import build_money_flow_map
 
@@ -83,6 +84,30 @@ def _read_mie_context(conn, asset: str) -> dict:
     return context
 
 
+def _read_raw_snapshots(conn, asset: str) -> dict:
+    """
+    Legge gli snapshot GREZZI (JSON non appiattito) di ogni engine MIE,
+    nel formato che il Decision Ledger si aspetta (i reporter leggono la
+    struttura nidificata, es. structure_h4.classification).
+
+    Diverso da _read_mie_context che appiattisce con prefisso mie_ per il
+    market_snapshot. Qui serve la struttura originale per i voti engine.
+    """
+    import json as _json
+    raw = {}
+    for prefix, table in _MIE_SNAPSHOT_TABLES:
+        try:
+            row = conn.execute(
+                f"SELECT snapshot_json FROM {table} "
+                f"WHERE asset = ? ORDER BY timestamp_snapshot DESC LIMIT 1",
+                (asset,)
+            ).fetchone()
+            raw[prefix] = _json.loads(row[0]) if row and row[0] else None
+        except Exception:
+            raw[prefix] = None
+    return raw
+
+
 def _get_session(now: datetime) -> str:
     """Sessione di mercato in UTC."""
     t = now.hour * 60 + now.minute
@@ -125,6 +150,23 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                 "LH Monitor [%s]: %s → outcome=%s bars=%d",
                 asset, upd["signal_id"][:8], upd["outcome"], upd["bars_open"],
             )
+            # ── Collega l'esito al Decision Ledger (passivo) ──
+            try:
+                row = conn.execute(
+                    "SELECT entry, stop_loss, rr FROM lh_signals WHERE signal_id=?",
+                    (upd["signal_id"],)
+                ).fetchone()
+                if row:
+                    ledger_link.link_outcome(
+                        decision_id=upd["signal_id"],
+                        outcome=upd["outcome"],
+                        entry=row[0], stop_loss=row[1],
+                        mae=upd.get("mae"), mfe=upd.get("mfe"),
+                        duration_bars=upd.get("bars_open"),
+                        rr_planned=row[2],
+                    )
+            except Exception as e:
+                logger.warning("LH ledger link_outcome fallito (non-blocking): %s", e)
     except Exception as e:
         logger.error("LH Monitor [%s]: errore: %s", asset, e)
 
@@ -209,6 +251,22 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         logger.error("LH [%s]: errore inserimento: %s", asset, e)
         return
 
+    # ── Decision Ledger: registra i voti dei 13 engine (passivo) ──
+    # Modalita' solo-registrazione: accumula dati per l'analisi futura
+    # engine+confluenze. Non-blocking: se fallisce, LH continua.
+    try:
+        raw_snaps = _read_raw_snapshots(conn, asset)
+        snapshots = ledger_link.build_snapshots_dict(
+            raw_snaps.get("structure"), raw_snaps.get("volatility"),
+            raw_snaps.get("order_block"), raw_snaps.get("fvg"),
+            raw_snaps.get("liquidity"), raw_snaps.get("session_sweep"),
+            raw_snaps.get("reaction_map"), raw_snaps.get("candlestick"),
+            raw_snaps.get("macro"), raw_snaps.get("market_state"), mfm,
+        )
+        ledger_link.capture_executed(signal_id, asset, signal, snapshots)
+    except Exception as e:
+        logger.warning("LH [%s]: ledger capture fallito (non-blocking): %s", asset, e)
+
     logger.info(
         "LH [%s %s]: SEGNALE entry=%.4f sl=%.4f tp=%.4f rr=%.2f "
         "level=%s sweep=%s trigger=%s quality=%d (%s) "
@@ -216,7 +274,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         asset, direction,
         signal["entry"], signal["stop_loss"], signal["tp"], signal["rr"],
         signal["swept_level_label"], signal["sweep_direction"],
-        signal["trigger_type"], signal["quality_score"], signal["quality_label"],
+        signal.get("trigger_type") or "NONE", signal["quality_score"], signal["quality_label"],
         sum(1 for k, v in mie_context.items()
             if k.endswith("_available") and v),
         signal_id,
