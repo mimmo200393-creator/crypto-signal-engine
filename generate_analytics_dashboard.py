@@ -665,7 +665,7 @@ def generate():
 <body>
 <header>
   <h1>Crypto Signal Engine — Analytics Lab</h1>
-  <div class="meta">{generated} &nbsp;|&nbsp; <a href="unified_dashboard.html">&larr; Dashboard</a></div>
+  <div class="meta">{generated} &nbsp;|&nbsp; <a href="unified_dashboard.html">&larr; Dashboard</a> &nbsp;|&nbsp; <a href="engine_edge_dashboard.html">Engine Edge Lab →</a></div>
 </header>
 <div class="container">
 
