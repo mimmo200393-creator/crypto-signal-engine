@@ -118,10 +118,12 @@ jobs:
           if [ "$DB_CHANGED" = "true" ]; then
             python3 generate_unified_dashboard.py
             python3 generate_analytics_dashboard.py
+            python3 generate_engine_edge_dashboard.py
 
             git add data/signals.db data/decision_ledger.db \
                     docs/unified_dashboard.html \
-                    docs/analytics_dashboard.html
+                    docs/analytics_dashboard.html \
+                    docs/engine_edge_dashboard.html
 
             git commit -m "Scanner + Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
             git pull --rebase origin main && git push
