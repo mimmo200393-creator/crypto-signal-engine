@@ -44,6 +44,12 @@ EXPIRY_BARS_M15           = 96      # 24h operative
 LIQUIDITY_PROXIMITY_PCT   = 0.003   # 0.30%
 LIQUIDITY_SWEEP_LOOKBACK  = 4       # candele M15
 SWEEP_PENETRATION_MIN_PCT = 0.0003  # penetrazione minima oltre il livello
+# TETTO penetrazione: sopra questa soglia NON e' uno sweep ma un BREAKOUT.
+# I dati (n=10) mostrano che i trade persi hanno penetration molto piu' alta
+# dei vinti: lo sweep vero buca poco e rientra, il breakout sfonda e continua.
+# Soglia PRUDENTE (0.15%): scarta solo i breakout evidenti, non taratura fine
+# sui 2 TP (quella arrivera' con 30-40 trade). Registriamo pen_pct come flag.
+SWEEP_PENETRATION_MAX_PCT = 0.0015  # 0.15% — oltre = breakout, non sweep
 SL_BUFFER_PCT             = 0.001   # 0.10% buffer dietro peak sweep (era 0.05%)
 ATR_SL_FLOOR_MULT         = 0.8     # floor distanza SL = 0.8×ATR M15 (propagato da V41P1 Sprint 13c)
 MIN_RR                    = 1.5     # RR minimo — evita trade sbilanciati
@@ -129,13 +135,17 @@ def check_liquidity_sweep(
             # Sweep BEARISH: high supera il livello HIGH, close richiude sotto
             # → istituzionali cacciano stop BUY → movimento atteso SELL
             penetration = c_high - lvl_price
-            if penetration >= tol and c_close < lvl_price:
+            pen_pct = penetration / lvl_price if lvl_price > 0 else 0
+            # Sweep valido: penetrazione dentro la fascia [min, max].
+            # Sopra il tetto e' un breakout (sfonda e continua) -> non e' sweep.
+            if penetration >= tol and pen_pct <= SWEEP_PENETRATION_MAX_PCT and c_close < lvl_price:
                 return {
                     "direction":        "BEARISH",
                     "expected_trade":   "SELL",
                     "peak_price":       c_high,
                     "candle_idx":       i,
                     "penetration":      penetration,
+                    "penetration_pct":  pen_pct,
                     "level_price":      lvl_price,
                     "level_label":      level["label"],
                 }
@@ -144,13 +154,15 @@ def check_liquidity_sweep(
             # Sweep BULLISH: low scende sotto il livello LOW, close richiude sopra
             # → istituzionali cacciano stop SELL → movimento atteso BUY
             penetration = lvl_price - c_low
-            if penetration >= tol and c_close > lvl_price:
+            pen_pct = penetration / lvl_price if lvl_price > 0 else 0
+            if penetration >= tol and pen_pct <= SWEEP_PENETRATION_MAX_PCT and c_close > lvl_price:
                 return {
                     "direction":        "BULLISH",
                     "expected_trade":   "BUY",
                     "peak_price":       c_low,
                     "candle_idx":       i,
                     "penetration":      penetration,
+                    "penetration_pct":  pen_pct,
                     "level_price":      lvl_price,
                     "level_label":      level["label"],
                 }
@@ -379,10 +391,11 @@ def compute_quality(
     elif priority == "MEDIUM":
         score += SCORE_MEDIUM_PRIORITY_LEVEL
 
-    if trigger["trigger_type"] == "BOS":
-        score += SCORE_BOS_TRIGGER
-    else:
-        score += SCORE_CHOCH_TRIGGER
+    if trigger is not None:
+        if trigger["trigger_type"] == "BOS":
+            score += SCORE_BOS_TRIGGER
+        else:
+            score += SCORE_CHOCH_TRIGGER
 
     min_pen = swept_level["price"] * SWEEP_PENETRATION_MIN_PCT
     if sweep.get("penetration", 0) > min_pen * 2:
@@ -419,11 +432,59 @@ def compute_quality(
 # Entry point principale
 # ============================================================
 
+def _near_confluence_ob_fvg(mie_context: dict, ref_price: float, direction: str,
+                            atr_m15: float) -> dict:
+    """
+    Confluenze Order Block / FVG dalla teoria (doc 004: "sweep + Order Block",
+    "sweep + FVG"; doc 005: un OB di qualita' richiede uno sweep precedente).
+    Ritorna flag informativi (NON gate). Usa i campi reali del mie_context.
+    """
+    out = {"flag_near_order_block": False, "flag_near_fvg": False,
+           "ob_quality": None, "fvg_ref": None}
+    if not mie_context or atr_m15 <= 0:
+        return out
+    max_dist = 0.5 * atr_m15
+    side = "bullish" if direction == "BUY" else "bearish"
+
+    ob = mie_context.get(f"mie_order_block_nearest_fresh_{side}")
+    if isinstance(ob, dict):
+        mid = ob.get("zone_midpoint")
+        if mid is None:
+            zh, zl = ob.get("zone_high"), ob.get("zone_low")
+            if zh is not None and zl is not None:
+                mid = (float(zh) + float(zl)) / 2
+        if mid is not None and abs(ref_price - float(mid)) <= max_dist:
+            out["flag_near_order_block"] = True
+            out["ob_quality"] = ob.get("quality_score")
+
+    fvg = mie_context.get(f"mie_fvg_nearest_open_{side}")
+    if isinstance(fvg, dict) and not fvg.get("is_invalidated"):
+        zh, zl = fvg.get("zone_high"), fvg.get("zone_low")
+        if zh is not None and zl is not None:
+            mid = (float(zh) + float(zl)) / 2
+            if abs(ref_price - mid) <= max_dist:
+                out["flag_near_fvg"] = True
+                out["fvg_ref"] = fvg.get("id") or fvg.get("fvg_id")
+    return out
+
+
+def _pool_type(level_label: str) -> str:
+    """Classifica il tipo di pool (doc 004: Equal High/Low piu' forti degli Swing)."""
+    l = (level_label or "").lower()
+    if "equal" in l:   return "EQUAL"
+    if "weekly" in l:  return "WEEKLY"
+    if "daily" in l:   return "DAILY"
+    if "swing" in l:   return "SWING"
+    if "session" in l: return "SESSION"
+    return "OTHER"
+
+
 def generate_lh_signal(
     asset: str,
     df_m15: pd.DataFrame,
     mfm: dict,
     now: datetime,
+    mie_context: dict = None,
 ) -> dict:
     diag = {
         "strategy":     STRATEGY_NAME,
@@ -465,14 +526,23 @@ def generate_lh_signal(
         # Sweep BEARISH (High sweepato) → SELL
         direction = sweep["expected_trade"]
 
+        # Trigger BOS/CHOCH: NON piu' un gate. Lo sweep + rientro E' gia' la
+        # configurazione. Il BOS/CHOCH e' "il momento di entrare", che il
+        # trader decide guardando il grafico. Lo registriamo come FLAG per
+        # misurare se migliora davvero il WR (filosofia Entry Zone Finder).
         trigger = find_post_sweep_trigger(df_m15, sweep, direction)
-        if trigger is None:
-            continue
 
         diag["sweep"]   = sweep
         diag["trigger"] = trigger
 
-        entry = trigger["entry"]
+        # Entry suggerita = rientro dello sweep (close della candela di sweep,
+        # sul lato "buono" del livello). Se c'e' un trigger, usiamo il suo entry
+        # come riferimento; altrimenti il livello sweepato.
+        if trigger is not None:
+            entry = trigger["entry"]
+        else:
+            # Rientro: il prezzo e' tornato dal lato giusto del livello.
+            entry = float(sweep["level_price"])
 
         # ── Fix Bug 2: SL con buffer adeguato + floor ATR ───
         sl   = compute_sl(sweep, direction, entry=entry, atr_m15=atr_m15)
@@ -506,10 +576,28 @@ def generate_lh_signal(
             logger.info("LH [%s]: RR_TOO_LOW (%.2f < %.1f)", asset, rr, MIN_RR)
             continue
 
-        quality_score, quality_label = compute_quality(level, sweep, trigger, df_m15)
+        # ── Confluenze dalla teoria (doc 004/005/013) come FLAG ──
+        # "Maggiore il numero di conferme indipendenti, maggiore la probabilita'"
+        # Confluenza misurata dal LIVELLO SWEEPATO (doc 005: OB si forma dopo lo
+        # sweep, quindi e' vicino al livello, non all'entry del trigger che e'
+        # piu' distante). Usare l'entry sottostimerebbe le confluenze.
+        conf = _near_confluence_ob_fvg(mie_context or {}, sweep["level_price"], direction, atr_m15)
+        pool_type = _pool_type(level.get("label"))
+        # HTF pool = pool su timeframe superiori (piu' rilevanti per la teoria)
+        flag_htf_pool = level.get("priority_label") in ("CRITICAL", "HIGH")
+        # Numero di conferme (confluence score): quante confluenze presenti
+        confluence_count = sum([
+            conf["flag_near_order_block"],
+            conf["flag_near_fvg"],
+            trigger is not None,                    # BOS/CHOCH
+            pool_type in ("EQUAL", "WEEKLY", "DAILY"),  # pool forte
+            flag_htf_pool,
+        ])
 
-        if quality_label == "LOW":
-            return reject(f"QUALITY_TOO_LOW (score={quality_score})")
+        quality_score, quality_label = compute_quality(level, sweep, trigger, df_m15)
+        # NOTA: quality NON blocca piu'. I dati mostrano che e' invertito
+        # (HIGH perde, MEDIUM vince) perche' premia penetration alta e molti
+        # touch, cioe' i fattori dei breakout. Si registra come flag.
 
         try:
             trig_candle = df_m15.iloc[trigger["candle_idx"]]
@@ -537,13 +625,26 @@ def generate_lh_signal(
             "swept_level_priority": level.get("priority_label"),
             "swept_level_touches":  level.get("historical_touches", 0),
 
-            "sweep_direction":   sweep["direction"],
-            "sweep_peak_price":  sweep["peak_price"],
-            "sweep_candle_idx":  sweep["candle_idx"],
-            "sweep_penetration": round(sweep["penetration"], 6),
+            "sweep_direction":     sweep["direction"],
+            "sweep_peak_price":    sweep["peak_price"],
+            "sweep_candle_idx":    sweep["candle_idx"],
+            "sweep_penetration":   round(sweep["penetration"], 6),
+            "sweep_penetration_pct": round(sweep.get("penetration_pct", 0), 6),
 
-            "trigger_type":      trigger["trigger_type"],
-            "trigger_ref_level": trigger["ref_level"],
+            # Trigger ora e' un FLAG, non un gate: puo' essere assente.
+            "trigger_type":      trigger["trigger_type"] if trigger else None,
+            "trigger_ref_level": trigger["ref_level"]    if trigger else None,
+            "flag_bos_present":    bool(trigger and trigger["trigger_type"] == "BOS"),
+            "flag_choch_present":  bool(trigger and trigger["trigger_type"] == "CHOCH"),
+            "flag_trigger_present": trigger is not None,
+
+            # ── Confluenze dalla teoria (informative, NON gate) ──
+            "flag_near_order_block": conf["flag_near_order_block"],
+            "flag_near_fvg":         conf["flag_near_fvg"],
+            "ob_quality":            conf["ob_quality"],
+            "pool_type":             pool_type,
+            "flag_htf_pool":         bool(flag_htf_pool),
+            "confluence_count":      confluence_count,
 
             "tp_label":    tp_level["label"],
             "tp_priority": tp_level.get("priority_label"),
@@ -560,7 +661,7 @@ def generate_lh_signal(
             "level=%s sweep=%s trigger=%s quality=%d (%s)",
             asset, direction, entry, sl, tp, rr,
             level["label"], sweep["direction"],
-            trigger["trigger_type"], quality_score, quality_label,
+            trigger["trigger_type"] if trigger else "NONE", quality_score, quality_label,
         )
 
         return {"signal": signal, "diagnostics": diag}
