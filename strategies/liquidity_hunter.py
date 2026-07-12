@@ -666,4 +666,4 @@ def generate_lh_signal(
 
         return {"signal": signal, "diagnostics": diag}
 
-    return reject("NO_VALID_SETUP (nessun sweep + trigger trovato sui livelli attivi)")
+    return reject("NO_VALID_SETUP (nessuno sweep valido nella fascia di penetrazione sui livelli attivi)")
