@@ -137,7 +137,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
 
     # Genera segnale
     try:
-        result = generate_lh_signal(asset, df_m15, mfm, now)
+        result = generate_lh_signal(asset, df_m15, mfm, now, mie_context=mie_context)
     except Exception as e:
         logger.error("LH [%s]: errore generazione: %s", asset, e)
         return
