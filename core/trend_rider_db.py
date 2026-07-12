@@ -3,6 +3,20 @@ core/trend_rider_db.py
 NMC Trend Rider Balanced — Layer accesso dati
 
 Tabella: trb_signals
+
+── NOVITA': statistiche per Entry Zone ───────────────────────────
+La strategia calcola gia' quale zona ha generato il segnale
+(ema / order_block / fvg / support_resistance) in _in_entry_zone(),
+ma finora quel dato veniva scartato: finiva nelle diagnostics e non
+veniva mai salvato. Ora la colonna entry_zone_type lo persiste, cosi'
+si puo' misurare QUALI zone hanno davvero edge, non solo il WR globale.
+
+ATTENZIONE metodologica: le statistiche per zona sono affidabili solo
+sopra un campione minimo (vedi MIN_SAMPLE_PER_ZONE). Sotto quella soglia
+i numeri sono rumore e non vanno usati per decidere. La colonna va
+popolata da subito comunque: ogni trade non registrato oggi e' un dato
+perso per sempre (i 25 trade precedenti hanno entry_zone_type = NULL,
+non recuperabile).
 """
 
 from __future__ import annotations
@@ -14,6 +28,11 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import pandas as pd
+
+
+# Soglia minima di trade CHIUSI per considerare affidabili le statistiche
+# di una zona. Sotto questo numero: raccogliere, non concludere.
+MIN_SAMPLE_PER_ZONE = 25
 
 
 SCHEMA_SQL = """
@@ -42,6 +61,15 @@ CREATE TABLE IF NOT EXISTS trb_signals (
     pullback_valid       BOOLEAN DEFAULT 0,
     new_24h_extreme      BOOLEAN DEFAULT 0,
     session              TEXT,
+
+    -- NUOVO: quale Entry Zone ha generato il segnale.
+    -- Valori: 'ema' | 'order_block' | 'fvg' | 'support_resistance'
+    entry_zone_type      TEXT,
+    zone_ref             TEXT,
+    flag_adx_ok          BOOLEAN DEFAULT 0,
+    flag_trigger_present BOOLEAN DEFAULT 0,
+    flag_volatility_ok   BOOLEAN DEFAULT 1,
+    flag_sl_widened      BOOLEAN DEFAULT 0,
 
     liquidity_target       TEXT,
     liquidity_target_price REAL,
@@ -74,6 +102,30 @@ CREATE INDEX IF NOT EXISTS idx_trb_quality
 
 def init_trb_schema(conn: sqlite3.Connection):
     conn.executescript(SCHEMA_SQL)
+    _migrate_add_entry_zone(conn)
+    conn.commit()
+
+
+def _migrate_add_entry_zone(conn: sqlite3.Connection):
+    """
+    Garantisce colonna entry_zone_type + indice, sia sui DB gia' esistenti
+    (ALTER) sia sui nuovi (dove la colonna e' gia' nello schema ma l'indice
+    no, perche' spostato qui per non fallire sui DB vecchi).
+    Idempotente: sicuro chiamarlo ad ogni avvio.
+    """
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(trb_signals)")]
+    if "entry_zone_type" not in cols:
+        conn.execute("ALTER TABLE trb_signals ADD COLUMN entry_zone_type TEXT")
+    if "zone_ref" not in cols:
+        conn.execute("ALTER TABLE trb_signals ADD COLUMN zone_ref TEXT")
+    for fcol, fdef in [("flag_adx_ok","0"),("flag_trigger_present","0"),
+                       ("flag_volatility_ok","1"),("flag_sl_widened","0")]:
+        if fcol not in cols:
+            conn.execute(f"ALTER TABLE trb_signals ADD COLUMN {fcol} BOOLEAN DEFAULT {fdef}")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trb_zone "
+        "ON trb_signals(entry_zone_type, final_outcome)"
+    )
     conn.commit()
 
 
@@ -87,11 +139,13 @@ def insert_trb_signal(conn: sqlite3.Connection, signal: dict) -> str:
             entry, stop_loss, tp1, tp2, risk, rr1, rr2,
             trend_h1, trend_h4, adx, atr_m15, atr_h1,
             pullback_valid, new_24h_extreme, session,
+            entry_zone_type, zone_ref,
+            flag_adx_ok, flag_trigger_present, flag_volatility_ok, flag_sl_widened,
             liquidity_target, liquidity_target_price, liquidity_priority,
             quality_score, quality_label,
             final_outcome, expiry_bars
         ) VALUES (
-            ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+            ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
         )
         """,
         (
@@ -116,6 +170,14 @@ def insert_trb_signal(conn: sqlite3.Connection, signal: dict) -> str:
             bool(signal.get("pullback_valid", False)),
             bool(signal.get("new_24h_extreme", False)),
             signal.get("session"),
+            # NUOVO: la zona che ha generato il segnale. Il runner deve
+            # metterla in signal['entry_zone_type'] (vedi patch trend_rider).
+            signal.get("entry_zone_type"),
+            signal.get("zone_ref"),
+            bool(signal.get("flag_adx_ok", False)),
+            bool(signal.get("flag_trigger_present", False)),
+            bool(signal.get("flag_volatility_ok", True)),
+            bool(signal.get("flag_sl_widened", False)),
             signal.get("liquidity_target"),
             signal.get("liquidity_target_price"),
             signal.get("liquidity_priority"),
@@ -127,6 +189,94 @@ def insert_trb_signal(conn: sqlite3.Connection, signal: dict) -> str:
     )
     conn.commit()
     return signal_id
+
+
+def get_zone_statistics(conn: sqlite3.Connection,
+                        asset: Optional[str] = None) -> list[dict]:
+    """
+    Statistiche aggregate per tipo di Entry Zone, sui trade CHIUSI.
+
+    Ritorna una riga per zona con:
+      - trades          : quanti trade chiusi (il campione)
+      - reliable        : True se trades >= MIN_SAMPLE_PER_ZONE
+      - win_rate        : % di TP (TP1_HIT o TP2_HIT) sui chiusi
+      - avg_rr2         : RR2 medio pianificato
+      - avg_mfe         : max escursione favorevole media (il prezzo ha
+                          "reagito" dalla zona?)
+      - avg_mae         : max escursione avversa media
+      - avg_bars_to_close: durata media in barre M15
+
+    IMPORTANTE: usare solo le righe con reliable=True per decidere.
+    Le altre sono in raccolta: mostrarle serve a vedere l'accumulo, non
+    a trarre conclusioni.
+    """
+    where = "WHERE final_outcome IN ('TP1_HIT','TP2_HIT','SL_HIT','EXPIRED')"
+    params: list = []
+    if asset:
+        where += " AND asset = ?"
+        params.append(asset)
+
+    rows = conn.execute(
+        f"""
+        SELECT
+            COALESCE(entry_zone_type, 'UNKNOWN')          AS zone,
+            COUNT(*)                                       AS trades,
+            SUM(CASE WHEN final_outcome IN ('TP1_HIT','TP2_HIT')
+                     THEN 1 ELSE 0 END)                    AS wins,
+            AVG(rr2)                                       AS avg_rr2,
+            AVG(mfe)                                       AS avg_mfe,
+            AVG(mae)                                       AS avg_mae,
+            AVG(bars_open)                                 AS avg_bars
+        FROM trb_signals
+        {where}
+        GROUP BY zone
+        ORDER BY trades DESC
+        """,
+        params,
+    ).fetchall()
+
+    out = []
+    for zone, trades, wins, avg_rr2, avg_mfe, avg_mae, avg_bars in rows:
+        out.append({
+            "zone": zone,
+            "trades": trades,
+            "reliable": trades >= MIN_SAMPLE_PER_ZONE,
+            "win_rate": round(100.0 * wins / trades, 1) if trades else 0.0,
+            "wins": wins,
+            "losses": trades - wins,
+            "avg_rr2": round(avg_rr2, 2) if avg_rr2 is not None else None,
+            "avg_mfe": round(avg_mfe, 4) if avg_mfe is not None else None,
+            "avg_mae": round(avg_mae, 4) if avg_mae is not None else None,
+            "avg_bars_to_close": round(avg_bars, 1) if avg_bars is not None else None,
+        })
+    return out
+
+
+def get_open_zone_refs(conn: sqlite3.Connection, asset: str) -> set:
+    """
+    Insieme delle configurazioni gia' segnalate e ancora OPEN per un asset,
+    nel formato "{asset}|{direction}|{zone_ref}".
+
+    Serve alla regola "una configurazione = un segnale": il runner la legge
+    una volta per scan e la passa in market_ctx['open_zone_refs'], cosi' la
+    strategia non ri-notifica una zona che ha gia' un segnale aperto.
+
+    Nota: usa la colonna zone_ref. Se non esiste ancora (DB pre-migrazione),
+    ritorna set vuoto (nessuna dedup, fail-open).
+    """
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(trb_signals)")]
+    if "zone_ref" not in cols:
+        return set()
+
+    rows = conn.execute(
+        """
+        SELECT asset, direction, zone_ref
+        FROM trb_signals
+        WHERE asset = ? AND final_outcome = 'OPEN' AND zone_ref IS NOT NULL
+        """,
+        (asset,),
+    ).fetchall()
+    return {f"{a}|{d}|{z}" for a, d, z in rows}
 
 
 def has_recent_trb_signal(
