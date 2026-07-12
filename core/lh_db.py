@@ -37,6 +37,16 @@ CREATE TABLE IF NOT EXISTS lh_signals (
     sweep_direction         TEXT,
     sweep_peak_price        REAL,
     sweep_penetration       REAL,
+    sweep_penetration_pct   REAL,
+    flag_bos_present        BOOLEAN DEFAULT 0,
+    flag_choch_present      BOOLEAN DEFAULT 0,
+    flag_trigger_present    BOOLEAN DEFAULT 0,
+    flag_near_order_block   BOOLEAN DEFAULT 0,
+    flag_near_fvg           BOOLEAN DEFAULT 0,
+    ob_quality              INTEGER,
+    pool_type               TEXT,
+    flag_htf_pool           BOOLEAN DEFAULT 0,
+    confluence_count        INTEGER DEFAULT 0,
 
     trigger_type            TEXT,
     trigger_ref_level       REAL,
@@ -64,8 +74,27 @@ CREATE INDEX IF NOT EXISTS idx_lh_level
 """
 
 
+def _migrate_lh_flags(conn: sqlite3.Connection):
+    """Aggiunge le colonne nuove ai DB gia' esistenti (idempotente)."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(lh_signals)")]
+    for col, typ in [("sweep_penetration_pct", "REAL"),
+                     ("flag_bos_present", "BOOLEAN DEFAULT 0"),
+                     ("flag_choch_present", "BOOLEAN DEFAULT 0"),
+                     ("flag_trigger_present", "BOOLEAN DEFAULT 0"),
+                     ("flag_near_order_block", "BOOLEAN DEFAULT 0"),
+                     ("flag_near_fvg", "BOOLEAN DEFAULT 0"),
+                     ("ob_quality", "INTEGER"),
+                     ("pool_type", "TEXT"),
+                     ("flag_htf_pool", "BOOLEAN DEFAULT 0"),
+                     ("confluence_count", "INTEGER DEFAULT 0")]:
+        if col not in cols:
+            conn.execute(f"ALTER TABLE lh_signals ADD COLUMN {col} {typ}")
+    conn.commit()
+
+
 def init_lh_schema(conn: sqlite3.Connection):
     conn.executescript(SCHEMA_SQL)
+    _migrate_lh_flags(conn)
     conn.commit()
 
 
@@ -80,12 +109,14 @@ def insert_lh_signal(conn: sqlite3.Connection, signal: dict) -> str:
             swept_level_label, swept_level_price,
             swept_level_priority, swept_level_touches,
             sweep_direction, sweep_peak_price, sweep_penetration,
+            sweep_penetration_pct, flag_bos_present, flag_choch_present, flag_trigger_present,
+            flag_near_order_block, flag_near_fvg, ob_quality, pool_type, flag_htf_pool, confluence_count,
             trigger_type, trigger_ref_level,
             tp_label, tp_priority,
             quality_score, quality_label,
             final_outcome, expiry_bars
         ) VALUES (
-            ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+            ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
         )
         """,
         (
@@ -107,6 +138,16 @@ def insert_lh_signal(conn: sqlite3.Connection, signal: dict) -> str:
             signal.get("sweep_direction"),
             signal.get("sweep_peak_price"),
             signal.get("sweep_penetration"),
+            signal.get("sweep_penetration_pct"),
+            bool(signal.get("flag_bos_present", False)),
+            bool(signal.get("flag_choch_present", False)),
+            bool(signal.get("flag_trigger_present", False)),
+            bool(signal.get("flag_near_order_block", False)),
+            bool(signal.get("flag_near_fvg", False)),
+            signal.get("ob_quality"),
+            signal.get("pool_type"),
+            bool(signal.get("flag_htf_pool", False)),
+            signal.get("confluence_count", 0),
             signal.get("trigger_type"),
             signal.get("trigger_ref_level"),
             signal.get("tp_label"),
