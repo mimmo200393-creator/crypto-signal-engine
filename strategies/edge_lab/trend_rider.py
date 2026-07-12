@@ -182,6 +182,62 @@ def _check_pullback(df_h1: pd.DataFrame, direction: str) -> bool:
 
 
 # ============================================================
+# Entry Zone Classifier — cuore dell'Entry Zone Finder
+# Usa SOLO dati reali del mie_context (Order Block, FVG appiattiti,
+# verificati nel DB). Support/Resistance escluso: nessuna sorgente.
+# ============================================================
+
+ZONE_MAX_ATR = 0.5
+
+
+def _classify_entry_zone(
+    df_h1: pd.DataFrame,
+    direction: str,
+    atr_h1: float,
+    market_ctx: dict,
+) -> tuple[str, Optional[str], Optional[float]]:
+    """
+    Classifica la zona di ingresso. Priorita': order_block > fvg > ema.
+
+    Ritorna (zone_type, zone_ref, zone_midpoint):
+      - zone_type : 'order_block' | 'fvg' | 'ema'
+      - zone_ref  : id univoco della zona (per deduplicare: una config = un
+                    segnale). Per OB/FVG e' l'id della zona; per EMA e' None.
+      - zone_midpoint : centro della zona, base per Entry suggerita.
+
+    Ritorna ('ema', None, None) se nessuna zona strutturale e' vicina.
+    """
+    if len(df_h1) < 1 or atr_h1 <= 0:
+        return "ema", None, None
+
+    price = float(df_h1.iloc[-1]["close"])
+    max_dist = ZONE_MAX_ATR * atr_h1
+
+    mie = market_ctx.get("mie_context", {}) or {}
+    side = "bullish" if direction == "BUY" else "bearish"
+
+    ob = mie.get(f"mie_order_block_nearest_fresh_{side}")
+    if isinstance(ob, dict):
+        mid = ob.get("zone_midpoint")
+        if mid is None:
+            zh, zl = ob.get("zone_high"), ob.get("zone_low")
+            if zh is not None and zl is not None:
+                mid = (float(zh) + float(zl)) / 2
+        if mid is not None and abs(price - float(mid)) <= max_dist:
+            return "order_block", str(ob.get("id", f"ob_{round(float(mid),2)}")), float(mid)
+
+    fvg = mie.get(f"mie_fvg_nearest_open_{side}")
+    if isinstance(fvg, dict) and not fvg.get("is_invalidated"):
+        zh, zl = fvg.get("zone_high"), fvg.get("zone_low")
+        if zh is not None and zl is not None:
+            mid = (float(zh) + float(zl)) / 2
+            if abs(price - mid) <= max_dist:
+                return "fvg", str(fvg.get("fvg_id", f"fvg_{round(mid,2)}")), mid
+
+    return "ema", None, None
+
+
+# ============================================================
 # Trigger M15
 # ============================================================
 
@@ -343,6 +399,22 @@ def _compute_quality(
     return score, label
 
 
+
+
+def _zone_already_signaled(market_ctx: dict, asset: str, direction: str,
+                           zone_ref: str) -> bool:
+    """
+    True se questa configurazione (asset+direction+zona) ha gia' un segnale
+    OPEN. Il runner passa in market_ctx['open_zone_refs'] l'insieme delle
+    zone gia' segnalate e ancora aperte (lette dal DB una volta per scan).
+    Se il runner non lo fornisce, nessuna dedup (fail-open, non blocca).
+    """
+    open_refs = market_ctx.get("open_zone_refs")
+    if not open_refs:
+        return False
+    return f"{asset}|{direction}|{zone_ref}" in open_refs
+
+
 # ============================================================
 # Entry point principale
 # ============================================================
@@ -354,6 +426,23 @@ def generate_trb_signal(
     df_m15: pd.DataFrame,
     direction: str,
 ) -> dict:
+    """
+    ENTRY ZONE FINDER.
+
+    Filosofia: trovare le migliori Entry Zone, non rifiutare trade.
+    GATE (solo questi bloccano il segnale):
+      - dati sufficienti
+      - trend H1 allineato alla direzione
+      - il prezzo e' in una Entry Zone (order_block / fvg / ema)
+      - SL strutturale valido (senza SL non c'e' trade eseguibile)
+
+    Tutto il resto (ADX, trigger M15, pullback exhaustion, quality score,
+    volatilita', nuovo estremo 24h) NON blocca: viene calcolato e REGISTRATO
+    come flag nel segnale, cosi' i dati diranno nel tempo se migliorano il WR.
+
+    Entry = prezzo corrente (close ultima M15): il segnale scatta quando il
+    prezzo ENTRA nella zona. Sara' il trader a valutare la price action.
+    """
     asset = market_ctx.get("asset", "UNKNOWN")
 
     diag: dict = {
@@ -362,6 +451,7 @@ def generate_trb_signal(
         "asset":      asset,
         "rejection":  None,
         "conditions": {},
+        "flags":      {},
     }
 
     def reject(reason: str) -> dict:
@@ -369,7 +459,7 @@ def generate_trb_signal(
         logger.info("TRB [%s %s]: REJECT %s", asset, direction, reason)
         return {"signal": None, "diagnostics": diag}
 
-    # ── Preparazione indicatori ──────────────────────────────
+    # ── GATE: dati sufficienti ───────────────────────────────
     if len(df_h1) < EMA_LONG + ADX_PERIOD + 5:
         return reject("INSUFFICIENT_H1_DATA")
     if len(df_m15) < 10:
@@ -379,14 +469,12 @@ def generate_trb_signal(
     df_h4  = _add_indicators_h4(df_h4) if len(df_h4) >= EMA_LONG + 5 else df_h4
     df_m15 = _add_indicators_m15(df_m15)
 
-    # ATR M15 calcolato subito — serve per SL minimo
     atr_m15 = float(df_m15.iloc[-1]["atr"]) if "atr" in df_m15.columns else 0.0
     atr_h1  = float(df_h1.iloc[-1]["atr"])  if "atr" in df_h1.columns  else 0.0
 
-    # ── Gate 1: Trend H1 ────────────────────────────────────
+    # ── GATE: Trend H1 allineato ─────────────────────────────
     trend_h1 = _get_trend_h1(df_h1)
     diag["conditions"]["trend_h1"] = trend_h1
-
     if trend_h1 is None:
         return reject("NO_H1_TREND")
     if direction == "BUY"  and trend_h1 != "BULLISH":
@@ -394,45 +482,45 @@ def generate_trb_signal(
     if direction == "SELL" and trend_h1 != "BEARISH":
         return reject(f"TREND_NOT_ALIGNED (H1={trend_h1})")
 
-    # ── Gate 2: Momentum ADX ────────────────────────────────
-    adx = _get_adx(df_h1)
-    diag["conditions"]["adx"] = round(adx, 2)
-
-    if adx < ADX_MIN:
-        return reject(f"ADX_TOO_LOW ({adx:.1f} < {ADX_MIN})")
-
-    # ── Gate 3: Pullback ────────────────────────────────────
+    # ── GATE: il prezzo e' in una Entry Zone ─────────────────
+    # La zona e' il cuore della strategia. Se il prezzo non e' in nessuna
+    # zona (ne' OB, ne' FVG, ne' pullback su EMA), non c'e' nulla da segnalare.
+    entry_zone_type, zone_ref, zone_mid = _classify_entry_zone(
+        df_h1, direction, atr_h1, market_ctx
+    )
     pullback_ok = _check_pullback(df_h1, direction)
+    diag["conditions"]["entry_zone"] = entry_zone_type
     diag["conditions"]["pullback"] = pullback_ok
 
-    if not pullback_ok:
-        return reject("NO_PULLBACK")
+    # Zona valida = zona strutturale (OB/FVG) OPPURE pullback su EMA.
+    in_zone = (entry_zone_type in ("order_block", "fvg")) or pullback_ok
+    if not in_zone:
+        return reject("NO_ENTRY_ZONE")
 
-    # ── Gate 4: Volatility (solo PAXG) ──────────────────────
-    if "PAXG" in asset:
-        vol_ok = _check_volatility_paxg(df_m15)
-        diag["conditions"]["volatility_ok"] = vol_ok
-        if not vol_ok:
-            return reject("PAXG_VOLATILITY_TOO_LOW")
+    # ── Una configurazione = un solo segnale ─────────────────
+    # Se questa zona ha gia' generato un segnale ancora aperto, non
+    # ri-notificare (il prezzo che esce e rientra nella stessa zona NON
+    # deve produrre nuovi avvisi). zone_ref identifica la configurazione.
+    if zone_ref is not None:
+        diag["conditions"]["zone_ref"] = zone_ref
+        if _zone_already_signaled(market_ctx, asset, direction, zone_ref):
+            return reject(f"ZONE_ALREADY_SIGNALED ({zone_ref})")
+
+    # ── Entry suggerita = centro della zona (per OB/FVG) ─────
+    # Non e' il prezzo corrente: e' dove il setup suggerisce di entrare.
+    # Per EMA (nessun midpoint) si usa il prezzo corrente come riferimento.
+    if zone_mid is not None:
+        entry = zone_mid
     else:
-        diag["conditions"]["volatility_ok"] = True
-
-    # ── Gate 5: Trigger M15 ─────────────────────────────────
-    trigger_idx = _find_trigger_candle(df_m15, direction, lookback=5)
-    diag["conditions"]["trigger"] = trigger_idx is not None
-
-    if trigger_idx is None:
-        return reject("NO_TRIGGER")
-
-    trigger_candle = df_m15.iloc[trigger_idx]
-    entry = float(trigger_candle["close"])
+        entry = float(df_m15.iloc[-1]["close"])
     diag["entry"] = entry
 
-    # ── Stop Loss ────────────────────────────────────────────
-    sl = _find_swing_sl(df_m15, direction, trigger_idx, lookback=15)
+    # ── GATE: Stop Loss strutturale ──────────────────────────
+    # SL dallo swing recente delle ultime candele M15 (parte dall'ultima).
+    last_idx = len(df_m15) - 1
+    sl = _find_swing_sl(df_m15, direction, last_idx, lookback=15)
     if sl is None:
         return reject("NO_SWING_SL")
-
     if direction == "BUY"  and sl >= entry:
         return reject(f"SL_INVALID_BUY (sl={sl:.4f} >= entry={entry:.4f})")
     if direction == "SELL" and sl <= entry:
@@ -441,69 +529,72 @@ def generate_trb_signal(
     risk = abs(entry - sl)
     if risk <= 0:
         return reject("RISK_ZERO")
-
-    # ── SL minimo: 1.5x ATR M15 ─────────────────────────────
     if atr_m15 > 0 and risk < MIN_SL_ATR_MULT * atr_m15:
-        return reject(
-            f"SL_TOO_CLOSE (risk={risk:.4f} < {MIN_SL_ATR_MULT}x ATR={atr_m15:.4f})"
-        )
-
+        # SL troppo stretto: allarga al minimo strutturale invece di rifiutare.
+        # (registriamo che e' stato allargato)
+        risk = MIN_SL_ATR_MULT * atr_m15
+        sl = entry - risk if direction == "BUY" else entry + risk
+        diag["flags"]["sl_widened_to_min_atr"] = True
+    else:
+        diag["flags"]["sl_widened_to_min_atr"] = False
     diag["sl"] = sl
 
     # ── Take Profit ──────────────────────────────────────────
-    if direction == "BUY":
-        tp1 = entry + risk
-    else:
-        tp1 = entry - risk
-
+    tp1 = entry + risk if direction == "BUY" else entry - risk
     liq_map    = market_ctx.get("liquidity")
     liq_target = _find_liquidity_target(liq_map, direction)
     tp2_raw    = float(liq_target["price"]) if liq_target else None
 
-    # TP2 deve essere più lontano dall'entry rispetto a TP1
-    # BUY:  tp2 > tp1 > entry
-    # SELL: tp2 < tp1 < entry
     if tp2_raw is not None:
         if direction == "BUY" and tp2_raw > tp1:
             tp2 = tp2_raw
         elif direction == "SELL" and tp2_raw < tp1:
             tp2 = tp2_raw
         else:
-            # Target di liquidità troppo vicino — fallback 2R
             tp2 = tp1 + risk if direction == "BUY" else tp1 - risk
-            liq_target = None  # non valido, non conta come bonus
+            liq_target = None
     else:
         tp2 = tp1 + risk if direction == "BUY" else tp1 - risk
-
     diag["tp1"] = tp1
     diag["tp2"] = tp2
 
-    # ── Contesto per analytics ───────────────────────────────
+    # ── FLAG registrati (NON bloccano) ───────────────────────
+    # Questi erano gate; ora sono informazioni per misurare nel tempo
+    # se migliorano davvero il win rate.
+    adx = _get_adx(df_h1)
+    diag["flags"]["adx"] = round(adx, 2)
+    diag["flags"]["adx_ok"] = adx >= ADX_MIN
+
+    trigger_idx = _find_trigger_candle(df_m15, direction, lookback=5)
+    diag["flags"]["trigger_present"] = trigger_idx is not None
+
+    if "PAXG" in asset:
+        diag["flags"]["volatility_ok"] = _check_volatility_paxg(df_m15)
+    else:
+        diag["flags"]["volatility_ok"] = True
+
     trend_h4    = _get_trend_h4(df_h4) if len(df_h4) >= EMA_LONG + 5 else None
     new_extreme = _check_new_24h_extreme(df_m15, direction)
     sess_ctx    = market_ctx.get("session") or {}
     session     = sess_ctx.get("current_session", "UNKNOWN")
-
     diag["trend_h4"]    = trend_h4
     diag["new_extreme"] = new_extreme
     diag["session"]     = session
 
-    # ── Quality Score ────────────────────────────────────────
     quality_score, quality_label = _compute_quality(
         trend_h4, trend_h1, adx, pullback_ok,
         trigger_idx, liq_target, new_extreme, direction,
     )
-
     diag["quality_score"] = quality_score
     diag["quality_label"] = quality_label
+    diag["flags"]["quality_score"] = quality_score
+    diag["flags"]["quality_label"] = quality_label
+    # NOTA: quality_label NON blocca piu' (prima QUALITY_TOO_LOW rifiutava).
 
-    if quality_label == "LOW":
-        return reject(f"QUALITY_TOO_LOW (score={quality_score})")
-
-    # ── Timestamp setup ──────────────────────────────────────
+    # ── Timestamp setup = ora corrente (prezzo entrato in zona) ─
     try:
-        conf_ts_ms = int(trigger_candle["timestamp"])
-        conf_dt    = datetime.fromtimestamp(conf_ts_ms / 1000, tz=timezone.utc)
+        last_ts_ms = int(df_m15.iloc[-1]["timestamp"])
+        conf_dt    = datetime.fromtimestamp(last_ts_ms / 1000, tz=timezone.utc)
     except Exception:
         conf_dt = datetime.now(timezone.utc)
 
@@ -528,6 +619,8 @@ def generate_trb_signal(
         "atr_m15":          round(atr_m15, 4),
         "atr_h1":           round(atr_h1,  4),
         "pullback_valid":   pullback_ok,
+        "entry_zone_type":  entry_zone_type,
+        "zone_ref":         zone_ref,
         "new_24h_extreme":  new_extreme,
         "session":          session,
         "liquidity_target":       liq_target.get("label")         if liq_target else None,
@@ -537,14 +630,19 @@ def generate_trb_signal(
         "quality_label":    quality_label,
         "final_outcome":    "OPEN",
         "expiry_bars":      EXPIRY_BARS_M15,
+        # Flag di timing/qualita' registrati (non bloccano piu'):
+        "flag_adx_ok":          diag["flags"]["adx_ok"],
+        "flag_trigger_present": diag["flags"]["trigger_present"],
+        "flag_volatility_ok":   diag["flags"]["volatility_ok"],
+        "flag_sl_widened":      diag["flags"]["sl_widened_to_min_atr"],
     }
 
     logger.info(
-        "TRB [%s %s]: SIGNAL entry=%.4f sl=%.4f tp1=%.4f tp2=%.4f "
-        "risk=%.4f score=%d (%s) adx=%.1f session=%s target=%s",
-        asset, direction, entry, sl, tp1, tp2, risk,
-        quality_score, quality_label, adx, session,
-        liq_target.get("label") if liq_target else "N/A",
+        "TRB [%s %s]: ZONE SIGNAL entry=%.4f sl=%.4f tp1=%.4f tp2=%.4f "
+        "zone=%s risk=%.4f score=%d adx=%.1f trigger=%s session=%s",
+        asset, direction, entry, sl, tp1, tp2,
+        entry_zone_type, risk, quality_score, adx,
+        diag["flags"]["trigger_present"], session,
     )
 
     return {"signal": signal, "diagnostics": diag}
