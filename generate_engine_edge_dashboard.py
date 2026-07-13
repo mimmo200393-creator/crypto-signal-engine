@@ -231,7 +231,44 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
 .edge-bar-fill.pos-fill{background:var(--buy)}
 .edge-bar-fill.neg-fill{background:var(--sell)}
 .edge-val{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;min-width:56px;text-align:right}
-@media(max-width:900px){.summary-grid.cols3{grid-template-columns:repeat(3,1fr)}.container{padding:12px}.edge-bar-wrap{min-width:160px}}
+@media(max-width:900px){.container{padding:12px}.edge-bar-wrap{min-width:160px}}
+
+/* ---- MOBILE: la tabella engine scorre in orizzontale, con eleganza ---- */
+@media(max-width:640px){
+  body{font-size:13px}
+  header{padding:14px 16px}
+  .container{padding:10px 12px}
+  .intro{font-size:12px;line-height:1.6}
+  .fw-header{padding:12px 14px;font-size:12px;flex-wrap:wrap}
+  .ch{padding:9px 12px;font-size:10px;line-height:1.4}
+  .summary-grid.cols3>div{padding:12px 4px}
+  .big{font-size:16px}
+
+  /* wrapper scrollabile attorno a ogni tabella */
+  .table-scroll{
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;      /* momentum su iOS */
+    scrollbar-width:thin;
+    scrollbar-color:var(--border) transparent;
+    /* sfumatura sul bordo destro: suggerisce "scorri per vedere altro" */
+    -webkit-mask-image:linear-gradient(to right,#000 92%,transparent 100%);
+            mask-image:linear-gradient(to right,#000 92%,transparent 100%);
+  }
+  .table-scroll::-webkit-scrollbar{height:5px}
+  .table-scroll::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+  /* la tabella engine mantiene le colonne, con larghezze minime sensate */
+  table.engine-table{min-width:520px}
+  .edge-name{min-width:96px}
+  .edge-bar-wrap{min-width:180px}
+  .edge-row td.mono{white-space:nowrap}
+
+  /* prima colonna (nome engine) FISSA mentre si scorre */
+  table.engine-table td:first-child{
+    position:sticky;left:0;z-index:2;
+    background:var(--surface);
+  }
+}
 """
 
 
@@ -297,8 +334,8 @@ def regime_table(rb):
     if not body:
         body = _empty_row(4)
     return f"""<div class="card"><div class="ch">Per Regime di Mercato</div>
-  <table><thead><tr><th>Regime</th><th>N</th><th>Win%</th><th>Expectancy</th></tr></thead>
-  <tbody>{body}</tbody></table></div>"""
+  <div class="table-scroll"><table><thead><tr><th>Regime</th><th>N</th><th>Win%</th><th>Expectancy</th></tr></thead>
+  <tbody>{body}</tbody></table></div></div>"""
 
 
 def section_strategy(strategy, rows):
@@ -332,7 +369,7 @@ def section_strategy(strategy, rows):
   <div class="ch">Engine Edge — Win Rate quando favorevole vs. neutro/contrario
     {f'<span class="prov" style="margin-left:8px">{n_prov} engine sotto soglia campione ({MIN_SAMPLE}/gruppo)</span>' if n_prov else ''}
   </div>
-  <table><tbody>{edge_rows}</tbody></table>
+  <div class="table-scroll"><table class="engine-table"><tbody>{edge_rows}</tbody></table></div>
 </div>"""
 
     return f"""
