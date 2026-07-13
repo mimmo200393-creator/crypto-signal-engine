@@ -230,6 +230,21 @@ def breakdown(rows, key_fn, keys, stat_fn):
     return {k: stat_fn([r for r in rows if key_fn(r) == k]) for k in keys}
 
 
+def asset_keys_from(rows, preferred=("BTC_USDT", "XAU_USD", "PAXG_USDT")):
+    """
+    Ricava la lista degli asset DAI DATI, invece di una lista fissa.
+    Cosi' se si cambia asset (es. PAXG_USDT -> XAU_USD) la tabella "Per Asset"
+    si aggiorna da sola, senza dover modificare il codice ogni volta.
+    Gli asset noti vengono messi in ordine preferito; eventuali altri
+    (nuovi/imprevisti) vengono aggiunti in coda, ordinati alfabeticamente,
+    cosi' non spariscono mai dalle statistiche.
+    """
+    present = {r["asset"] for r in rows if r.get("asset")}
+    ordered = [a for a in preferred if a in present]
+    ordered += sorted(a for a in present if a not in preferred)
+    return ordered
+
+
 # ============================================================
 # CSS
 # ============================================================
@@ -361,7 +376,7 @@ def section_edge_lab(rows, recent):
 
     no_data = "" if rows else '<div class="card"><div class="empty">In attesa del primo segnale OTE-SC.</div></div>'
 
-    asset_keys = ["BTC_USDT","PAXG_USDT"]
+    asset_keys = asset_keys_from(rows)
     dir_keys   = ["BUY","SELL"]
     sess_keys  = ["ASIA","LONDON","NEW_YORK"]
     ql_keys    = ["HIGH","MEDIUM","LOW"]
@@ -437,7 +452,7 @@ def section_trb(rows, recent):
 
     no_data = "" if rows else '<div class="card"><div class="empty">In attesa del primo segnale TRB.</div></div>'
 
-    asset_keys = ["BTC_USDT","PAXG_USDT"]
+    asset_keys = asset_keys_from(rows)
     dir_keys   = ["BUY","SELL"]
     sess_keys  = ["ASIA","LONDON","NEW_YORK"]
     ql_keys    = ["PREMIUM","HIGH","MEDIUM"]
@@ -525,7 +540,7 @@ def section_lh(rows, recent):
 
     no_data = "" if rows else '<div class="card"><div class="empty">In attesa del primo segnale Liquidity Hunter.</div></div>'
 
-    asset_keys   = ["BTC_USDT","PAXG_USDT"]
+    asset_keys = asset_keys_from(rows)
     dir_keys     = ["BUY","SELL"]
     trigger_keys = ["BOS","CHOCH"]
     priority_keys = ["CRITICAL","HIGH","MEDIUM"]
@@ -600,7 +615,11 @@ def section_v41p1(rows):
 </div>"""
 
     bd_trigger = breakdown(rows, lambda r: r["trigger"],                   ["BOS","CHOCH","BOS+CHOCH"], stats_v41)
-    bd_asset   = breakdown(rows, lambda r: r["asset"].replace("_USDT",""), ["BTC","PAXG"],              stats_v41)
+    v41_asset_keys = asset_keys_from(rows, preferred=("BTC","XAU","PAXG"))
+    v41_asset_keys = [a.replace("_USDT","").replace("_USD","") for a in v41_asset_keys]
+    # dedup preservando l'ordine (BTC_USDT e BTC potrebbero collassare)
+    _seen = set(); v41_asset_keys = [a for a in v41_asset_keys if not (a in _seen or _seen.add(a))]
+    bd_asset   = breakdown(rows, lambda r: r["asset"].replace("_USDT","").replace("_USD",""), v41_asset_keys, stats_v41)
     bd_sess    = breakdown(rows, lambda r: r["session"] or "N/A",          ["ASIA","LONDON","NEW_YORK"], stats_v41)
 
     def v41_table(title, d, keys, key_label):
@@ -631,7 +650,7 @@ def section_v41p1(rows):
   {summary}
   <div class="grid-2">
     {v41_table("Per Trigger", bd_trigger, ["BOS","CHOCH","BOS+CHOCH"], "Trigger")}
-    {v41_table("Per Asset",   bd_asset,   ["BTC","PAXG"],              "Asset")}
+    {v41_table("Per Asset",   bd_asset,   v41_asset_keys,              "Asset")}
   </div>
   {v41_table("Per Sessione", bd_sess, ["ASIA","LONDON","NEW_YORK"], "Sessione")}
 </div>"""
