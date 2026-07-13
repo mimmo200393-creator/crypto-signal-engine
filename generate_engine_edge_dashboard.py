@@ -258,6 +258,11 @@ def edge_bar_row(label, e):
     val_cls = "pos" if edge > 0 else ("neg" if edge < 0 else "")
     prov = '<span class="prov">provvisorio</span>' if e["provisional"] else ""
 
+    # I win rate/R medi possono essere None (gruppo senza r_realized registrato):
+    # formattazione difensiva per non far crashare la f-string.
+    def _pct(v):  return f"{v}%"       if v is not None else "n/d"
+    def _r(v):    return f"{v:+.2f}R"  if v is not None else "n/d"
+
     return f"""<tr class="edge-row">
   <td><span class="edge-name">{label}</span>{prov}</td>
   <td>
@@ -270,8 +275,8 @@ def edge_bar_row(label, e):
     </div>
   </td>
   <td class="mono" style="font-size:11px;color:var(--dim)">
-    fav {e['n_fav']} ({e['win_fav']}% win, {e['r_fav']:+.2f}R avg) &nbsp;·&nbsp;
-    altro {e['n_oth']} ({e['win_oth']}% win, {e['r_oth']:+.2f}R avg)
+    fav {e['n_fav']} ({_pct(e['win_fav'])} win, {_r(e['r_fav'])} avg) &nbsp;·&nbsp;
+    altro {e['n_oth']} ({_pct(e['win_oth'])} win, {_r(e['r_oth'])} avg)
   </td>
 </tr>"""
 
