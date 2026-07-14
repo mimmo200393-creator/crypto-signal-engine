@@ -25,6 +25,15 @@ on:
 permissions:
   contents: write
 
+# STESSO GRUPPO DELLO SCAN: i .db sono file binari e git non sa fonderli.
+# Se questo workflow e scan.yml girano insieme, il secondo che committa
+# trova il repo cambiato e va in conflitto irrisolvibile (successo davvero:
+# "CONFLICT (content): Merge conflict in data/decision_ledger.db").
+# Con lo stesso group, questo workflow ASPETTA che lo scan finisca.
+concurrency:
+  group: signal-engine-scan
+  cancel-in-progress: false
+
 jobs:
   fix:
     runs-on: ubuntu-latest
@@ -104,6 +113,32 @@ jobs:
             echo "Nessuna modifica da committare."
           else
             git commit -m "Fix outcome storici TRB nel Decision Ledger"
-            git pull --rebase origin main && git push
-            echo "Ledger corretto e pushato."
+
+            # I .db sono binari: se lo scan ha committato nel frattempo, il
+            # rebase va in conflitto. In quel caso NON si tenta il merge (non
+            # ha senso su un binario): si riparte dalla versione remota, si
+            # riapplica la fix e si ripusha. La fix e' idempotente, quindi
+            # rifarla su dati gia' corretti non fa danni.
+            if git pull --rebase origin main; then
+              git push
+              echo "Ledger corretto e pushato."
+            else
+              echo "Conflitto sul rebase (lo scan ha committato nel frattempo)."
+              echo "Riparto dalla versione remota e riapplico la fix..."
+              git rebase --abort || true
+              git fetch origin main
+              git reset --hard origin/main
+              python3 fix_trb_ledger_outcomes.py --apply
+              rm -f data/decision_ledger.db.backup_* || true
+              python3 generate_unified_dashboard.py || true
+              python3 generate_analytics_dashboard.py || true
+              python3 generate_engine_edge_dashboard.py || true
+              git add data/decision_ledger.db \
+                      docs/unified_dashboard.html \
+                      docs/analytics_dashboard.html \
+                      docs/engine_edge_dashboard.html
+              git commit -m "Fix outcome storici TRB nel Decision Ledger (retry)"
+              git push
+              echo "Ledger corretto e pushato al secondo tentativo."
+            fi
           fi
