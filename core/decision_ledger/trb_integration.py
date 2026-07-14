@@ -2,21 +2,26 @@
 core/decision_ledger/trb_integration.py
 Aggancio di Trend Rider (TRB) al Decision Ledger.
 
-Replica il pattern di v41p1_integration.py, adattato a LH. Il collector
+Replica il pattern di v41p1_integration.py, adattato a TRB. Il collector
 (decision_collector) e il writer (ledger_writer) sono generici: accettano
-`strategy` come parametro. Qui c'e' solo l'adattatore specifico per LH.
+`strategy` come parametro. Qui c'e' solo l'adattatore specifico per TRB.
+
+ATTENZIONE: TRB usa outcome col suffisso _HIT (TP2_HIT, SL_HIT), a
+differenza di LH/V41P1 che usano "TP"/"SL". Vedi _OUTCOME_MAP in
+link_outcome: e' proprio li' che il copy-paste da LH aveva introdotto
+un bug che azzerava tutti i TP di TRB nel Ledger.
 
 ── MODALITA' SOLO-REGISTRAZIONE ──────────────────────────────────
-LH scrive nel Ledger i voti dei 13 engine MIE per ogni segnale, MA i
-dati NON vanno analizzati finche' non ce ne sono abbastanza. Con ~18
-fattori (5 confluenze LH + 13 engine) servono ~150-180 trade chiusi per
+TRB scrive nel Ledger i voti dei 13 engine MIE per ogni segnale, MA i
+dati NON vanno analizzati finche' non ce ne sono abbastanza. Con ~19
+fattori (6 confluenze TRB + 13 engine) servono ~150-180 trade chiusi per
 un'analisi robusta: sotto quella soglia qualsiasi combinazione "vincente"
 e' overfitting. La registrazione parte ora per non perdere dati (come
 successe con entry_zone_type del Trend Rider), l'analisi arriva dopo.
 
 ── NON-BLOCKING ──────────────────────────────────────────────────
 Ogni funzione cattura le eccezioni e logga un warning: se il Ledger
-fallisce, LH continua a funzionare. La registrazione e' passiva e non
+fallisce, TRB continua a funzionare. La registrazione e' passiva e non
 deve MAI rompere la generazione dei segnali.
 """
 
@@ -32,8 +37,8 @@ logger = logging.getLogger("trb_integration")
 
 STRATEGY = "TRB"
 
-# Gate di LH che vale la pena registrare come REJECTED (per l'analisi futura
-# "quali engine erano attivi quando LH ha rifiutato"). I rifiuti banali
+# Gate di TRB che vale la pena registrare come REJECTED (per l'analisi futura
+# "quali engine erano attivi quando TRB ha rifiutato"). I rifiuti banali
 # (dati insufficienti) non si salvano per non gonfiare il Ledger.
 SIGNIFICANT_REJECT_GATES = {
     "NO_ENTRY_ZONE",            # prezzo non in nessuna zona (OB/FVG/EMA)
@@ -70,7 +75,7 @@ def build_snapshots_dict(structure_snapshot, vol_snapshot, ob_snapshot,
 
 def _trade_dict(signal: dict) -> dict:
     """
-    Estrae i campi del trade dal signal LH per il Ledger.
+    Estrae i campi del trade dal signal TRB per il Ledger.
     Include le CONFLUENZE della teoria SMC (oltre ai campi standard), cosi'
     l'analisi futura potra' combinare engine MIE + confluenze in un colpo.
     """
@@ -95,7 +100,7 @@ def _trade_dict(signal: dict) -> dict:
 def capture_executed(decision_id: str, asset: str, signal: dict,
                      snapshots: dict,
                      ledger_path: str = ledger_writer.DEFAULT_LEDGER_PATH) -> None:
-    """Registra un segnale LH ESEGUITO nel Ledger. decision_id = signal_id."""
+    """Registra un segnale TRB ESEGUITO nel Ledger. decision_id = signal_id."""
     try:
         dc.collect_decision(
             decision_id=decision_id,
@@ -115,7 +120,7 @@ def capture_rejected(decision_id: str, asset: str, direction: Optional[str],
                      reject_gate: str, snapshots: dict,
                      signal: Optional[dict] = None,
                      ledger_path: str = ledger_writer.DEFAULT_LEDGER_PATH) -> None:
-    """Registra un rifiuto LH significativo (solo i gate rilevanti)."""
+    """Registra un rifiuto TRB significativo (solo i gate rilevanti)."""
     try:
         if reject_gate not in SIGNIFICANT_REJECT_GATES:
             return
@@ -141,7 +146,7 @@ def link_outcome(decision_id: str, outcome: str, entry: float, stop_loss: float,
                  rr_planned: float = None,
                  ledger_path: str = ledger_writer.DEFAULT_LEDGER_PATH) -> None:
     """
-    Collega l'esito di un trade LH chiuso al Ledger. Idempotente.
+    Collega l'esito di un trade TRB chiuso al Ledger. Idempotente.
 
     Replica la logica di v41p1_integration.link_outcome (ledger_writer
     espone update_outcome, non link_outcome: la conversione outcome->R
@@ -152,10 +157,33 @@ def link_outcome(decision_id: str, outcome: str, entry: float, stop_loss: float,
         risk = abs(entry - stop_loss) if (entry and stop_loss) else None
         be_moved = (risk is not None and risk < 1e-9)
 
-        ledger_outcome = {
-            "SL": "SL", "TP": "TP", "TP2": "TP",
-            "EXPIRED": "EXPIRED", "BE": "BE",
-        }.get(outcome, "EXPIRED")
+        # ── MAPPA OUTCOME TRB → LEDGER ────────────────────────────────
+        # BUG FIX (verificato su decision_ledger.db, 2026-07-14):
+        # questa mappa era stata copiata da lh_integration.py SENZA adattarla.
+        # LH usa gli outcome "TP"/"SL"; TRB usa il formato col suffisso
+        # "TP2_HIT"/"SL_HIT". Non essendo nel dict, cadevano tutti sul
+        # default silenzioso "EXPIRED":
+        #     trb_signals (verita'):  TP2_HIT 13 | SL_HIT 20 | EXPIRED 2
+        #     decision_ledger:        EXPIRED 14                ← tutto perso
+        # Con 0 TP il win rate era 0% in ogni gruppo → edge=0 per tutti i 13
+        # engine → TRB spariva dall'Engine Edge Lab.
+        # Se aggiungi un nuovo outcome a TRB, aggiungilo QUI.
+        _OUTCOME_MAP = {
+            # formato TRB (con suffisso _HIT)
+            "TP2_HIT": "TP", "TP1_HIT": "TP", "SL_HIT": "SL", "BE_HIT": "BE",
+            # formato generico/LH (senza suffisso) — retrocompatibilita'
+            "TP": "TP", "TP2": "TP", "TP1": "TP", "SL": "SL", "BE": "BE",
+            "EXPIRED": "EXPIRED",
+        }
+        ledger_outcome = _OUTCOME_MAP.get(outcome)
+        if ledger_outcome is None:
+            # NON silenziare: un outcome sconosciuto e' un bug, non un EXPIRED.
+            # E' il default silenzioso che ha nascosto il problema per settimane.
+            logger.warning(
+                "TRB link_outcome: outcome sconosciuto '%s' (decision %s) "
+                "→ registrato come EXPIRED. Aggiungerlo a _OUTCOME_MAP.",
+                outcome, decision_id)
+            ledger_outcome = "EXPIRED"
 
         r_realized = None
         mfe_r = None
