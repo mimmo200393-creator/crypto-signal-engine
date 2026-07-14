@@ -100,6 +100,13 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 edge_lab_runner.py
 
+      - name: Market Radar V1 (BTC_USDT + XAU_USD)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 market_radar_scanner_runner.py
+
       - name: Cleanup old snapshots
         run: python3 cleanup_snapshots.py
 
@@ -119,11 +126,13 @@ jobs:
             python3 generate_unified_dashboard.py
             python3 generate_analytics_dashboard.py
             python3 generate_engine_edge_dashboard.py
+            python3 generate_radar_lab_dashboard.py
 
             git add data/signals.db data/decision_ledger.db \
                     docs/unified_dashboard.html \
                     docs/analytics_dashboard.html \
-                    docs/engine_edge_dashboard.html
+                    docs/engine_edge_dashboard.html \
+                    docs/radar_lab_dashboard.html
 
             git commit -m "Scanner + Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
             git pull --rebase origin main && git push
