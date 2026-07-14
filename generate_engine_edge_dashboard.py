@@ -422,7 +422,7 @@ def generate():
 <body>
 <header>
   <h1>Engine Edge Lab</h1>
-  <div class="meta">{generated} &nbsp;|&nbsp; <a href="analytics_dashboard.html">&larr; Analytics Lab</a></div>
+  <div class="meta">{generated} &nbsp;|&nbsp; <a href="analytics_dashboard.html">&larr; Analytics Lab</a> &nbsp;|&nbsp; <a href="radar_lab_dashboard.html">Radar Lab →</a></div>
 </header>
 <div class="container">
   <p class="intro">
