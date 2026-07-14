@@ -198,3 +198,30 @@ LH_SCANNER:
   assets:
     - BTC_USDT
     - XAU_USD
+
+# ============================================================
+# Market Radar V1 — riconoscimento esaurimenti (SOLA REGISTRAZIONE)
+# Il radar NON genera BUY/SELL: registra "Entry Zone da osservare" e ne
+# misura il comportamento (respiro MFE/MAE, stop, TP scalp, BE) nella
+# tabella radar_zones. La validazione avviene dalla dashboard Radar Lab (beta).
+# ============================================================
+MARKET_RADAR:
+  enabled: true
+  assets:
+    - BTC_USDT
+    - XAU_USD
+  # Soglie di transizione della macchina a stati (LARGHE all'inizio,
+  # da restringere sui dati). velocity 0.6 = calibrata sui dati M15 reali.
+  velocity_min: 0.6            # impulso "veloce" (ROC/candela in ATR)
+  amplitude_atr_min: 2.0       # impulso "ampio" (da structure_state)
+  context_zone_max_atr: 1.0    # prezzo entro N ATR da una zona tecnica
+  exhaustion_atr_ratio: 0.7    # contrazione ATR sotto cui = esaurimento
+  observe_window_bars: 30      # candele su cui misurare respiro dopo la zona
+  # "Fotografia" allo scatto — livelli suggeriti (notifiche future + validazione).
+  # Tarati sul trading reale: scalp veloce 1 ATR, BE 1 ATR, stop equilibrato 1 ATR.
+  # Solo registrati: il monitor dice se il respiro li raggiunge, non chiude nulla.
+  stop_loss_atr: 1.0
+  tp_scalp_atr: 1.0
+  be_trigger_atr: 1.0
+  # V1: notifiche SPENTE (sola registrazione). true per gli alert "zona da osservare".
+  notify: false
