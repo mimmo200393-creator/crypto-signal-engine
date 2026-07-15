@@ -142,12 +142,24 @@ def velocity_buckets(zones):
     Se il radar ha edge sulla velocita', le fasce alte hanno MFE piu' alto.
     """
     closed = [z for z in zones if z["status"] == "CLOSED"]
-    def vel(z): return (z.get("features") or {}).get("velocity")
+
+    def vel(z):
+        # Legge la velocita' dell'IMPULSO, non quella misurata all'emissione.
+        # Le feature della zona sono calcolate durante l'esaurimento: la loro
+        # `velocity` e' bassa per costruzione (0.046-0.269 nei dati reali) e
+        # cadrebbe SEMPRE nella prima fascia, rendendo l'ipotesi non testabile.
+        # Il gate d'ingresso richiede >= 0.6, quindi le fasce partono da li'.
+        f = z.get("features") or {}
+        return f.get("impulse_velocity")
+
+    # Fasce ricalibrate sul gate reale (IMPULSE_VELOCITY_MIN = 0.6) e sulla
+    # distribuzione misurata su M15 (p90 ~0.6, max ~1.3). Sotto 0.6 non
+    # dovrebbero esistere zone: se ne compaiono, e' un bug, non un dato.
     buckets = [
-        ("lenta (< 0.4)",     lambda v: v is not None and v < 0.4),
-        ("media (0.4–0.7)",   lambda v: v is not None and 0.4 <= v < 0.7),
-        ("veloce (0.7–1.0)",  lambda v: v is not None and 0.7 <= v < 1.0),
-        ("molto veloce (≥1)", lambda v: v is not None and v >= 1.0),
+        ("sotto soglia (< 0.6) ⚠", lambda v: v is not None and v < 0.6),
+        ("normale (0.6–0.8)",      lambda v: v is not None and 0.6 <= v < 0.8),
+        ("veloce (0.8–1.0)",       lambda v: v is not None and 0.8 <= v < 1.0),
+        ("molto veloce (≥ 1.0)",   lambda v: v is not None and v >= 1.0),
     ]
     out = []
     for label, cond in buckets:
