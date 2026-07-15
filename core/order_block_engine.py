@@ -42,6 +42,11 @@ DEFAULT_CONFIG = {
     "detection_lookback": 50,        # candele da analizzare per trovare nuovi OB
     "min_displacement_atr": 1.0,     # impulso minimo per considerare un OB valido
     "min_body_ratio": 0.5,           # body/range minimo della candela OB
+    # Sweep prima dell'OB (doc 005). Rilevato dalle SOLE candele M15 del
+    # modulo: nessuna dipendenza da Liquidity/Structure Engine.
+    # Alimenta solo la quality (+2), NON la detection.
+    "sweep_lookback_bars": 20,       # finestra in cui cercare l'estremo di swing
+    "sweep_check_bars": 3,           # candele prima dell'OB in cui cercare la presa
     "zone_overlap_threshold": 0.5,   # sovrapposizione minima per dedup (50%)
     "max_age_bars": 500,             # oltre questa età, OB diventa STALE
     "max_tracked": 30,               # OB massimi per asset nella mappa
@@ -136,6 +141,62 @@ def init_ob_schema(conn: sqlite3.Connection):
 # Detection: trova nuovi OB nella finestra M15
 # ============================================================
 
+def _has_sweep_before_ob(data, ob_idx: int, direction: str, cfg: dict) -> bool:
+    """
+    C'e' stata una presa di liquidita' poco prima della formazione dell'OB?
+
+    Doc 005: un Order Block di qualita' si forma DOPO una presa di liquidita'.
+    Il prezzo buca un estremo di swing recente — dove stanno gli stop — e vi
+    rientra; solo allora parte l'impulso. Senza quella presa, la candela
+    prima del movimento e' una candela qualsiasi.
+
+    AUTONOMO: usa SOLO le candele M15 che il modulo ha gia' in mano.
+    Nessuna lettura da Liquidity Engine, Structure Engine o altri moduli.
+    Prima questa informazione arrivava da structure_snapshot["events"], che
+    non emette MAI eventi SWEEP/LIQUIDITY (verificato: 0 su 500 snapshot):
+    has_sweep_before era quindi sempre False e il +2 della quality non veniva
+    mai assegnato — il criterio principale del doc 005 era di fatto spento.
+
+    NON influenza la detection: l'OB viene rilevato comunque, esattamente
+    come prima. Alimenta solo _compute_quality.
+
+    Definizione (solo candele):
+      - livello di liquidita' = estremo delle candele nella finestra
+        precedente, esclusa la coda di sweep_check_bars candele
+      - sweep = nella coda, una candela buca quel livello e CHIUDE rientrando
+      Per un OB BULLISH si cerca la presa SOTTO (sell-side liquidity),
+      per un OB BEARISH quella SOPRA (buy-side liquidity).
+    """
+    lookback = int(cfg.get("sweep_lookback_bars",
+                           DEFAULT_CONFIG["sweep_lookback_bars"]))
+    check_bars = int(cfg.get("sweep_check_bars",
+                             DEFAULT_CONFIG["sweep_check_bars"]))
+
+    start = max(0, ob_idx - lookback)
+    ref_end = ob_idx - check_bars + 1     # fine (esclusa) della finestra di riferimento
+
+    # Serve storia sufficiente per definire un livello E una coda in cui bucarlo
+    if ref_end - start < 3:
+        return False
+
+    lows = data["low"].values
+    highs = data["high"].values
+    closes = data["close"].values
+
+    if direction == "BULLISH":
+        prior_low = float(lows[start:ref_end].min())
+        for k in range(ref_end, ob_idx + 1):
+            if float(lows[k]) < prior_low and float(closes[k]) > prior_low:
+                return True
+    else:
+        prior_high = float(highs[start:ref_end].max())
+        for k in range(ref_end, ob_idx + 1):
+            if float(highs[k]) > prior_high and float(closes[k]) < prior_high:
+                return True
+
+    return False
+
+
 def _detect_order_blocks(df_m15, structure_snapshot: dict,
                           atr_m15: float, config: dict) -> list:
     """
@@ -189,6 +250,8 @@ def _detect_order_blocks(df_m15, structure_snapshot: dict,
                         "formation_ts": int(ob_candle.get("timestamp", 0)),
                         "displacement_atr": round(c_body / atr_m15, 2),
                         "impulse_bar_index": i,
+                        "has_sweep_before": _has_sweep_before_ob(
+                            data, j, "BULLISH", config),
                     })
                     break
 
@@ -206,6 +269,8 @@ def _detect_order_blocks(df_m15, structure_snapshot: dict,
                         "formation_ts": int(ob_candle.get("timestamp", 0)),
                         "displacement_atr": round(c_body / atr_m15, 2),
                         "impulse_bar_index": i,
+                        "has_sweep_before": _has_sweep_before_ob(
+                            data, j, "BEARISH", config),
                     })
                     break
 
@@ -517,13 +582,11 @@ def produce_ob_snapshot(asset: str, df_m15, structure_snapshot: dict,
         ob_id = str(uuid.uuid4())[:8]
         has_fvg = _check_fvg_overlap(conn, asset, cand["zone_high"], cand["zone_low"])
 
-        # Check sweep: c'era un sweep prima della formazione?
-        has_sweep = False
-        if structure_snapshot:
-            events = structure_snapshot.get("events", [])
-            sweep_events = [e for e in events if "SWEEP" in e.get("type", "").upper()
-                            or "LIQUIDITY" in e.get("type", "").upper()]
-            has_sweep = len(sweep_events) > 0
+        # Sweep prima della formazione: rilevato da _detect_order_blocks
+        # sulle sole candele M15 del modulo (vedi _has_sweep_before_ob).
+        # Prima si leggeva structure_snapshot["events"] — dipendenza esterna
+        # che non produceva mai eventi SWEEP/LIQUIDITY, quindi sempre False.
+        has_sweep = bool(cand.get("has_sweep_before", False))
 
         # Trend at formation
         trend = "UNKNOWN"
