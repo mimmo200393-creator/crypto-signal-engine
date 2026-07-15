@@ -284,9 +284,18 @@ def report_candlestick(snap: dict, direction: str) -> dict:
     if not has_conf:
         state = 0
     conf_score = snap.get("zone_confluence_score", 0) or 0
+    # Sprint 17: qualita' GEOMETRICA del pattern (0-100), calcolata solo da
+    # wick/body/posizione/simmetria — informazione NUOVA e indipendente dal
+    # punteggio della zona RM. Va in value2, non in conf: `conf` contiene il
+    # punteggio zona, che sui dati reali VARIA (33-76 su 127 righe gia'
+    # raccolte); sovrascriverlo mescolerebbe due metriche diverse nella stessa
+    # colonna, corrompendo la serie storica. Gli snapshot pre-Sprint 17 non
+    # hanno il campo → value2 resta None, distinguibile da uno zero vero.
+    pattern_q = snap.get("pattern_quality_score")
     return {"state": state,
             "conf": int(conf_score) if has_conf else 0,
-            "value": 1 if has_conf else 0}
+            "value": 1 if has_conf else 0,
+            "value2": float(pattern_q) if (has_conf and pattern_q is not None) else None}
 
 
 def report_macro(snap: dict, direction: str) -> dict:
