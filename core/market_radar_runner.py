@@ -68,12 +68,29 @@ RADAR_CFG = {
     "IMPULSE_AMPLITUDE_ATR_MIN": 2.0,   # amplitude_atr da impulses_json
     "IMPULSE_VELOCITY_MIN":      0.6,   # calibrato sui dati M15 reali (p90 ~0.6, non 1.0)
     "IMPULSE_LOOKBACK_BARS":     6,     # finestra per calcolo velocita' su M15
+    # Freschezza dell'impulso: amplitude_atr arriva da structure_state (che lo
+    # aggiorna quando vuole), velocity dalle candele M15 delle ultime
+    # IMPULSE_LOOKBACK_BARS barre. Se le due misure guardano momenti diversi,
+    # la congiunzione "ampio E veloce" non scatta mai per pura asincronia.
+    # Verificato sui dati del 15/07: BTC ha avuto 4 impulsi (vel 0.6-0.89) ma
+    # l'ampiezza in structure_state era timbrata 16:31 mentre l'ultimo picco
+    # di velocita' era alle 13:00-13:30 → mai coincidenti → BTC sempre in
+    # RIPOSO, zero zone, nonostante amplitude_atr=2.935 superasse il gate.
+    # Default = la stessa finestra della velocity (6 barre x 15 min = 90 min):
+    # cosi' le due misure parlano dello stesso movimento.
+    "IMPULSE_MAX_AGE_MIN":       90,
     # Context
     "CONTEXT_ZONE_MAX_ATR":      1.0,   # prezzo entro N ATR da una zona
     "CONTEXT_MIN_ZONE_QUALITY":  0,     # quality_score minimo dell'OB (0 = tutti)
     # Exhaustion
     "EXHAUSTION_ATR_RATIO":      0.7,   # ATR(recenti)/ATR(picco) sotto questo
     "EXHAUSTION_LOOKBACK":       3,     # candele su cui misurare la contrazione
+    # Uscita dallo stato OSSERVAZIONE (la macchina non ne usciva MAI: una
+    # sola osservazione ha prodotto 13 zone fantasma in 6 ore, verificato
+    # sui dati del 15/07). Scaduta la finestra si torna a RIPOSO e serve un
+    # NUOVO impulso valido per ripartire.
+    "OBSERVE_MAX_BARS":          30,    # 30 barre M15 = 7.5h
+    "BAR_MINUTES":               15,
     # Monitoraggio outcome
     "OBSERVE_WINDOW_BARS":       30,
     "ATR_PERIOD":                14,
@@ -108,14 +125,23 @@ def _atr(df, period: int):
     """ATR su `period` candele chiuse (da radar_features)."""
     return rf.atr(df, period)
 
-def read_last_impulse(conn, asset: str):
+def read_last_impulse(conn, asset: str, now=None, max_age_min: float = None):
     """
     Legge l'ultimo impulso da structure_state.impulses_json.
-    Ritorna dict {direction, amplitude_atr, timestamp_end} oppure None.
+    Ritorna dict {direction, amplitude_atr, timestamp_end, age_min} oppure None.
 
     ATTENZIONE (verificato sul DB): duration_bars e' SEMPRE 0 → NON usarlo.
     Usiamo solo direction + amplitude_atr da qui; la velocita' la calcola
     feat_velocity dalle candele. La lista puo' essere vuota (asset fermi).
+
+    FRESCHEZZA (max_age_min): structure_state tiene UN SOLO impulso corrente,
+    sovrascritto quando l'engine lo aggiorna — non uno storico. Se e' piu'
+    vecchio di max_age_min rispetto alla finestra su cui misuriamo la
+    velocita', le due condizioni del gate descrivono movimenti diversi e la
+    loro congiunzione e' priva di significato. In quel caso l'impulso viene
+    scartato (ritorna None) e la macchina resta a RIPOSO: e' il
+    comportamento corretto, meglio nessun segnale che un segnale spurio.
+    Con max_age_min=None il controllo e' disattivato (comportamento vecchio).
     """
     try:
         row = conn.execute(
@@ -127,10 +153,27 @@ def read_last_impulse(conn, asset: str):
         if not impulses:
             return None
         last = impulses[-1]
+
+        age_min = None
+        ts_end = last.get("timestamp_end")
+        if max_age_min and now is not None and ts_end:
+            try:
+                t_end = datetime.fromisoformat(ts_end)
+                if t_end.tzinfo is None:
+                    t_end = t_end.replace(tzinfo=timezone.utc)
+                age_min = (now - t_end).total_seconds() / 60.0
+            except Exception:
+                age_min = None          # timestamp illeggibile → non scartare
+            if age_min is not None and age_min > max_age_min:
+                logger.info("Radar [%s]: impulso stantio (%.0f min > %.0f), "
+                            "ampiezza ignorata.", asset, age_min, max_age_min)
+                return None
+
         return {
             "direction":     last.get("direction"),        # UP / DOWN
             "amplitude_atr": last.get("amplitude_atr"),
-            "timestamp_end": last.get("timestamp_end"),
+            "timestamp_end": ts_end,
+            "age_min":       round(age_min, 1) if age_min is not None else None,
         }
     except Exception as e:
         logger.debug("read_last_impulse [%s]: %s", asset, e)
@@ -242,8 +285,9 @@ def nearest_zone(conn, asset: str, price: float, direction: str, atr: float, cfg
         return (None, None, None)
 
 
-def compute_features(conn, asset, df_m15, price, cfg) -> dict:
-    imp = read_last_impulse(conn, asset)
+def compute_features(conn, asset, df_m15, price, cfg, now=None) -> dict:
+    imp = read_last_impulse(conn, asset, now=now,
+                            max_age_min=cfg.get("IMPULSE_MAX_AGE_MIN"))
     direction = None
     if imp and imp.get("direction"):
         # rimbalzo atteso OPPOSTO all'impulso
@@ -258,6 +302,7 @@ def compute_features(conn, asset, df_m15, price, cfg) -> dict:
     return {
         "direction":       direction,
         "amplitude_atr":   imp.get("amplitude_atr") if imp else None,
+        "impulse_age_min": imp.get("age_min") if imp else None,
         "velocity":        feat_velocity(df_m15, cfg),
         "extension":       rf.extension(df_m15, cfg["EMA_PERIOD"], atr),
         "exhaustion":      feat_exhaustion(df_m15, cfg),
@@ -278,15 +323,30 @@ STATE_REST     = "RIPOSO"
 STATE_EXTENDED = "MERCATO_ESTESO"
 STATE_OBSERVE  = "OSSERVAZIONE"
 
-def next_state(cur_state: str, f: dict, cfg) -> tuple[str, bool]:
+def next_state(cur_state: str, f: dict, cfg,
+               bars_in_observe: float | None = None) -> tuple[str, bool]:
     """
     Ritorna (nuovo_stato, emetti_entry_zone).
       RIPOSO         → MERCATO_ESTESO  se impulso ampio E veloce
       MERCATO_ESTESO → OSSERVAZIONE    se il prezzo e' su una zona tecnica
                      → RIPOSO          se l'impulso e' svanito
-      OSSERVAZIONE   → [Entry Zone]    se esaurimento in corso
-                     → RIPOSO          se il prezzo continua forte oltre
-                                       l'invalidazione (rimbalzo non arrivato)
+      OSSERVAZIONE   → [Entry Zone]    se esaurimento IN CORSO SU UNA ZONA
+                     → RIPOSO          quando la finestra di osservazione scade
+
+    Due difetti corretti (diagnosticati sui dati reali del 15/07):
+
+    1. NESSUNA USCITA da OSSERVAZIONE. La macchina, una volta entrata, non
+       tornava mai a RIPOSO: il gate dell'impulso (amplitude>=2 E velocity>=0.6)
+       veniva quindi verificato UNA VOLTA SOLA, all'inizio. Nel DB: una sola
+       transizione RIPOSO→MERCATO_ESTESO, poi 16 zone emesse per ore da
+       quell'unico impulso. Ora la finestra scade (OBSERVE_MAX_BARS).
+
+    2. CONTESTO NON RICONTROLLATO all'emissione. context_ok era richiesto solo
+       per ENTRARE in osservazione; poi il prezzo si allontanava dalle zone e
+       zone_ref diventava None, ma si emetteva lo stesso. Peggio: la dedup a
+       valle e' `if zref and zref in open_refs`, quindi con zref=None andava in
+       corto e NON deduplicava nulla. Risultato: 13 zone su 16 con zone_ref
+       NULL, tutte lo stesso setup. Ora senza zona non si emette.
     """
     amp = f.get("amplitude_atr")
     vel = f.get("velocity")
@@ -304,7 +364,14 @@ def next_state(cur_state: str, f: dict, cfg) -> tuple[str, bool]:
             return (STATE_REST, False)            # impulso svanito senza zona
         return (STATE_OBSERVE, False) if context_ok else (STATE_EXTENDED, False)
     if cur_state == STATE_OBSERVE:
-        if exhausted:
+        # Scadenza: l'osservazione non puo' durare all'infinito, altrimenti
+        # un impulso di ore fa continua a legittimare nuove zone.
+        max_bars = cfg.get("OBSERVE_MAX_BARS")
+        if (max_bars and bars_in_observe is not None
+                and bars_in_observe >= max_bars):
+            return (STATE_REST, False)
+        # Emette SOLO se l'esaurimento avviene SU una zona tecnica.
+        if exhausted and context_ok:
             return (STATE_OBSERVE, True)          # EMETTI Entry Zone, resta in osservazione
         # Nota: NON invalidiamo su continuazione del prezzo. Il respiro puo'
         # arrivare anche dopo che il prezzo e' andato un po' contro. Lo stop
@@ -317,6 +384,25 @@ def next_state(cur_state: str, f: dict, cfg) -> tuple[str, bool]:
 # RUNNER per asset
 # ============================================================
 
+def _bars_since_state(conn, asset: str, state: str, now, cfg) -> float | None:
+    """
+    Quante barre M15 sono passate dall'ingresso nello stato corrente.
+    Letto da radar_transitions (ultima transizione VERSO quello stato).
+    Ritorna None se non c'e' storico: in quel caso la finestra non scade
+    (fail-open, non blocca il radar).
+    """
+    ts = market_radar_db.get_last_transition_ts(conn, asset, state)
+    if not ts:
+        return None
+    try:
+        t0 = datetime.fromisoformat(ts)
+        if t0.tzinfo is None:
+            t0 = t0.replace(tzinfo=timezone.utc)
+        minutes = (now - t0).total_seconds() / 60.0
+        return minutes / float(cfg.get("BAR_MINUTES", 15))
+    except Exception:
+        return None
+
 def _merge_cfg(config: dict) -> dict:
     """Fonde RADAR_CFG coi valori di config['MARKET_RADAR'], mappando le
     chiavi snake_case del config alle chiavi di RADAR_CFG."""
@@ -328,6 +414,8 @@ def _merge_cfg(config: dict) -> dict:
         "context_zone_max_atr": "CONTEXT_ZONE_MAX_ATR",
         "exhaustion_atr_ratio": "EXHAUSTION_ATR_RATIO",
         "observe_window_bars":  "OBSERVE_WINDOW_BARS",
+        "observe_max_bars":     "OBSERVE_MAX_BARS",
+        "impulse_max_age_min":  "IMPULSE_MAX_AGE_MIN",
         "stop_loss_atr":        "STOP_LOSS_ATR",
         "notify":               "NOTIFY",
     }
@@ -369,10 +457,15 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     # 3) Feature (impulso da structure_state, zona da order_blocks, resto da M15)
     price = float(df_m15.iloc[-1]["close"])
     open_refs = market_radar_db.get_open_zone_refs(conn, asset)
-    f = compute_features(conn, asset, df_m15, price, cfg)
+    f = compute_features(conn, asset, df_m15, price, cfg, now=now)
 
-    # 4) Avanza la macchina; registra SEMPRE le transizioni (funnel)
-    new_state, emit = next_state(state, f, cfg)
+    # 4) Da quanto tempo siamo in OSSERVAZIONE (per la scadenza della finestra)
+    bars_in_observe = None
+    if state == STATE_OBSERVE:
+        bars_in_observe = _bars_since_state(conn, asset, STATE_OBSERVE, now, cfg)
+
+    # 5) Avanza la macchina; registra SEMPRE le transizioni (funnel)
+    new_state, emit = next_state(state, f, cfg, bars_in_observe=bars_in_observe)
     if new_state != state:
         try:
             market_radar_db.log_transition(conn, asset, from_state=state,
@@ -380,9 +473,14 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                                            now_iso=now.isoformat())
         except Exception as e:
             logger.warning("Radar [%s]: log_transition fallito: %s", asset, e)
-    market_radar_db.set_state(conn, asset, new_state)
+        if new_state == STATE_REST and state == STATE_OBSERVE:
+            logger.info("Radar [%s]: finestra di osservazione scaduta "
+                        "(%.1f barre) → RIPOSO, serve un nuovo impulso.",
+                        asset, bars_in_observe or 0)
+    # updated_ts veniva passato NULL a ogni scan: ora si registra davvero.
+    market_radar_db.set_state(conn, asset, new_state, now_iso=now.isoformat())
 
-    # 5) Emissione Entry Zone (con DEDUP su zone_ref)
+    # 6) Emissione Entry Zone (con DEDUP su zone_ref)
     if emit:
         zref = f.get("zone_ref")
         if zref and zref in open_refs:
@@ -407,6 +505,17 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         f["stop_loss"]  = stop_loss
         f["tp_scalp"]   = tp_scalp
         f["be_trigger"] = be_trigger
+
+        # Velocita' dell'IMPULSO (non dell'esaurimento). Senza questo il
+        # dashboard classifica ogni zona come "lenta": le feature qui sopra
+        # sono misurate durante l'esaurimento, quando la velocita' e' bassa
+        # per definizione (0.046-0.269 nei dati reali, contro il gate >=0.6).
+        # Cosi' l'ipotesi "impulso piu' veloce → rimbalzo maggiore" diventa
+        # testabile sul numero giusto.
+        imp_f = market_radar_db.get_last_impulse_features(conn, asset)
+        f["impulse_velocity"]      = imp_f.get("velocity")
+        f["impulse_amplitude_atr"] = imp_f.get("amplitude_atr")
+        f["exhaustion_velocity"]   = f.get("velocity")   # esplicito: e' l'altra
 
         try:
             zone_id = market_radar_db.insert_zone(
