@@ -45,6 +45,33 @@ def _connect(ledger_path: str) -> sqlite3.Connection:
     return conn
 
 
+# Colonne aggiunte dopo la creazione originale dello schema. Lo schema .sql
+# usa CREATE TABLE IF NOT EXISTS: su un Ledger gia' esistente le colonne nuove
+# non verrebbero MAI create, e write_decision (che costruisce l'INSERT dalle
+# chiavi del record) fallirebbe silenziosamente su "no such column".
+_LEDGER_MIGRATIONS = [
+    ("candlestick_value2", "REAL"),   # Sprint 17: pattern_quality_score
+]
+
+
+def _migrate_ledger(conn: sqlite3.Connection) -> None:
+    """Aggiunge le colonne mancanti. Idempotente: non tocca i dati esistenti."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(decision_ledger)")]
+    except Exception as e:
+        logger.warning("Ledger migrate: PRAGMA fallito: %s", e)
+        return
+    if not cols:
+        return                       # tabella non ancora creata: ci pensa lo schema
+    for col, typ in _LEDGER_MIGRATIONS:
+        if col not in cols:
+            try:
+                conn.execute(f"ALTER TABLE decision_ledger ADD COLUMN {col} {typ}")
+                logger.info("Ledger: colonna %s aggiunta", col)
+            except Exception as e:
+                logger.warning("Ledger migrate %s: %s", col, e)
+
+
 def init_ledger(ledger_path: str = DEFAULT_LEDGER_PATH,
                 schema_path: str = SCHEMA_PATH) -> None:
     """Crea il file e la tabella se non esistono. Idempotente."""
@@ -56,6 +83,7 @@ def init_ledger(ledger_path: str = DEFAULT_LEDGER_PATH,
                 conn.executescript(f.read())
         else:
             logger.error("Ledger schema non trovato: %s", schema_path)
+        _migrate_ledger(conn)
         conn.commit()
     finally:
         conn.close()
