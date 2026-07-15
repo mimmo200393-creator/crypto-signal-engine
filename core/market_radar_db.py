@@ -78,6 +78,42 @@ def set_state(conn, asset: str, state: str, now_iso: str = None):
     """, (asset, state, now_iso))
     conn.commit()
 
+def get_last_transition_ts(conn, asset: str, to_state: str):
+    """
+    Timestamp ISO dell'ULTIMA transizione VERSO to_state. Serve alla state
+    machine per sapere da quanto tempo e' nello stato corrente (senza
+    questo, OSSERVAZIONE non ha modo di scadere).
+    """
+    row = conn.execute(
+        "SELECT ts FROM radar_transitions WHERE asset=? AND to_state=? "
+        "ORDER BY id DESC LIMIT 1", (asset, to_state)).fetchone()
+    return row[0] if row else None
+
+
+def get_last_impulse_features(conn, asset: str) -> dict:
+    """
+    Feature registrate alla transizione RIPOSO → MERCATO_ESTESO, cioe' quelle
+    dell'IMPULSO che ha attivato la macchina.
+
+    Perche' serve: le feature salvate con la Entry Zone sono calcolate al
+    momento dell'emissione, durante l'esaurimento — quindi la loro velocity
+    e' per costruzione bassa (misurata sui dati reali: 0.046-0.269, mentre il
+    gate d'ingresso richiede >= 0.6). Testare "impulso veloce → rimbalzo
+    maggiore" su quel numero e' impossibile: e' la velocita' sbagliata.
+    Qui recuperiamo quella vera, gia' salvata nel funnel.
+    """
+    row = conn.execute(
+        "SELECT features_json FROM radar_transitions "
+        "WHERE asset=? AND from_state='RIPOSO' AND to_state='MERCATO_ESTESO' "
+        "ORDER BY id DESC LIMIT 1", (asset,)).fetchone()
+    if not row or not row[0]:
+        return {}
+    try:
+        return json.loads(row[0])
+    except Exception:
+        return {}
+
+
 def log_transition(conn, asset, from_state, to_state, features, now_iso):
     conn.execute("""
         INSERT INTO radar_transitions(asset, from_state, to_state, ts, features_json)
