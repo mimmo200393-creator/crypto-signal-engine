@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS decision_ledger (
     session_sweep_state   INTEGER, session_sweep_conf INTEGER, session_sweep_value REAL,
     reaction_map_state    INTEGER, reaction_map_conf INTEGER, reaction_map_value REAL,
     candlestick_state     INTEGER, candlestick_conf INTEGER, candlestick_value REAL,
+    candlestick_value2    REAL,     -- Sprint 17: pattern_quality_score (geometria candela)
     macro_state           INTEGER, macro_conf INTEGER, macro_value REAL,
     market_state_state    INTEGER, market_state_conf INTEGER, market_state_value REAL,
     market_state_value2   REAL,     -- eccezione: bias_confidence
