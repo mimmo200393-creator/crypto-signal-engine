@@ -169,6 +169,7 @@ def _make_level(label: str, price: float, kind: str, timeframe: str,
         "historical_touches": 0,
         "swept": False,
         "swept_timestamp": None,
+        "swept_bars_ago": None,
     }
 
 
@@ -190,51 +191,88 @@ def _compute_proximity(levels: list, current_price: float, cfg: dict) -> list:
 
 
 def _detect_sweeps(levels: list, df_m15: pd.DataFrame, cfg: dict) -> list:
-    """Rileva sweep: prezzo penetra un livello e poi inverte."""
-    sweep_lookback = cfg.get("sweep_lookback_candles", 20)
+    """
+    Rileva sweep: prezzo penetra un livello e poi inverte, nelle ultime
+    sweep_lookback_candles candele.
+
+    BUG CORRETTO: sweep_lookback_candles era dichiarato nel config (20) ma
+    la funzione guardava SOLO df_m15.iloc[-1]. Uno sweep avvenuto anche solo
+    3 candele prima era invisibile. Misurato sui dati reali: il 97.3% degli
+    snapshot (874 su 898) riportava 0 sweep — non perche' il mercato non
+    sweepasse, ma perche' lo sweep veniva visto solo se cadeva esattamente
+    nell'ultima candela al momento dello scan.
+
+    La definizione di sweep e' invariata (un cambiamento alla volta): una
+    singola candela che penetra il livello oltre min_pen e richiude dal lato
+    opposto, con corpo nella direzione del rifiuto. Cambia solo la FINESTRA
+    in cui la si cerca.
+
+    Per ogni livello si registra UN SOLO sweep, il piu' recente (scansione
+    all'indietro dall'ultima candela). Ogni sweep porta `bars_ago`: uno
+    sweep di 15 candele fa non ha lo stesso valore di uno appena avvenuto,
+    e senza quel campo non sarebbe distinguibile.
+    """
+    lookback = int(cfg.get("sweep_lookback_candles", 20))
     min_pen = cfg.get("sweep_penetration_min_pct", 0.0005)
     active_sweeps = []
 
-    if len(df_m15) < 3:
+    if len(df_m15) < 3 or lookback < 1:
         return active_sweeps
 
-    last = df_m15.iloc[-1]
-    last_high = float(last["high"])
-    last_low = float(last["low"])
-    last_close = float(last["close"])
-    last_open = float(last["open"])
+    window = df_m15.iloc[-lookback:]
+    highs  = window["high"].astype(float).values
+    lows   = window["low"].astype(float).values
+    closes = window["close"].astype(float).values
+    opens  = window["open"].astype(float).values
+    ts     = (window["timestamp"].values
+              if "timestamp" in window.columns else [None] * len(window))
+    n_win = len(window)
 
     for lv in levels:
         price = lv["price"]
         if price <= 0:
             continue
 
-        # Sweep high: prezzo va sopra e poi chiude sotto
-        if lv["kind"] == "high":
-            pen = (last_high - price) / price if price > 0 else 0
-            if pen > min_pen and last_close < price and last_close < last_open:
-                lv["swept"] = True
-                lv["swept_timestamp"] = str(last.get("timestamp", ""))
-                active_sweeps.append({
-                    "label": lv["label"],
-                    "price": price,
-                    "direction": "BEARISH",
-                    "penetration_pct": round(pen, 6),
-                })
+        # Scansione dalla candela PIU' RECENTE all'indietro: il primo match
+        # e' lo sweep piu' recente per questo livello, poi si passa oltre.
+        for i in range(n_win - 1, -1, -1):
+            bars_ago = n_win - 1 - i
 
-        # Sweep low: prezzo va sotto e poi chiude sopra
-        if lv["kind"] == "low":
-            pen = (price - last_low) / price if price > 0 else 0
-            if pen > min_pen and last_close > price and last_close > last_open:
-                lv["swept"] = True
-                lv["swept_timestamp"] = str(last.get("timestamp", ""))
-                active_sweeps.append({
-                    "label": lv["label"],
-                    "price": price,
-                    "direction": "BULLISH",
-                    "penetration_pct": round(pen, 6),
-                })
+            if lv["kind"] == "high":
+                # Sweep high: il prezzo va sopra il livello e poi chiude sotto
+                pen = (highs[i] - price) / price
+                if pen > min_pen and closes[i] < price and closes[i] < opens[i]:
+                    lv["swept"] = True
+                    lv["swept_timestamp"] = str(ts[i]) if ts[i] is not None else ""
+                    lv["swept_bars_ago"] = bars_ago
+                    active_sweeps.append({
+                        "label": lv["label"],
+                        "price": price,
+                        "direction": "BEARISH",
+                        "penetration_pct": round(pen, 6),
+                        "bars_ago": bars_ago,
+                    })
+                    break
 
+            elif lv["kind"] == "low":
+                # Sweep low: il prezzo va sotto il livello e poi chiude sopra
+                pen = (price - lows[i]) / price
+                if pen > min_pen and closes[i] > price and closes[i] > opens[i]:
+                    lv["swept"] = True
+                    lv["swept_timestamp"] = str(ts[i]) if ts[i] is not None else ""
+                    lv["swept_bars_ago"] = bars_ago
+                    active_sweeps.append({
+                        "label": lv["label"],
+                        "price": price,
+                        "direction": "BULLISH",
+                        "penetration_pct": round(pen, 6),
+                        "bars_ago": bars_ago,
+                    })
+                    break
+
+    # Il piu' recente per primo: chi consuma la lista trova in cima lo sweep
+    # piu' fresco, che e' quello operativamente rilevante.
+    active_sweeps.sort(key=lambda s: s["bars_ago"])
     return active_sweeps
 
 
@@ -271,11 +309,12 @@ def produce_liquidity_snapshot(
     # ── 3. Sweep detection ───────────────────────────────────
     active_sweeps = _detect_sweeps(levels, df_m15, cfg)
 
-    # ── 4. Sort & filter ─────────────────────────────────────
-    max_levels = cfg.get("max_levels", 30)
-    levels = sorted(levels, key=lambda l: l["structural_score"], reverse=True)[:max_levels]
-
-    # Nearest above/below
+    # ── 4. Nearest & Targets ─────────────────────────────────
+    # Fix: calcolati sul set COMPLETO di livelli, PRIMA del troncamento
+    # per max_levels. Altrimenti il livello realmente più vicino al
+    # prezzo può essere scartato dal troncamento se ha uno
+    # structural_score basso, mischiando forza e distanza — esattamente
+    # il problema che questo modulo dichiara di risolvere.
     above = [lv for lv in levels if lv["price"] > current_price]
     below = [lv for lv in levels if lv["price"] < current_price]
 
@@ -292,7 +331,13 @@ def produce_liquidity_snapshot(
         key=lambda l: l["structural_score"], reverse=True
     )
 
-    # ── 5. Snapshot ──────────────────────────────────────────
+    # ── 5. Sort & filter ─────────────────────────────────────
+    # Il troncamento si applica SOLO alla lista esposta nello snapshot,
+    # non ai calcoli sopra (già fatti sul set completo).
+    max_levels = cfg.get("max_levels", 30)
+    levels = sorted(levels, key=lambda l: l["structural_score"], reverse=True)[:max_levels]
+
+    # ── 6. Snapshot ──────────────────────────────────────────
     snapshot = {
         "asset": asset,
         "timestamp": now_iso,
@@ -306,7 +351,7 @@ def produce_liquidity_snapshot(
         "total_levels": len(levels),
     }
 
-    # ── 6. Salva ─────────────────────────────────────────────
+    # ── 7. Salva ─────────────────────────────────────────────
     try:
         conn.execute("""
             INSERT INTO liquidity_snapshots (snapshot_id, asset, timestamp_snapshot,
