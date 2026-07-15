@@ -45,7 +45,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:rgba(255,255,255,.02)
 <body>
 <header>
   <h1>Radar Lab<span class="beta">BETA</span></h1>
-  <div class="meta">2026-07-15 03:56 UTC &nbsp;|&nbsp; <a href="engine_edge_dashboard.html">&larr; Engine Edge Lab</a></div>
+  <div class="meta">2026-07-15 04:01 UTC &nbsp;|&nbsp; <a href="engine_edge_dashboard.html">&larr; Engine Edge Lab</a></div>
 </header>
 <div class="container">
   <p class="intro">
@@ -55,10 +55,25 @@ tr:last-child td{border-bottom:none}tr:hover td{background:rgba(255,255,255,.02)
     quanto soffre prima (MAE), in unità di ATR. <strong>Nessuna soglia di successo è imposta:</strong>
     i dati grezzi mostrano se e quanto esiste un edge. Le conclusioni arrivano dopo 300–500 zone.
   </p>
-  <div class="card"><div class="empty">
-        Il Market Radar non ha ancora emesso Entry Zone.<br>
-        La pagina si popolerà quando il radar inizierà a registrare configurazioni.<br>
-        <span class="prov">Modalità sola-osservazione · in attesa dei primi dati</span>
-        </div></div>
+  <div class="summary-grid c4">
+  <div><span class="big ">1</span><span class="lbl">Zone emesse</span></div>
+  <div><span class="big ">0</span><span class="lbl">Chiuse</span></div>
+  <div><span class="big">—</span><span class="lbl">MFE medio (ATR)</span></div>
+  <div><span class="big">—</span><span class="lbl">MAE medio (ATR)</span></div>
+</div><div class="card"><div class="ch">Per Asset</div>
+  <div class="table-scroll"><table><thead><tr>
+    <th>Asset</th><th>Emesse</th><th>Chiuse</th><th>MFE atr</th><th>MAE atr</th><th>Candele al MFE</th>
+  </tr></thead><tbody><tr><td><strong>XAU_USD</strong> <span class="prov">(provv.)</span></td>
+  <td class="mono">1</td><td class="mono">0</td>
+  <td class="mono">—</td><td class="mono">—</td>
+  <td class="mono">—</td></tr></tbody></table></div></div><div class="card"><div class="ch">Ipotesi velocità — rimbalzo per fascia di impulso</div>
+  <div class="table-scroll"><table><thead><tr>
+    <th>Velocità impulso</th><th>N</th><th>MFE atr</th><th>MAE atr</th>
+  </tr></thead><tbody><tr><td>lenta (< 0.4)</td><td class="mono">0</td><td class="empty" colspan="2" style="text-align:left">nessun dato</td></tr><tr><td>media (0.4–0.7)</td><td class="mono">0</td><td class="empty" colspan="2" style="text-align:left">nessun dato</td></tr><tr><td>veloce (0.7–1.0)</td><td class="mono">0</td><td class="empty" colspan="2" style="text-align:left">nessun dato</td></tr><tr><td>molto veloce (≥1)</td><td class="mono">0</td><td class="empty" colspan="2" style="text-align:left">nessun dato</td></tr></tbody></table></div>
+  <div class="note">Se il radar ha edge sulla velocità, le fasce più veloci mostrano un MFE medio più alto.
+  Numeri sotto 30 campioni sono provvisori: rumore, non conclusioni.</div></div><div class="card"><div class="ch">Funnel della macchina a stati</div>
+  <div class="table-scroll"><table><tbody><tr><td>Ingressi in Osservazione</td><td class="mono">1</td></tr><tr><td>→ diventate Entry Zone</td><td class="mono">1</td></tr><tr><td>→ invalidate (tornate a Riposo)</td><td class="mono">0</td></tr></tbody></table></div>
+  <div class="note">Quante osservazioni si trasformano davvero in Entry Zone, e quante
+  vengono invalidate. Un funnel sano non emette su ogni osservazione.</div></div>
 </div>
 </body></html>
