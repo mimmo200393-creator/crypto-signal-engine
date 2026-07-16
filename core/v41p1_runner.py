@@ -45,6 +45,14 @@ from core.decision_ledger import ledger_writer as _lw
 
 logger = logging.getLogger("v41p1_runner")
 
+# Doppione di zona: due segnali stessa direzione con entry entro questa
+# percentuale sono lo stesso trade. In PERCENTUALE e non in punti perche'
+# oro (~4.000) e BTC (~64.000) hanno scale diverse.
+# Misurato sui dati: i cluster reali stanno entro lo 0.35% (oro); a 1.0%
+# si bloccano 60 segnali su 178 (34%), gli stessi della regola "mai due
+# aperti nella stessa direzione".
+DUPLICATE_ZONE_TOLERANCE_PCT = 1.0
+
 V41P1_TIMEFRAMES = {"H4": "4h", "H1": "1h", "M15": "15m"}
 
 WATCHLIST_PROXIMITY_PCT = 0.005
@@ -615,10 +623,55 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
                                      "DUPLICATE_SIGNAL", _ledger_snapshots, signal)
         return
 
+    # ── Doppione di ZONA: c'e' gia' un segnale APERTO qui ─────
+    # Il check sopra confronta solo i metadati dell'ultimo alert (direzione,
+    # trigger, sorgente): non guarda MAI il prezzo, e basta che il trigger
+    # passi da BOS a CHOCH perche' un segnale a tre dollari dal precedente
+    # entri come nuovo. Risultato osservato: cinque SELL aperti sull'oro
+    # entro lo 0.35%.
+    #
+    # Non sono cinque configurazioni: sono la stessa idea segnalata cinque
+    # volte. Il rischio si moltiplica, l'informazione no — il 68% dei gruppi
+    # sovrapposti chiude tutto TP o tutto SL.
+    #
+    # Un segnale per zona, finche' quello aperto non si chiude.
+    _open_same_zone = v41p1_db.has_open_cluster_signal(
+        conn, asset, signal["direction"], signal["entry"],
+        tolerance_pct=DUPLICATE_ZONE_TOLERANCE_PCT)
+    if _open_same_zone:
+        logger.info(
+            "V41P1 Scanner [%s]: REJECT DUPLICATE_ZONE (dir=%s entry=%.4f a %.2f%% "
+            "da %s gia' aperto)",
+            asset, signal["direction"], signal["entry"],
+            _open_same_zone["dist_pct"], _open_same_zone["signal_id"][:8],
+        )
+        ledger_link.capture_rejected(_decision_id, asset, signal.get("direction"),
+                                     "DUPLICATE_ZONE", _ledger_snapshots, signal)
+        return
+
     # Sprint 0: usa il decision_id (ULID) come signal_id → chiave condivisa
     # col Ledger, nessuna colonna bridge necessaria.
     if _decision_id:
         signal["signal_id"] = _decision_id
+    # ── Contesto del cluster: SOLA REGISTRAZIONE (Sprint osservazione) ──
+    # Quanti segnali dello stesso asset+direzione erano gia' aperti quando
+    # questo e' nato, da quanto e a che distanza. Nessun gate legge questi
+    # campi: la logica di emissione resta identica.
+    #
+    # Perche' li raccogliamo: sui 167 trade chiusi, i segnali emessi mentre
+    # un altro era aperto hanno WR 46.2% contro il 28.7% di quelli che aprono
+    # il cluster (Fisher p=0.035; su BTC 49% vs 26%, p=0.015), con attesa
+    # mediana di 53 minuti fra primo e secondo trigger. Se regge, vorrebbe
+    # dire che il segnale buono e' il SECONDO, non il primo. Ma sono 34 casi
+    # in posizione 1: si osserva, non si tocca la strategia.
+    try:
+        _cluster = v41p1_db.get_cluster_context(
+            conn, asset, signal["direction"], signal["entry"])
+        signal.update(_cluster)
+    except Exception as e:
+        logger.warning("V41P1 [%s]: cluster context fallito (non-blocking): %s", asset, e)
+        signal.setdefault("cluster_position", 0)
+
     signal_id = v41p1_db.insert_v41p1_signal(conn, signal)
 
     # Sprint 0: registra la decisione ESEGUITA nel Ledger (passivo)
