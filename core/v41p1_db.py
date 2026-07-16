@@ -10,6 +10,7 @@ Sprint 13: Breakeven a +1R in monitor_open_signals.
 import json
 import uuid
 import sqlite3
+import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -20,6 +21,8 @@ except Exception:
     _ledger_link = None
 
 
+logger = logging.getLogger("v41p1_db")
+
 def init_v41p1_schema(conn: sqlite3.Connection,
                        schema_path: str = "storage/v41p1_schema.sql"):
     for col, col_type in [
@@ -28,6 +31,13 @@ def init_v41p1_schema(conn: sqlite3.Connection,
         ("mfm_sweep_price",     "REAL"),
         ("mfm_sweep_priority",  "TEXT"),
         ("adx_m15",             "REAL"),
+        # Contesto del cluster (Sprint osservazione): quando nasce un segnale,
+        # quanti dello stesso asset+direzione erano gia' APERTI, da quanto e a
+        # che distanza di prezzo. Registrato per RICERCA, non usato da nessun
+        # gate: la logica di emissione resta invariata.
+        ("cluster_position",         "INTEGER DEFAULT 0"),
+        ("minutes_since_first",      "REAL"),
+        ("entry_dist_from_first_pct","REAL"),
     ]:
         try:
             conn.execute(f"ALTER TABLE v41p1_signals ADD COLUMN {col} {col_type}")
@@ -44,6 +54,108 @@ def init_v41p1_schema(conn: sqlite3.Connection,
 # ============================================================
 # Segnali
 # ============================================================
+
+def get_cluster_context(conn: sqlite3.Connection, asset: str,
+                        direction: str, entry: float) -> dict:
+    """
+    Contesto del "cluster" nel momento in cui nasce un segnale: quanti segnali
+    dello stesso asset e direzione sono ancora APERTI, da quanto tempo e a che
+    distanza di prezzo dal primo.
+
+    A cosa serve — e a cosa NON serve.
+    Sui dati (n=167 chiusi) i segnali emessi mentre un altro era gia' aperto
+    hanno WR 46.2%, contro il 28.7% di quelli che aprono un cluster
+    (Fisher p=0.035; su BTC 49% vs 26%, p=0.015). L'attesa mediana fra il
+    primo e il secondo trigger e' 53 minuti. Se confermato, vorrebbe dire che
+    V41P1 spara troppo presto e che il segnale buono e' il SECONDO.
+
+    Ma sono 34 casi in posizione 1: troppo pochi per spostare la logica di
+    emissione — e' lo stesso ordine di grandezza dei segnali che ci hanno
+    ingannato prima (OTE-SC al 57%, market_state da p=0.005 a p=0.024
+    crescendo il campione). Quindi: si REGISTRA e basta. Nessun gate legge
+    questi campi. La decisione arrivera' dai dati, non da questa ipotesi.
+
+    Ritorna:
+      cluster_position          0 = apre il cluster, 1 = secondo, 2 = terzo...
+      minutes_since_first       minuti dal primo segnale ancora aperto
+      entry_dist_from_first_pct distanza dell'entry dal primo, in % (con segno)
+    """
+    out = {"cluster_position": 0,
+           "minutes_since_first": None,
+           "entry_dist_from_first_pct": None}
+    try:
+        rows = conn.execute(
+            """
+            SELECT entry, timestamp_setup FROM v41p1_signals
+            WHERE asset = ? AND direction = ? AND final_outcome = 'OPEN'
+            ORDER BY timestamp_setup ASC
+            """,
+            (asset, direction),
+        ).fetchall()
+        if not rows:
+            return out
+
+        out["cluster_position"] = len(rows)
+
+        first_entry, first_ts = rows[0][0], rows[0][1]
+        if first_entry and entry:
+            out["entry_dist_from_first_pct"] = round(
+                (entry - first_entry) / first_entry * 100, 4)
+        if first_ts:
+            try:
+                t0 = datetime.fromisoformat(str(first_ts).replace(" ", "T"))
+                if t0.tzinfo is None:
+                    t0 = t0.replace(tzinfo=timezone.utc)
+                out["minutes_since_first"] = round(
+                    (datetime.now(timezone.utc) - t0).total_seconds() / 60, 1)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug("get_cluster_context [%s]: %s", asset, e)
+    return out
+
+
+def has_open_cluster_signal(conn: sqlite3.Connection, asset: str,
+                            direction: str, entry: float,
+                            tolerance_pct: float = 1.0) -> Optional[dict]:
+    """
+    Esiste gia' un segnale APERTO sullo stesso asset e direzione, con entry
+    entro tolerance_pct dal nuovo? Se si', il nuovo e' un doppione: stessa
+    zona, stessa idea, stesso trade.
+
+    Ritorna il segnale gia' aperto piu' vicino (dict) oppure None.
+
+    Perche' serve: cinque SELL aperti sull'oro entro lo 0.35% non sono cinque
+    configurazioni, sono una sola segnalata cinque volte. Il rischio si
+    moltiplica, l'informazione no: sui dati, il 68% dei gruppi sovrapposti
+    ha esito identico (tutti TP o tutti SL).
+
+    La tolleranza e' in PERCENTUALE, non assoluta: l'oro a 4.000 e BTC a
+    64.000 hanno scale diverse, una soglia in punti non funzionerebbe su
+    entrambi.
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT signal_id, entry, timestamp_setup FROM v41p1_signals
+            WHERE asset = ? AND direction = ? AND final_outcome = 'OPEN'
+            """,
+            (asset, direction),
+        ).fetchall()
+        if not rows or not entry:
+            return None
+        vicini = [r for r in rows
+                  if r[1] and abs(entry - r[1]) / r[1] * 100 <= tolerance_pct]
+        if not vicini:
+            return None
+        best = min(vicini, key=lambda r: abs(entry - r[1]))
+        return {"signal_id": best[0], "entry": best[1],
+                "timestamp_setup": best[2],
+                "dist_pct": round((entry - best[1]) / best[1] * 100, 4)}
+    except Exception as e:
+        logger.debug("has_open_cluster_signal [%s]: %s", asset, e)
+        return None
+
 
 def insert_v41p1_signal(conn: sqlite3.Connection, signal: dict) -> str:
     signal_id = signal.get("signal_id") or str(uuid.uuid4())
@@ -72,10 +184,11 @@ def insert_v41p1_signal(conn: sqlite3.Connection, signal: dict) -> str:
             mfm_sweep_confirmed, mfm_sweep_level,
             mfm_sweep_price, mfm_sweep_priority,
             adx_m15,
+            cluster_position, minutes_since_first, entry_dist_from_first_pct,
             trader_decision, final_outcome, market_snapshot
         ) VALUES (
             ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-            ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'unknown','OPEN',?
+            ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'unknown','OPEN',?
         )
     """, (
         signal_id,
@@ -130,6 +243,9 @@ def insert_v41p1_signal(conn: sqlite3.Connection, signal: dict) -> str:
         signal.get("mfm_sweep_price"),
         signal.get("mfm_sweep_priority"),
         signal.get("adx_m15"),
+        signal.get("cluster_position", 0),
+        signal.get("minutes_since_first"),
+        signal.get("entry_dist_from_first_pct"),
         snapshot_json,
     ))
     conn.commit()
