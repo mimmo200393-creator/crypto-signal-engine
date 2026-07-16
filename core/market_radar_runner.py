@@ -337,12 +337,38 @@ def nearest_zone(conn, asset: str, price: float, direction: str, atr: float, cfg
         return (None, None, None)
 
 
-def compute_features(conn, asset, df_m15, price, cfg, now=None) -> dict:
+def compute_features(conn, asset, df_m15, price, cfg, now=None,
+                     cur_state=None) -> dict:
     # Impulso rilevato dalle SOLE candele M15 del modulo: direzione e
     # velocita' escono dalla stessa finestra, nello stesso istante.
     # structure_state non viene piu' letto (vedi feat_impulse_direction e
     # next_state per il perche', misurato sui dati).
-    imp_dir = feat_impulse_direction(df_m15, cfg)
+    imp_dir_now = feat_impulse_direction(df_m15, cfg)
+    vel_now = feat_velocity(df_m15, cfg)
+
+    # ── DIREZIONE CONGELATA ──────────────────────────────────
+    # Fuori da RIPOSO la direzione NON si ricalcola: resta quella
+    # dell'impulso che ha avviato la macchina, letta dal funnel
+    # (radar_transitions, transizione RIPOSO → MERCATO_ESTESO).
+    #
+    # Perche': durante l'esaurimento il prezzo oscilla e la velocita' crolla,
+    # quindi il segno delle ultime 6 candele diventa RUMORE. Misurato sul
+    # caso reale di BTC del 16/07: impulso DOWN alle 07:15 (vel 0.6979), poi
+    # in osservazione la direzione e' passata a UP con vel 0.267 e 0.018 —
+    # il prezzo era fermo. Il radar ha emesso due zone SELL contro il proprio
+    # impulso: non misuravano il rimbalzo, lo misuravano al contrario.
+    #
+    # La direzione si sblocca SOLO con un impulso nuovo e vero (vedi
+    # next_state): stessa soglia che avvia la macchina, nessun numero inventato.
+    imp_dir = imp_dir_now
+    if cur_state and cur_state != STATE_REST:
+        try:
+            frozen = market_radar_db.get_last_impulse_features(conn, asset)
+            if frozen and frozen.get("impulse_direction"):
+                imp_dir = frozen["impulse_direction"]
+        except Exception as e:
+            logger.debug("Radar [%s]: direzione congelata non letta: %s", asset, e)
+
     direction = None
     if imp_dir:
         # rimbalzo atteso OPPOSTO all'impulso
@@ -354,7 +380,7 @@ def compute_features(conn, asset, df_m15, price, cfg, now=None) -> dict:
         zone_ref, zone_dist_atr, zone_kind = nearest_zone(
             conn, asset, price, direction, atr, cfg)
 
-    vel = feat_velocity(df_m15, cfg)
+    vel = vel_now
     # Ampiezza dell'impulso ricavata dalle STESSE candele e dalla stessa
     # finestra della velocity — non piu' da structure_state:
     #     velocity = |close[-1] - close[-1-lb]| / (lb * ATR)
@@ -366,7 +392,8 @@ def compute_features(conn, asset, df_m15, price, cfg, now=None) -> dict:
 
     return {
         "direction":       direction,
-        "impulse_direction": imp_dir,
+        "impulse_direction": imp_dir,          # congelata fuori da RIPOSO
+        "impulse_direction_now": imp_dir_now,  # ricalcolata: solo informativa
         "amplitude_atr":   round(vel * lb, 3) if vel is not None else None,
         "velocity":        vel,
         "extension":       rf.extension(df_m15, cfg["EMA_PERIOD"], atr),
@@ -382,7 +409,7 @@ def compute_features(conn, asset, df_m15, price, cfg, now=None) -> dict:
 
 # ============================================================
 # STATE MACHINE — interpreta le feature, decide lo stato
-# ============================================================
+# ========================================================
 
 STATE_REST     = "RIPOSO"
 STATE_EXTENDED = "MERCATO_ESTESO"
@@ -447,6 +474,19 @@ def next_state(cur_state: str, f: dict, cfg,
             return (STATE_REST, False)            # impulso svanito senza zona
         return (STATE_OBSERVE, False) if context_ok else (STATE_EXTENDED, False)
     if cur_state == STATE_OBSERVE:
+        # Inversione VERA: un impulso nuovo, in direzione opposta a quella
+        # congelata, riporta a RIPOSO — al giro dopo la macchina ripartira'
+        # con la direzione nuova. Serve la STESSA soglia che avvia il radar
+        # (IMPULSE_VELOCITY_MIN): se 0.6 basta per far partire la macchina da
+        # RIPOSO, basta anche per fargli cambiare idea. Sotto quella soglia
+        # e' rumore di esaurimento e viene ignorato: verificato su BTC del
+        # 16/07, dove i "cambi di direzione" avevano velocita' 0.267 e 0.018
+        # mentre tutti i momenti sopra 0.6 erano concordi con l'impulso.
+        dir_now = f.get("impulse_direction_now")
+        dir_frozen = f.get("impulse_direction")
+        if (impulse_ok and dir_now and dir_frozen and dir_now != dir_frozen):
+            return (STATE_REST, False)
+
         # Scadenza: l'osservazione non puo' durare all'infinito, altrimenti
         # un impulso di ore fa continua a legittimare nuove zone.
         max_bars = cfg.get("OBSERVE_MAX_BARS")
@@ -540,7 +580,8 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     # 3) Feature (impulso da structure_state, zona da order_blocks, resto da M15)
     price = float(df_m15.iloc[-1]["close"])
     open_refs = market_radar_db.get_open_zone_refs(conn, asset)
-    f = compute_features(conn, asset, df_m15, price, cfg, now=now)
+    f = compute_features(conn, asset, df_m15, price, cfg, now=now,
+                         cur_state=state)
 
     # 4) Da quanto tempo siamo in OSSERVAZIONE (per la scadenza della finestra)
     bars_in_observe = None
