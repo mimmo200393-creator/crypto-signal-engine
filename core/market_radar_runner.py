@@ -14,7 +14,10 @@ FLUSSO:
 Il radar RIUSA i dati che il sistema gia' produce, invece di ricalcolarli:
 
   IMPULSE
-    - ampiezza  : structure_state.impulses_json → amplitude_atr  (OK, fresco)
+    - ampiezza  : CALCOLATA dalle candele M15 (= velocity x lookback).
+                  NON piu' da structure_state: quella fonte si aggiorna ogni
+                  4-6 ore mentre impulso→calma dura ~2h, e ampiezza/velocita'
+                  non hanno mai coinciso (0 su 13 impulsi in 46h di dati).
     - velocita' : CALCOLATA dalle candele M15   (duration_bars in impulses_json
                   e' SEMPRE 0 nel DB reale → inutilizzabile, verificato su tutti
                   gli asset. La velocita' va quindi calcolata a mano.)
@@ -65,7 +68,10 @@ RADAR_TIMEFRAMES = {"M15": "15m"}
 
 RADAR_CFG = {
     # Impulse — soglie di transizione (larghe all'inizio)
-    "IMPULSE_AMPLITUDE_ATR_MIN": 2.0,   # amplitude_atr da impulses_json
+    # NON PIU' USATA: il gate e' la sola velocity, che implica gia' un
+    # movimento di 3.6 ATR (0.6 x 6 barre) — piu' severo di questi 2.0.
+    # Lasciata per non rompere config.yaml che la referenzia.
+    "IMPULSE_AMPLITUDE_ATR_MIN": 2.0,   # (inattiva)
     "IMPULSE_VELOCITY_MIN":      0.6,   # calibrato sui dati M15 reali (p90 ~0.6, non 1.0)
     "IMPULSE_LOOKBACK_BARS":     6,     # finestra per calcolo velocita' su M15
     # Freschezza dell'impulso: amplitude_atr arriva da structure_state (che lo
@@ -78,7 +84,10 @@ RADAR_CFG = {
     # RIPOSO, zero zone, nonostante amplitude_atr=2.935 superasse il gate.
     # Default = la stessa finestra della velocity (6 barre x 15 min = 90 min):
     # cosi' le due misure parlano dello stesso movimento.
-    "IMPULSE_MAX_AGE_MIN":       90,
+    # NON PIU' USATA: serviva a non accoppiare un'ampiezza vecchia di
+    # structure_state con la velocity di adesso. Ora entrambe escono dalle
+    # stesse candele, nella stessa finestra: l'asincronia non esiste piu'.
+    "IMPULSE_MAX_AGE_MIN":       90,    # (inattiva)
     # Context
     "CONTEXT_ZONE_MAX_ATR":      1.0,   # prezzo entro N ATR da una zona
     "CONTEXT_MIN_ZONE_QUALITY":  0,     # quality_score minimo dell'OB (0 = tutti)
@@ -89,7 +98,13 @@ RADAR_CFG = {
     # sola osservazione ha prodotto 13 zone fantasma in 6 ore, verificato
     # sui dati del 15/07). Scaduta la finestra si torna a RIPOSO e serve un
     # NUOVO impulso valido per ripartire.
-    "OBSERVE_MAX_BARS":          30,    # 30 barre M15 = 7.5h
+    # Finestra di osservazione, tarata sul ritmo REALE misurato (53 impulsi):
+    # dopo l'impulso la calma arriva in mediana 9 candele M15 (BTC 135 min,
+    # XAU 105 min); oltre le 30 candele si trova solo in 3 casi su 41.
+    # 16 candele (4h) coprono la mediana con margine e liberano la macchina
+    # in tempo per l'impulso successivo, invece di tenerla agganciata a uno
+    # gia' morto.
+    "OBSERVE_MAX_BARS":          16,    # 16 barre M15 = 4h
     "BAR_MINUTES":               15,
     # Monitoraggio outcome
     "OBSERVE_WINDOW_BARS":       30,
@@ -127,6 +142,13 @@ def _atr(df, period: int):
 
 def read_last_impulse(conn, asset: str, now=None, max_age_min: float = None):
     """
+    NON PIU' USATA dalla state machine (resta per compatibilita'/debug).
+
+    Il radar ricava impulso, direzione e ampiezza dalle proprie candele M15
+    (vedi feat_impulse_direction / feat_velocity / compute_features). Questa
+    funzione leggeva structure_state, che si aggiorna ogni 4-6 ore: troppo
+    lenta per un fenomeno che dura ~2 ore.
+
     Legge l'ultimo impulso da structure_state.impulses_json.
     Ritorna dict {direction, amplitude_atr, timestamp_end, age_min} oppure None.
 
@@ -178,6 +200,36 @@ def read_last_impulse(conn, asset: str, now=None, max_age_min: float = None):
     except Exception as e:
         logger.debug("read_last_impulse [%s]: %s", asset, e)
         return None
+
+def feat_impulse_direction(df_m15, cfg):
+    """
+    Direzione dell'impulso (UP/DOWN) dalle SOLE candele M15, misurata sulla
+    STESSA finestra della velocity: il segno di close[-1] - close[-1-lookback].
+
+    Prima arrivava da structure_state["impulses"][-1]["direction"]. Due
+    problemi, entrambi verificati sui dati:
+      - la fonte si aggiorna ogni 4-6 ore, mentre impulso→calma dura ~2h:
+        la direzione descriveva un movimento gia' concluso
+      - con il controllo di freschezza l'impulso stantio veniva scartato,
+        quindi direction restava None e la macchina non poteva mai raggiungere
+        OSSERVAZIONE (nearest_zone richiede una direzione)
+
+    Ora direzione e velocita' escono dalla stessa misura, sulla stessa
+    finestra, nello stesso istante. Nessuna asincronia possibile.
+    """
+    lb = int(cfg.get("IMPULSE_LOOKBACK_BARS", 6))
+    if len(df_m15) < lb + 1:
+        return None
+    try:
+        delta = float(df_m15["close"].iloc[-1]) - float(df_m15["close"].iloc[-1 - lb])
+    except Exception:
+        return None
+    if delta > 0:
+        return "UP"
+    if delta < 0:
+        return "DOWN"
+    return None
+
 
 def feat_velocity(df_m15, cfg):
     """Velocita' normalizzata dalle candele M15 (vedi radar_features)."""
@@ -286,12 +338,15 @@ def nearest_zone(conn, asset: str, price: float, direction: str, atr: float, cfg
 
 
 def compute_features(conn, asset, df_m15, price, cfg, now=None) -> dict:
-    imp = read_last_impulse(conn, asset, now=now,
-                            max_age_min=cfg.get("IMPULSE_MAX_AGE_MIN"))
+    # Impulso rilevato dalle SOLE candele M15 del modulo: direzione e
+    # velocita' escono dalla stessa finestra, nello stesso istante.
+    # structure_state non viene piu' letto (vedi feat_impulse_direction e
+    # next_state per il perche', misurato sui dati).
+    imp_dir = feat_impulse_direction(df_m15, cfg)
     direction = None
-    if imp and imp.get("direction"):
+    if imp_dir:
         # rimbalzo atteso OPPOSTO all'impulso
-        direction = "BUY" if imp["direction"] == "DOWN" else "SELL"
+        direction = "BUY" if imp_dir == "DOWN" else "SELL"
 
     atr = _atr(df_m15, cfg["ATR_PERIOD"])
     zone_ref, zone_dist_atr, zone_kind = (None, None, None)
@@ -299,11 +354,21 @@ def compute_features(conn, asset, df_m15, price, cfg, now=None) -> dict:
         zone_ref, zone_dist_atr, zone_kind = nearest_zone(
             conn, asset, price, direction, atr, cfg)
 
+    vel = feat_velocity(df_m15, cfg)
+    # Ampiezza dell'impulso ricavata dalle STESSE candele e dalla stessa
+    # finestra della velocity — non piu' da structure_state:
+    #     velocity = |close[-1] - close[-1-lb]| / (lb * ATR)
+    #  => |close[-1] - close[-1-lb]| / ATR = velocity * lb
+    # E' quindi il movimento in ATR sulla finestra dell'impulso. Resta come
+    # informazione registrata (utile in analisi), NON come gate: il gate e'
+    # la sola velocity, che questa grandezza contiene per costruzione.
+    lb = int(cfg.get("IMPULSE_LOOKBACK_BARS", 6))
+
     return {
         "direction":       direction,
-        "amplitude_atr":   imp.get("amplitude_atr") if imp else None,
-        "impulse_age_min": imp.get("age_min") if imp else None,
-        "velocity":        feat_velocity(df_m15, cfg),
+        "impulse_direction": imp_dir,
+        "amplitude_atr":   round(vel * lb, 3) if vel is not None else None,
+        "velocity":        vel,
         "extension":       rf.extension(df_m15, cfg["EMA_PERIOD"], atr),
         "exhaustion":      feat_exhaustion(df_m15, cfg),
         "body_shrinking":  rf.body_shrinking(df_m15, cfg["EXHAUSTION_LOOKBACK"]),
@@ -350,9 +415,27 @@ def next_state(cur_state: str, f: dict, cfg,
     """
     amp = f.get("amplitude_atr")
     vel = f.get("velocity")
-    # impulso valido = ampio (da structure_state) E veloce (da candele M15)
-    impulse_ok = (amp is not None and amp >= cfg["IMPULSE_AMPLITUDE_ATR_MIN"]
-                  and vel is not None and vel >= cfg["IMPULSE_VELOCITY_MIN"])
+    # Impulso valido = VELOCE. Basta questo, e il gate e' piu' severo di
+    # quanto sembri:
+    #
+    #     velocity = |close[-1] - close[-6]| / (6 * ATR)
+    #     velocity >= 0.6  <=>  il prezzo ha percorso >= 3.6 ATR in 6 candele
+    #
+    # Il gate ampiezza chiedeva >= 2.0 ATR, cioe' MENO di quanto la velocita'
+    # garantisce gia': non filtrava nulla. In compenso portava una dipendenza
+    # da structure_state, e i dati dicono che gli costava tutto:
+    #
+    #   - ampiezza e velocita' non hanno MAI coinciso: 0 su 13 impulsi in 46h
+    #   - perche' misurano cose diverse su finestre diverse: amplitude_atr e'
+    #     una gamba strutturale (svolta anche in ore, duration_bars e' sempre 0),
+    #     velocity sono le ultime 6 candele M15
+    #   - esempio reale: amp=8.86 ATR con velocity=0.203 nello stesso istante
+    #   - e structure_state produce un impulso ogni 4-6 ore (gap mediano 374 min
+    #     su BTC), mentre impulso→calma dura ~2 ore: la fonte arriva DOPO che
+    #     il fenomeno e' finito
+    #
+    # Ora il radar vede l'impulso MENTRE accade, dalle sole candele M15.
+    impulse_ok = (vel is not None and vel >= cfg["IMPULSE_VELOCITY_MIN"])
     context_ok = (f.get("zone_ref") is not None)   # nearest_zone ha gia' filtrato per distanza
     exhausted  = (f.get("exhaustion") is not None
                   and f["exhaustion"] <= cfg["EXHAUSTION_ATR_RATIO"])
