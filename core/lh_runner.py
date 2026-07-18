@@ -133,10 +133,9 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         logger.warning("LH [%s]: dati insufficienti, skip.", asset)
         return
 
-    # ── M5 per XAU (entry precisa) ───────────────────────────
+    # ── M5 per XAU (entry precisa, fetchato da v3_runner) ────
     df_m5 = None
     if asset == "XAU_USD":
-        _fetch_m5_candles(conn, asset, config)
         df_m5 = v3_db.get_v3_candles_df(conn, asset, LH_TIMEFRAMES["M5"], limit=100)
         if df_m5 is None or len(df_m5) < 5:
             logger.info("LH [%s]: candele M5 insufficienti, uso M15.", asset)
@@ -294,26 +293,6 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     _notify(signal, config)
 
     _notify(signal, config)
-
-
-def _fetch_m5_candles(conn, asset: str, config: dict):
-    """Fetch candele M5 per XAU via Twelve Data e salva in v3_candles_cache."""
-    try:
-        from core.data_source import get_provider, should_fetch
-        last_ts = v3_db.get_v3_latest_timestamp(conn, asset, "5m")
-        if not should_fetch(asset, "5m", last_ts):
-            return
-        provider = get_provider(asset, family="v3")
-        base_url = config.get("V3_EXCHANGE_BASE_URL", "")
-        delay = config.get("V3_EXCHANGE_REQUEST_DELAY", 0.5)
-        candles = provider.fetch_latest_candles(
-            base_url, asset, "5m", 50, delay
-        )
-        if candles:
-            v3_db.upsert_v3_candles(conn, asset, "5m", candles)
-            logger.debug("LH [%s]: fetched %d candele M5", asset, len(candles))
-    except Exception as e:
-        logger.warning("LH [%s]: M5 fetch fallito (non-blocking): %s", asset, e)
 
 
 def _notify(signal: dict, config: dict):
