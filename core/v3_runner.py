@@ -26,7 +26,7 @@ from notifications import v3_telegram
 
 logger = logging.getLogger("v3_runner")
 
-V3_TIMEFRAMES = {"D1": "1D", "H4": "4h", "H1": "1h", "M30": "30m", "M15": "15m"}
+V3_TIMEFRAMES = {"D1": "1D", "H4": "4h", "H1": "1h", "M30": "30m", "M15": "15m", "M5": "5m"}
 
 
 def _update_v3_candles(conn, asset: str, config: dict):
@@ -44,7 +44,12 @@ def _update_v3_candles(conn, asset: str, config: dict):
 
     exchange = data_source.get_provider(asset, family="v3")
 
-    for tf_label in ("D1", "M30", "M15"):
+    # M5 solo per XAU (scalping LH v2, Twelve Data budget OK: 534/800)
+    fetch_tfs = ["D1", "M30", "M15"]
+    if asset == "XAU_USD":
+        fetch_tfs.append("M5")
+
+    for tf_label in fetch_tfs:
         tf = V3_TIMEFRAMES[tf_label]
         existing_count = v3_db.count_v3_candles(conn, asset, tf)
 
