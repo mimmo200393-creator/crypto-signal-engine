@@ -21,9 +21,9 @@ from notifications import telegram_bot, ntfy_bot
 
 logger = logging.getLogger("daily_brief")
 
-ZONE_ASSETS = ["BTC_USDT", "PAXG_USDT"]
-ZONE_LOOKBACK_H4 = 20
-ZONE_MIN_TOUCHES = 2
+ZONE_ASSETS = ["BTC_USDT", "XAU_USD"]
+ZONE_LOOKBACK_H4 = 60
+ZONE_MIN_TOUCHES = 1
 ZONE_CLUSTER_ATR = 0.5
 
 
@@ -73,7 +73,7 @@ def _fmt_price(v: float) -> str:
         return f"{v:.8f}"
 
 
-def _build_brief_message(asset: str, df_h1, df_h4) -> str:
+def _build_brief_message(asset: str, df_h1, df_h4, conn=None) -> str:
     price   = float(df_h1.iloc[-1]["close"])
     atr_h4  = float(df_h4.iloc[-1]["atr"]) if "atr" in df_h4.columns else 0
     bias    = _get_bias(df_h4)
@@ -88,6 +88,68 @@ def _build_brief_message(asset: str, df_h1, df_h4) -> str:
     last_h4 = df_h4.iloc[-1]
     ema50   = float(last_h4["ema_50"])
     ema200  = float(last_h4["ema_200"])
+
+    # ── MIE context (se disponibile) ─────────────────────────
+    mie_bias = None
+    mie_quality = None
+    ob_count = None
+    pd_zone = None
+    ob_zones = []
+    liq_targets_buy = []
+    liq_targets_sell = []
+    if conn:
+        try:
+            import json
+            row = conn.execute(
+                "SELECT snapshot_json FROM market_state_snapshots "
+                "WHERE asset=? ORDER BY timestamp_snapshot DESC LIMIT 1",
+                (asset,)
+            ).fetchone()
+            if row:
+                ms = json.loads(row[0])
+                mie_bias = ms.get("bias", "?")
+                mie_quality = ms.get("market_quality_score", 0)
+                pd_zone = ms.get("answers", {}).get("where", {}).get("zone", "?")
+
+            row2 = conn.execute(
+                "SELECT snapshot_json FROM order_block_snapshots "
+                "WHERE asset=? ORDER BY timestamp_snapshot DESC LIMIT 1",
+                (asset,)
+            ).fetchone()
+            if row2:
+                ob_snap = json.loads(row2[0])
+                ob_count = ob_snap.get("total_active", 0)
+                for ob in ob_snap.get("order_blocks", []):
+                    if ob.get("status") not in ("FRESH", "BREAKER", "TESTED"):
+                        continue
+                    dist = ob.get("distance_from_price_pct", 1)
+                    if dist <= 0.02:  # entro 2% dal prezzo
+                        ob_zones.append({
+                            "dir": ob.get("direction"),
+                            "status": ob.get("status"),
+                            "high": ob.get("zone_high"),
+                            "low": ob.get("zone_low"),
+                            "quality": ob.get("quality_score", 0),
+                            "dist_pct": dist,
+                        })
+                ob_zones.sort(key=lambda z: z["dist_pct"])
+                ob_zones = ob_zones[:5]
+
+            row3 = conn.execute(
+                "SELECT snapshot_json FROM liquidity_snapshots "
+                "WHERE asset=? ORDER BY timestamp_snapshot DESC LIMIT 1",
+                (asset,)
+            ).fetchone()
+            if row3:
+                liq_snap = json.loads(row3[0])
+                for t in (liq_snap.get("buy_targets") or [])[:3]:
+                    if t.get("price", 0) > 0:
+                        liq_targets_buy.append(t)
+                for t in (liq_snap.get("sell_targets") or [])[:3]:
+                    if t.get("price", 0) > 0:
+                        liq_targets_sell.append(t)
+        except Exception:
+            pass
 
     if "RIALZISTA" in bias:
         if sup_list:
@@ -105,13 +167,40 @@ def _build_brief_message(asset: str, df_h1, df_h4) -> str:
     lines = [
         f"📊 *DAILY BRIEF — {datetime.now(timezone.utc).strftime('%d %b %Y 08:00 UTC')}*",
         "",
-        f"*{asset}*",
+        f"*{asset.replace('_', ' ')}*",
         f"Prezzo: `{_fmt_price(price)}`",
         f"Bias H4: {bias}",
-        f"ATR Daily: `{_fmt_price(atr_day)}`",
-        f"EMA50 H4: `{_fmt_price(ema50)}` | EMA200 H4: `{_fmt_price(ema200)}`",
-        "",
     ]
+
+    if mie_bias:
+        bias_emoji = "🟢" if mie_bias == "BULLISH" else ("🔴" if mie_bias == "BEARISH" else "⚪")
+        lines.append(f"Bias MIE: {bias_emoji} {mie_bias} (quality {mie_quality}/100)")
+
+    if pd_zone:
+        lines.append(f"Zona: {pd_zone}")
+
+    lines.extend([
+        f"ATR Daily: `{_fmt_price(atr_day)}`",
+        f"EMA50: `{_fmt_price(ema50)}` | EMA200: `{_fmt_price(ema200)}`",
+    ])
+
+    if ob_count is not None:
+        pass  # rimosso: non mostrare conteggio OB attivi
+
+    lines.append("")
+
+    # ── OB vicini al prezzo (entro 2%) ───────────────────────
+    ob_fresh_tested = [ob for ob in ob_zones if ob["status"] in ("FRESH", "TESTED")]
+    if ob_fresh_tested:
+        lines.append("*🟧 Order Block:*")
+        for ob in ob_fresh_tested:
+            dir_emoji = "🟢" if ob["dir"] == "BULLISH" else "🔴"
+            lines.append(
+                f"  {dir_emoji} {ob['status']} "
+                f"`{_fmt_price(ob['low'])}` — `{_fmt_price(ob['high'])}` "
+                f"(Q{ob['quality']})"
+            )
+    lines.append("")
 
     if sup_list:
         lines.append("*Supporti:*")
@@ -163,7 +252,7 @@ def send_daily_brief(conn, config: dict):
             indicators.add_atr(df_h4, 14)
 
         try:
-            msg = _build_brief_message(asset, df_h1, df_h4)
+            msg = _build_brief_message(asset, df_h1, df_h4, conn=conn)
             full_message_parts.append(msg)
             logger.info("Daily Brief generato per %s", asset)
         except Exception as e:
