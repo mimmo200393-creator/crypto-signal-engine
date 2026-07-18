@@ -569,7 +569,7 @@ def produce_ob_snapshot(asset: str, df_m15, structure_snapshot: dict,
     # ── Step 2: Carica mappa esistente ───────────────────────
     existing = conn.execute(
         "SELECT ob_id, direction, zone_high, zone_low, status "
-        "FROM order_blocks WHERE asset = ? AND status != 'EXPIRED'",
+        "FROM order_blocks WHERE asset = ? AND status NOT IN ('INVALIDATED', 'EXPIRED')",
         (asset,)
     ).fetchall()
     existing_list = [{"ob_id": r[0], "direction": r[1], "zone_high": r[2],
