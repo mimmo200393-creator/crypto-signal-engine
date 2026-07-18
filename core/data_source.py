@@ -71,6 +71,7 @@ TWELVEDATA_ASSETS = {"XAU_USD"}
 # Deve essere multiplo dell'intervallo di scan (5 min) perche' la finestra
 # stateless scatti in modo affidabile.
 FETCH_CADENCE_MIN = {
+    "5m":  5,
     "15m": 15,
     "30m": 15,
     "1h":  30,
