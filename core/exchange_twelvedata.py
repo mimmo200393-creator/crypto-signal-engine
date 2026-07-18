@@ -69,6 +69,7 @@ HAS_VOLUME = False
 #   exchange.py    usa "1h", "4h"
 #   v3_exchange.py usa "1D", "30m", "15m"
 TIMEFRAME_MAP = {
+    "5m":  "5min",
     "15m": "15min",
     "30m": "30min",
     "1h":  "1h",
