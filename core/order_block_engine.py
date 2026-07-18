@@ -45,8 +45,12 @@ DEFAULT_CONFIG = {
     # Sweep prima dell'OB (doc 005). Rilevato dalle SOLE candele M15 del
     # modulo: nessuna dipendenza da Liquidity/Structure Engine.
     # Alimenta solo la quality (+2), NON la detection.
-    "sweep_lookback_bars": 20,       # finestra in cui cercare l'estremo di swing
-    "sweep_check_bars": 3,           # candele prima dell'OB in cui cercare la presa
+    "sweep_lookback_bars": 22,       # finestra in cui cercare l'estremo di swing
+    "sweep_check_bars": 5,           # candele prima dell'OB in cui cercare la presa
+    # Aggiornato da 20/3 a 22/5 dopo test A/B su dati reali (18/07/2026):
+    # finestra di riferimento tenuta stabile a 17 barre (22-5), finestra di
+    # verifica estesa da 45 a 75 minuti. Hit rate su 32 OB reali: 3.1% -> 9.4%.
+    # Monitorare 1-2 settimane prima di valutare ulteriore estensione a 7.
     "zone_overlap_threshold": 0.5,   # sovrapposizione minima per dedup (50%)
     "max_age_bars": 500,             # oltre questa età, OB diventa STALE
     "max_tracked": 30,               # OB massimi per asset nella mappa
