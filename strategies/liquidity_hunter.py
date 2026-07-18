@@ -1,24 +1,21 @@
 """
 strategies/liquidity_hunter.py
-Liquidity Hunter v1.1
+Liquidity Hunter v2.0 — Confluence Sniper
 
-Fix v1.1:
-    - Bug 1: direzione corretta dopo sweep
-      Sweep BULLISH (Low sweepato) → BUY (istituzionali cacciano stop SELL → rimbalzo)
-      Sweep BEARISH (High sweepato) → SELL (istituzionali cacciano stop BUY → ribasso)
-    - Bug 2: SL con buffer minimo in punti assoluti per evitare SL troppo stretto
-    - Bug 3: RR minimo 1.5 — evita trade con risk/reward non favorevole
+Entry su Order Block con bias allineato e confluenza multi-sensore.
+M15 per contesto, M5 per entry precisa (solo XAU).
 
-Pipeline:
-    1. Liquidity Pool identificata dalla Money Flow Map
-    2. Prezzo raggiunge la zona (proximity <= LIQUIDITY_PROXIMITY_PCT)
-    3. Sweep confermato nelle ultime LIQUIDITY_SWEEP_LOOKBACK candele M15
-    4. BOS o CHOCH M15 nella direzione del movimento post-sweep
-    5. Entry alla chiusura del trigger
+5 condizioni obbligatorie + 1 trigger (tutte devono essere vere):
+    1. Bias BULLISH o BEARISH (no NEUTRAL)
+    2. OB FRESH o BREAKER vicino nella direzione del bias
+    3. Premium/Discount corretto (BUY in DISCOUNT, SELL in PREMIUM)
+    4. Sessione attiva (Asia+London+NY per XAU, London+NY per BTC)
+    5. No blackout macro
+    6. Candlestick confirmation (pattern di reazione sulla zona OB)
 
-Gestione trade:
-    SL: dietro il peak dello sweep + buffer
-    TP: prossima Liquidity Pool nella direzione del movimento
+Entry: prezzo tocca/entra nella zona OB
+SL:    oltre zona OB + buffer ATR
+TP:    primo target raggiungibile (OB opposto o livello liquidita')
 """
 
 from __future__ import annotations
@@ -30,397 +27,205 @@ from typing import Optional
 
 import pandas as pd
 
-from strategies.institutional_scanner_v3 import (
-    find_pivots,
-    M15_BOS_LOOKBACK,
-)
-
 logger = logging.getLogger("liquidity_hunter")
 
 STRATEGY_NAME    = "LH"
-STRATEGY_VERSION = "v1.1"
+STRATEGY_VERSION = "v2.0"
 
-EXPIRY_BARS_M15           = 96      # 24h operative
-LIQUIDITY_PROXIMITY_PCT   = 0.003   # 0.30%
-LIQUIDITY_SWEEP_LOOKBACK  = 4       # candele M15
-SWEEP_PENETRATION_MIN_PCT = 0.0003  # penetrazione minima oltre il livello
-# TETTO penetrazione: sopra questa soglia NON e' uno sweep ma un BREAKOUT.
-# I dati (n=10) mostrano che i trade persi hanno penetration molto piu' alta
-# dei vinti: lo sweep vero buca poco e rientra, il breakout sfonda e continua.
-# Soglia PRUDENTE (0.15%): scarta solo i breakout evidenti, non taratura fine
-# sui 2 TP (quella arrivera' con 30-40 trade). Registriamo pen_pct come flag.
-SWEEP_PENETRATION_MAX_PCT = 0.0015  # 0.15% — oltre = breakout, non sweep
-SL_BUFFER_PCT             = 0.001   # 0.10% buffer dietro peak sweep (era 0.05%)
-ATR_SL_FLOOR_MULT         = 0.8     # floor distanza SL = 0.8×ATR M15 (propagato da V41P1 Sprint 13c)
-MIN_RR                    = 1.5     # RR minimo — evita trade sbilanciati
+# ── Configurazione ──────────────────────────────────────────
+OB_PROXIMITY_PCT      = 0.005    # 0.5% — distanza max OB dal prezzo
+SL_BUFFER_ATR_MULT    = 0.4      # buffer SL oltre la zona OB (0.4 ATR = ~2.4pt XAU)
+MIN_RR                = 1.0      # RR minimo (scalping: piu' basso, WR piu' alto)
+EXPIRY_BARS           = 6        # 30 min su M5, ~1.5h su M15 — scalping rapido
+SCALP_TP_ATR_MULT     = 0.8      # TP = 0.8x ATR M15 dall'entry (mediana 30min)
 
-# Quality Score bonus
-SCORE_HIGH_PRIORITY_LEVEL = 3
-SCORE_MEDIUM_PRIORITY_LEVEL = 2
-SCORE_BOS_TRIGGER         = 2
-SCORE_CHOCH_TRIGGER       = 1
-SCORE_SWEEP_STRONG        = 2
-SCORE_TOUCHES             = 1
-SCORE_REJECTION_CANDLE    = 1
+# Sessioni ammesse per asset
+ALLOWED_SESSIONS = {
+    "XAU_USD":  ("ASIA", "LONDON", "NEW_YORK"),
+    "BTC_USDT": ("LONDON", "NEW_YORK"),
+}
+
+
+def _get_session(now: datetime) -> str:
+    """Sessione di mercato in UTC."""
+    t = now.hour * 60 + now.minute
+    if 7 * 60 <= t < 12 * 60:
+        return "LONDON"
+    if 12 * 60 <= t < 13 * 60 + 30:
+        return "OVERLAP"
+    if 13 * 60 + 30 <= t <= 21 * 60:
+        return "NEW_YORK"
+    return "ASIA"
+
+
+def _reject(reason: str) -> dict:
+    logger.info("LH: REJECT %s", reason)
+    return {"signal": None, "diagnostics": {"rejection": reason}}
 
 
 # ============================================================
-# Step 1: Identifica Liquidity Pool attive
+# Core: trova OB candidato dal MIE context
 # ============================================================
 
-def find_active_liquidity_pools(
-    mfm: dict,
-    current_price: float,
-) -> list[dict]:
-    if not mfm or not mfm.get("levels"):
-        return []
+def _find_best_ob(mie_context: dict, bias: str, current_price: float) -> Optional[dict]:
+    """
+    Cerca l'OB migliore (FRESH o BREAKER) nella direzione del bias,
+    entro OB_PROXIMITY_PCT dal prezzo corrente.
+    Priorita': FRESH > BREAKER, poi per distanza piu' vicina.
+    """
+    want_dir = bias  # "BULLISH" o "BEARISH"
+    ob_list = mie_context.get("mie_order_block_order_blocks") or []
 
-    active = []
-    for lv in mfm["levels"]:
-        price = lv["price"]
+    best, best_dist, best_priority = None, None, 99
+
+    for ob in ob_list:
+        if ob.get("direction") != want_dir:
+            continue
+        status = ob.get("status")
+        if status not in ("FRESH", "BREAKER"):
+            continue
+
+        zh = ob.get("zone_high")
+        zl = ob.get("zone_low")
+        if zh is None or zl is None:
+            continue
+
+        mid = (float(zh) + float(zl)) / 2
+        dist_pct = abs(current_price - mid) / current_price if current_price > 0 else 1
+
+        if dist_pct > OB_PROXIMITY_PCT:
+            continue
+
+        # Priorita': FRESH=0, BREAKER=1
+        priority = 0 if status == "FRESH" else 1
+
+        if priority < best_priority or (priority == best_priority and
+                                         (best_dist is None or dist_pct < best_dist)):
+            best = ob
+            best_dist = dist_pct
+            best_priority = priority
+
+    return best
+
+
+def _price_in_ob_zone(ob: dict, current_high: float, current_low: float) -> bool:
+    """La candela corrente tocca/entra nella zona OB?"""
+    zh = float(ob["zone_high"])
+    zl = float(ob["zone_low"])
+    return current_low <= zh and current_high >= zl
+
+
+# ============================================================
+# Target: primo livello raggiungibile
+# ============================================================
+
+def _find_tp_target(mie_context: dict, direction: str,
+                    entry: float, current_price: float,
+                    atr_m15: float) -> tuple:
+    """
+    TP da scalping: primo target raggiungibile ENTRO ~1 ATR dall'entry.
+    1. Cerca OB opposto o livello liquidita' vicino (entro 1.5 ATR)
+    2. Se non trova nulla di strutturale: TP = entry ± 0.8 ATR
+    Ritorna (tp_price, tp_label).
+    """
+    max_structural_dist = 1.5 * atr_m15  # oltre non e' scalping
+    targets = []
+
+    # ── OB opposti vicini ────────────────────────────────────
+    opposite_dir = "BEARISH" if direction == "BUY" else "BULLISH"
+    ob_list = mie_context.get("mie_order_block_order_blocks") or []
+    for ob in ob_list:
+        if ob.get("direction") != opposite_dir:
+            continue
+        if ob.get("status") in ("INVALIDATED",):
+            continue
+        mid = ob.get("zone_midpoint")
+        if mid is None:
+            zh, zl = ob.get("zone_high"), ob.get("zone_low")
+            if zh is None or zl is None:
+                continue
+            mid = (float(zh) + float(zl)) / 2
+        mid = float(mid)
+        dist = abs(mid - entry)
+        if dist > max_structural_dist:
+            continue
+        if direction == "BUY" and mid > entry:
+            targets.append((mid, f"OB_{ob.get('id', '?')[:4]}"))
+        elif direction == "SELL" and mid < entry:
+            targets.append((mid, f"OB_{ob.get('id', '?')[:4]}"))
+
+    # ── Livelli di liquidita' vicini ─────────────────────────
+    if direction == "BUY":
+        liq_targets = mie_context.get("mie_liquidity_buy_targets") or []
+    else:
+        liq_targets = mie_context.get("mie_liquidity_sell_targets") or []
+
+    for lv in liq_targets:
+        price = lv.get("price", 0)
         if price <= 0:
             continue
-        dist_pct = abs(price - current_price) / current_price
-        if dist_pct <= LIQUIDITY_PROXIMITY_PCT:
-            active.append({**lv, "distance_pct": dist_pct})
+        dist = abs(price - entry)
+        if dist > max_structural_dist:
+            continue
+        if direction == "BUY" and price > entry:
+            targets.append((price, lv.get("label", "LIQ")))
+        elif direction == "SELL" and price < entry:
+            targets.append((price, lv.get("label", "LIQ")))
 
-    return sorted(active, key=lambda lv: lv["priority_score"], reverse=True)
+    # Target strutturale piu' vicino
+    if targets:
+        targets.sort(key=lambda t: abs(t[0] - entry))
+        return targets[0]
 
-
-# ============================================================
-# Step 2: Verifica Liquidity Sweep
-# ============================================================
-
-def check_liquidity_sweep(
-    df_m15: pd.DataFrame,
-    level: dict,
-) -> Optional[dict]:
-    """
-    Cerca sweep di un livello di liquidità nelle ultime
-    LIQUIDITY_SWEEP_LOOKBACK candele M15.
-
-    Sweep BEARISH (livello HIGH sweepato):
-        High supera il livello + penetrazione minima
-        Close richiude SOTTO il livello
-        → Istituzionali cacciano stop BUY sopra il livello
-        → Movimento atteso: SELL
-
-    Sweep BULLISH (livello LOW sweepato):
-        Low scende sotto il livello + penetrazione minima
-        Close richiude SOPRA il livello
-        → Istituzionali cacciano stop SELL sotto il livello
-        → Movimento atteso: BUY
-    """
-    if len(df_m15) < LIQUIDITY_SWEEP_LOOKBACK + 2:
-        return None
-
-    lvl_price = level["price"]
-    kind      = level["kind"]
-    tol       = lvl_price * SWEEP_PENETRATION_MIN_PCT
-
-    # Fix off-by-one: l'ultima candela (iloc[-1]) è trattata come CHIUSA
-    # ovunque nel runner (monitoring stop, current_price), quindi deve
-    # essere inclusa anche nella ricerca sweep. end punta all'ultima riga
-    # valida; il range la include (era range(end-1, ...) che la escludeva).
-    end   = len(df_m15) - 1
-    start = max(1, end - LIQUIDITY_SWEEP_LOOKBACK)
-
-    for i in range(end, start - 1, -1):
-        candle  = df_m15.iloc[i]
-        c_high  = float(candle["high"])
-        c_low   = float(candle["low"])
-        c_close = float(candle["close"])
-
-        if kind == "high":
-            # Sweep BEARISH: high supera il livello HIGH, close richiude sotto
-            # → istituzionali cacciano stop BUY → movimento atteso SELL
-            penetration = c_high - lvl_price
-            pen_pct = penetration / lvl_price if lvl_price > 0 else 0
-            # Sweep valido: penetrazione dentro la fascia [min, max].
-            # Sopra il tetto e' un breakout (sfonda e continua) -> non e' sweep.
-            if penetration >= tol and pen_pct <= SWEEP_PENETRATION_MAX_PCT and c_close < lvl_price:
-                return {
-                    "direction":        "BEARISH",
-                    "expected_trade":   "SELL",
-                    "peak_price":       c_high,
-                    "candle_idx":       i,
-                    "penetration":      penetration,
-                    "penetration_pct":  pen_pct,
-                    "level_price":      lvl_price,
-                    "level_label":      level["label"],
-                }
-
-        else:  # kind == "low"
-            # Sweep BULLISH: low scende sotto il livello LOW, close richiude sopra
-            # → istituzionali cacciano stop SELL → movimento atteso BUY
-            penetration = lvl_price - c_low
-            pen_pct = penetration / lvl_price if lvl_price > 0 else 0
-            if penetration >= tol and pen_pct <= SWEEP_PENETRATION_MAX_PCT and c_close > lvl_price:
-                return {
-                    "direction":        "BULLISH",
-                    "expected_trade":   "BUY",
-                    "peak_price":       c_low,
-                    "candle_idx":       i,
-                    "penetration":      penetration,
-                    "penetration_pct":  pen_pct,
-                    "level_price":      lvl_price,
-                    "level_label":      level["label"],
-                }
-
-    return None
-
-
-# ============================================================
-# Step 3: BOS o CHOCH dopo lo sweep
-# ============================================================
-
-def find_post_sweep_trigger(
-    df_m15: pd.DataFrame,
-    sweep: dict,
-    direction: str,
-) -> Optional[dict]:
-    """
-    Cerca BOS o CHOCH M15 nella direzione del movimento post-sweep,
-    DOPO la candela di sweep.
-
-    direction: "BUY" o "SELL" (da sweep["expected_trade"])
-    """
-    sweep_idx    = sweep["candle_idx"]
-    search_start = sweep_idx + 1
-    # Fix off-by-one: l'ultima candela è chiusa e va valutata come possibile
-    # trigger. loop_end = len(df_m15) è il bound ESCLUSIVO per range(), così
-    # range(search_start, loop_end) include l'ultimo indice len-1.
-    # search_end resta il bound per gli slice iloc[:search_end] (già corretto).
-    loop_end     = len(df_m15)
-    search_end   = len(df_m15) - 1
-
-    if search_start >= loop_end:
-        return None
-
-    pre_sweep = df_m15.iloc[:sweep_idx]
-    if len(pre_sweep) < M15_BOS_LOOKBACK * 2 + 1:
-        return None
-
-    pivots = find_pivots(pre_sweep, M15_BOS_LOOKBACK)
-
-    if direction == "BUY":
-        highs = sorted(pivots["pivot_highs"], key=lambda p: p[2])
-        if not highs:
-            return None
-        ref_high = highs[-1][1]
-
-        for i in range(search_start, loop_end):
-            c_close = float(df_m15.iloc[i]["close"])
-            if c_close > ref_high:
-                return {
-                    "trigger_type": "BOS",
-                    "candle_idx":   i,
-                    "entry":        c_close,
-                    "ref_level":    ref_high,
-                }
-
-        post_sweep = df_m15.iloc[sweep_idx:search_end]
-        if len(post_sweep) >= 3:
-            swing_high = float(post_sweep["high"].max())
-            for i in range(search_start, loop_end):
-                c_close = float(df_m15.iloc[i]["close"])
-                if c_close > swing_high * 0.998:
-                    return {
-                        "trigger_type": "CHOCH",
-                        "candle_idx":   i,
-                        "entry":        c_close,
-                        "ref_level":    swing_high,
-                    }
-
-    else:  # SELL
-        lows = sorted(pivots["pivot_lows"], key=lambda p: p[2])
-        if not lows:
-            return None
-        ref_low = lows[-1][1]
-
-        for i in range(search_start, loop_end):
-            c_close = float(df_m15.iloc[i]["close"])
-            if c_close < ref_low:
-                return {
-                    "trigger_type": "BOS",
-                    "candle_idx":   i,
-                    "entry":        c_close,
-                    "ref_level":    ref_low,
-                }
-
-        post_sweep = df_m15.iloc[sweep_idx:search_end]
-        if len(post_sweep) >= 3:
-            swing_low = float(post_sweep["low"].min())
-            for i in range(search_start, loop_end):
-                c_close = float(df_m15.iloc[i]["close"])
-                if c_close < swing_low * 1.002:
-                    return {
-                        "trigger_type": "CHOCH",
-                        "candle_idx":   i,
-                        "entry":        c_close,
-                        "ref_level":    swing_low,
-                    }
-
-    return None
-
-
-# ============================================================
-# Step 4: SL e TP
-# ============================================================
-
-def _compute_atr_m15(df_m15: pd.DataFrame, period: int = 14) -> float | None:
-    """
-    ATR M15 (Wilder/SMA semplice su True Range) calcolato in modo
-    autocontenuto: LH non riceve ATR dal runner, quindi lo derivo qui
-    dal df_m15 già disponibile. Ritorna None se dati insufficienti.
-    """
-    if df_m15 is None or len(df_m15) < period + 1:
-        return None
-    try:
-        high  = df_m15["high"].astype(float)
-        low   = df_m15["low"].astype(float)
-        close = df_m15["close"].astype(float)
-        prev_close = close.shift(1)
-        tr = pd.concat([
-            (high - low),
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ], axis=1).max(axis=1)
-        atr = tr.rolling(window=period, min_periods=period).mean().iloc[-1]
-        if pd.isna(atr) or atr <= 0:
-            return None
-        return float(atr)
-    except Exception:
-        return None
-
-
-def compute_sl(
-    sweep: dict,
-    direction: str,
-    entry: float | None = None,
-    atr_m15: float | None = None,
-) -> float:
-    """
-    SL dietro il peak dello sweep con buffer SL_BUFFER_PCT.
-
-    BUY:  peak = minimo dello sweep → SL = peak - buffer
-    SELL: peak = massimo dello sweep → SL = peak + buffer
-
-    Buffer minimo garantito per evitare SL troppo stretti.
-
-    Floor ATR (propagato da V41P1, Sprint 13c):
-        Il buffer percentuale fisso (0.10%) è tarato sulla volatilità di BTC.
-        Su asset a bassa volatilità come PAXG (ATR M15 ~3-4 punti), 0.10% può
-        essere più stretto del rumore normale → stop-out prematuri che
-        sembrano segnali errati ma sono solo SL mal posizionati.
-        Se entry e atr_m15 sono forniti, si impone che la distanza entry→SL
-        sia almeno ATR_SL_FLOOR_MULT * atr_m15.
-    """
-    peak   = sweep["peak_price"]
-    buffer = peak * SL_BUFFER_PCT
-
-    if direction == "BUY":
-        sl = peak - buffer
-    else:
-        sl = peak + buffer
-
-    # Floor ATR: garantisce una distanza minima strutturale entry→SL
-    if entry is not None and atr_m15 is not None and atr_m15 > 0:
-        min_dist = ATR_SL_FLOOR_MULT * atr_m15
+    # ── Fallback: TP su ATR (scalping puro) ──────────────────
+    if atr_m15 > 0:
+        tp_dist = SCALP_TP_ATR_MULT * atr_m15
         if direction == "BUY":
-            sl = min(sl, entry - min_dist)
+            tp = entry + tp_dist
         else:
-            sl = max(sl, entry + min_dist)
-
-    return sl
-
-
-def find_tp_target(
-    mfm: dict,
-    entry: float,
-    direction: str,
-    swept_level: dict,
-) -> Optional[dict]:
-    """
-    TP = prossima Liquidity Pool nella direzione del movimento,
-    escludendo il livello appena sweepato.
-    """
-    if not mfm or not mfm.get("levels"):
-        return None
-
-    swept_price = swept_level["price"]
-    levels      = mfm["levels"]
-
-    if direction == "BUY":
-        candidates = [
-            lv for lv in levels
-            if lv["kind"] == "high"
-            and lv["price"] > entry
-            and abs(lv["price"] - swept_price) / swept_price > 0.001
-        ]
-        if not candidates:
-            return None
-        return min(candidates, key=lambda lv: lv["price"])
-    else:
-        candidates = [
-            lv for lv in levels
-            if lv["kind"] == "low"
-            and lv["price"] < entry
-            and abs(lv["price"] - swept_price) / swept_price > 0.001
-        ]
-        if not candidates:
-            return None
-        return max(candidates, key=lambda lv: lv["price"])
+            tp = entry - tp_dist
+        return (round(tp, 4), "SCALP_ATR")
 
 
 # ============================================================
 # Quality Score
 # ============================================================
 
-def compute_quality(
-    swept_level: dict,
-    sweep: dict,
-    trigger: dict,
-    df_m15: pd.DataFrame,
-) -> tuple[int, str]:
+def _compute_quality(ob: dict, mie_context: dict, bias_confidence: int) -> tuple:
+    """
+    Quality score 0-7 (informativo, non gate).
+    Ritorna (score, label).
+    """
     score = 0
 
-    priority = swept_level.get("priority_label", "LOW")
-    if priority in ("CRITICAL", "HIGH"):
-        score += SCORE_HIGH_PRIORITY_LEVEL
-    elif priority == "MEDIUM":
-        score += SCORE_MEDIUM_PRIORITY_LEVEL
+    # +2  OB quality_score >= 5
+    if ob.get("quality_score", 0) >= 5:
+        score += 2
 
-    if trigger is not None:
-        if trigger["trigger_type"] == "BOS":
-            score += SCORE_BOS_TRIGGER
-        else:
-            score += SCORE_CHOCH_TRIGGER
+    # +1  OB ha FVG associata
+    if ob.get("has_fvg"):
+        score += 1
 
-    min_pen = swept_level["price"] * SWEEP_PENETRATION_MIN_PCT
-    if sweep.get("penetration", 0) > min_pen * 2:
-        score += SCORE_SWEEP_STRONG
+    # +1  OB ha sweep before
+    if ob.get("has_sweep_before"):
+        score += 1
 
-    if swept_level.get("historical_touches", 0) >= 3:
-        score += SCORE_TOUCHES
+    # +1  bias_confidence >= 50
+    if bias_confidence >= 50:
+        score += 1
 
-    sweep_idx = sweep["candle_idx"]
-    if sweep_idx + 1 < len(df_m15) - 1:
-        next_candle = df_m15.iloc[sweep_idx + 1]
-        o = float(next_candle["open"])
-        h = float(next_candle["high"])
-        l = float(next_candle["low"])
-        c = float(next_candle["close"])
-        rng  = h - l
-        body = abs(c - o)
-        if rng > 0 and body / rng < 0.30:
-            score += SCORE_REJECTION_CANDLE
+    # +1  displacement confermato
+    disp = mie_context.get("mie_structure_displacement", {})
+    if isinstance(disp, dict) and disp.get("confirmed"):
+        score += 1
 
-    score = max(0, min(score, 10))
+    # +1  candlestick confirmation
+    if mie_context.get("mie_candlestick_has_confirmation"):
+        score += 1
 
-    if score >= 7:
+    if score >= 5:
         label = "HIGH"
-    elif score >= 4:
+    elif score >= 3:
         label = "MEDIUM"
     else:
         label = "LOW"
@@ -429,261 +234,178 @@ def compute_quality(
 
 
 # ============================================================
-# Entry point principale
+# Entry Point
 # ============================================================
-
-def _near_confluence_ob_fvg(mie_context: dict, ref_price: float, direction: str,
-                            atr_m15: float) -> dict:
-    """
-    Confluenze Order Block / FVG dalla teoria (doc 004: "sweep + Order Block",
-    "sweep + FVG"; doc 005: un OB di qualita' richiede uno sweep precedente).
-    Ritorna flag informativi (NON gate). Usa i campi reali del mie_context.
-
-    FIX: mie_order_block_nearest_fresh_{side} non e' mai esistito nello
-    snapshot OB (a differenza di FVG, che lo calcola gia'). L'engine OB
-    salva solo la lista grezza "order_blocks". Cerchiamo il match qui,
-    considerando sia FRESH (mai mitigato, criterio #4 doc 005) sia
-    BREAKER (zona che ha cambiato ruolo e viene ri-testata piu' volte -
-    unico segnale di persistenza osservato finora nei dati reali).
-    """
-    out = {"flag_near_order_block": False, "flag_near_fvg": False,
-           "ob_quality": None, "ob_match_type": None, "fvg_ref": None}
-    if not mie_context or atr_m15 <= 0:
-        return out
-    max_dist = 0.5 * atr_m15
-    side = "bullish" if direction == "BUY" else "bearish"
-    want_dir = "BULLISH" if direction == "BUY" else "BEARISH"
-
-    ob_list = mie_context.get("mie_order_block_order_blocks") or []
-    best, best_dist, best_type = None, None, None
-    for ob in ob_list:
-        if ob.get("direction") != want_dir:
-            continue
-        status = ob.get("status")
-        if status not in ("FRESH", "BREAKER"):
-            continue
-        mid = ob.get("zone_midpoint")
-        if mid is None:
-            zh, zl = ob.get("zone_high"), ob.get("zone_low")
-            if zh is None or zl is None:
-                continue
-            mid = (float(zh) + float(zl)) / 2
-        dist = abs(ref_price - float(mid))
-        if dist <= max_dist and (best_dist is None or dist < best_dist):
-            best, best_dist, best_type = ob, dist, status
-    if best:
-        out["flag_near_order_block"] = True
-        out["ob_quality"] = best.get("quality_score")
-        out["ob_match_type"] = best_type
-
-    fvg = mie_context.get(f"mie_fvg_nearest_open_{side}")
-    if isinstance(fvg, dict) and not fvg.get("is_invalidated"):
-        zh, zl = fvg.get("zone_high"), fvg.get("zone_low")
-        if zh is not None and zl is not None:
-            mid = (float(zh) + float(zl)) / 2
-            if abs(ref_price - mid) <= max_dist:
-                out["flag_near_fvg"] = True
-                out["fvg_ref"] = fvg.get("id") or fvg.get("fvg_id")
-    return out
-
-
-def _pool_type(level_label: str) -> str:
-    """Classifica il tipo di pool (doc 004: Equal High/Low piu' forti degli Swing)."""
-    l = (level_label or "").lower()
-    if "equal" in l:   return "EQUAL"
-    if "weekly" in l:  return "WEEKLY"
-    if "daily" in l:   return "DAILY"
-    if "swing" in l:   return "SWING"
-    if "session" in l: return "SESSION"
-    return "OTHER"
-
 
 def generate_lh_signal(
     asset: str,
     df_m15: pd.DataFrame,
-    mfm: dict,
     now: datetime,
     mie_context: dict = None,
+    df_m5: pd.DataFrame = None,
 ) -> dict:
-    diag = {
-        "strategy":     STRATEGY_NAME,
-        "asset":        asset,
-        "rejection":    None,
-        "active_pools": [],
-        "sweep":        None,
-        "trigger":      None,
+    """
+    LH v2.0 — Confluence Sniper.
+
+    Ritorna {"signal": dict | None, "diagnostics": dict}.
+    """
+    if not mie_context:
+        return _reject("NO_MIE_CONTEXT")
+
+    # ── 1. SESSIONE ──────────────────────────────────────────
+    session = _get_session(now)
+    allowed = ALLOWED_SESSIONS.get(asset, ("LONDON", "NEW_YORK"))
+    if session not in allowed:
+        return _reject(f"SESSION_{session}_NOT_ALLOWED")
+
+    # ── 2. BIAS ──────────────────────────────────────────────
+    bias = mie_context.get("mie_market_state_bias", "NEUTRAL")
+    bias_confidence = mie_context.get("mie_market_state_bias_confidence", 0)
+    if bias == "NEUTRAL":
+        return _reject("BIAS_NEUTRAL")
+
+    # ── 3. MACRO BLACKOUT ────────────────────────────────────
+    if mie_context.get("mie_macro_is_blackout"):
+        return _reject("MACRO_BLACKOUT")
+
+    # ── 4. PREMIUM/DISCOUNT ──────────────────────────────────
+    pd_zone = mie_context.get("mie_structure_premium_discount", {})
+    if isinstance(pd_zone, dict):
+        zone = pd_zone.get("zone", "EQUILIBRIUM")
+    else:
+        zone = "EQUILIBRIUM"
+
+    direction = "BUY" if bias == "BULLISH" else "SELL"
+
+    if direction == "BUY" and zone != "DISCOUNT":
+        return _reject(f"BUY_NOT_IN_DISCOUNT (zone={zone})")
+    if direction == "SELL" and zone != "PREMIUM":
+        return _reject(f"SELL_NOT_IN_PREMIUM (zone={zone})")
+
+    # ── 5. TROVA OB ──────────────────────────────────────────
+    # Prezzo corrente dalla candela piu' recente disponibile
+    if df_m5 is not None and len(df_m5) > 0:
+        last = df_m5.iloc[-1]
+    else:
+        last = df_m15.iloc[-1]
+
+    current_price = float(last["close"])
+    current_high  = float(last["high"])
+    current_low   = float(last["low"])
+
+    ob = _find_best_ob(mie_context, bias, current_price)
+    if ob is None:
+        return _reject("NO_OB_NEARBY")
+
+    # ── 6. PREZZO TOCCA LA ZONA OB ───────────────────────────
+    if not _price_in_ob_zone(ob, current_high, current_low):
+        ob_mid = (float(ob["zone_high"]) + float(ob["zone_low"])) / 2
+        dist = abs(current_price - ob_mid) / current_price
+        return _reject(f"PRICE_NOT_AT_OB (dist={dist:.4f})")
+
+    # ── 7. CANDLESTICK CONFIRMATION ──────────────────────────
+    if not mie_context.get("mie_candlestick_has_confirmation"):
+        return _reject("NO_CANDLESTICK_CONFIRMATION")
+
+    # ══════════════════════════════════════════════════════════
+    # TUTTE LE 5 CONDIZIONI SODDISFATTE — calcola Entry/SL/TP
+    # ══════════════════════════════════════════════════════════
+
+    zh = float(ob["zone_high"])
+    zl = float(ob["zone_low"])
+
+    # ATR per buffer SL
+    atr_m15 = mie_context.get("mie_volatility_atr_m15", 0)
+    if not atr_m15 or atr_m15 <= 0:
+        # Fallback: calcola da candele
+        if len(df_m15) >= 14:
+            highs = df_m15["high"].astype(float).values
+            lows  = df_m15["low"].astype(float).values
+            closes = df_m15["close"].astype(float).values
+            trs = []
+            for i in range(-14, 0):
+                tr = max(highs[i]-lows[i], abs(highs[i]-closes[i-1]),
+                         abs(lows[i]-closes[i-1]))
+                trs.append(tr)
+            atr_m15 = sum(trs) / len(trs)
+        else:
+            atr_m15 = abs(zh - zl) * 2  # fallback estremo
+
+    buffer = SL_BUFFER_ATR_MULT * atr_m15
+
+    # Entry / SL
+    entry = current_price
+    if direction == "BUY":
+        sl = zl - buffer
+    else:
+        sl = zh + buffer
+
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return _reject("ZERO_RISK")
+
+    # TP
+    tp_price, tp_label = _find_tp_target(mie_context, direction, entry,
+                                          current_price, atr_m15)
+    if tp_price is None:
+        return _reject("NO_TP_TARGET")
+
+    reward = abs(tp_price - entry)
+    rr = reward / risk if risk > 0 else 0
+
+    if rr < MIN_RR:
+        return _reject(f"RR_TOO_LOW ({rr:.2f} < {MIN_RR})")
+
+    # Quality
+    quality_score, quality_label = _compute_quality(ob, mie_context, bias_confidence)
+
+    # ── Costruisci segnale ───────────────────────────────────
+    signal = {
+        "signal_id":            str(uuid.uuid4()),
+        "strategy_name":        STRATEGY_NAME,
+        "strategy_version":     STRATEGY_VERSION,
+        "asset":                asset,
+        "direction":            direction,
+        "timestamp_setup":      now.isoformat(),
+
+        "entry":                round(entry, 4),
+        "stop_loss":            round(sl, 4),
+        "tp":                   round(tp_price, 4),
+        "risk":                 round(risk, 4),
+        "rr":                   round(rr, 2),
+
+        # Campi legacy LH DB — riutilizzati per OB context
+        "swept_level_label":    ob.get("id", "?"),           # OB id (per dedup)
+        "swept_level_price":    round((zh + zl) / 2, 4),     # OB midpoint
+        "swept_level_priority": ob.get("status", "FRESH"),   # FRESH/BREAKER
+        "swept_level_touches":  ob.get("test_count", 0),
+        "sweep_direction":      bias,                        # bias direction
+        "sweep_peak_price":     zh if direction == "BUY" else zl,
+        "sweep_penetration":    0,
+        "sweep_penetration_pct": 0,
+
+        "flag_bos_present":     False,
+        "flag_choch_present":   False,
+        "flag_trigger_present": True,
+        "flag_near_order_block": True,
+        "flag_near_fvg":        bool(ob.get("has_fvg")),
+        "ob_quality":           ob.get("quality_score"),
+        "ob_match_type":        ob.get("status"),
+        "pool_type":            f"OB_{ob.get('status', 'FRESH')}",
+        "flag_htf_pool":        False,
+        "confluence_count":     6,  # tutte e 6 le condizioni soddisfatte
+
+        "trigger_type":         "OB_TOUCH",
+        "trigger_ref_level":    round((zh + zl) / 2, 4),
+
+        "tp_label":             tp_label,
+        "tp_priority":          "FIRST_REACHABLE",
+
+        "quality_score":        quality_score,
+        "quality_label":        quality_label,
+
+        "session":              session,
+        "expiry_bars":          EXPIRY_BARS,
     }
 
-    def reject(reason: str) -> dict:
-        diag["rejection"] = reason
-        logger.info("LH [%s]: REJECT %s", asset, reason)
-        return {"signal": None, "diagnostics": diag}
-
-    if len(df_m15) < LIQUIDITY_SWEEP_LOOKBACK + 10:
-        return reject("INSUFFICIENT_M15_DATA")
-
-    current_price = float(df_m15.iloc[-1]["close"])
-
-    # ATR M15 per il floor sullo SL (fix propagato da V41P1)
-    atr_m15 = _compute_atr_m15(df_m15)
-
-    # ── Step 1: Liquidity Pools attive ──────────────────────
-    active_pools = find_active_liquidity_pools(mfm, current_price)
-    diag["active_pools"] = [lv["label"] for lv in active_pools]
-
-    if not active_pools:
-        return reject("NO_ACTIVE_LIQUIDITY_POOL")
-
-    # ── Step 2+3: Sweep + Trigger ────────────────────────────
-    for level in active_pools:
-        sweep = check_liquidity_sweep(df_m15, level)
-        if sweep is None:
-            continue
-
-        # ── Fix Bug 1: direzione corretta ────────────────────
-        # Sweep BULLISH (Low sweepato) → BUY
-        # Sweep BEARISH (High sweepato) → SELL
-        direction = sweep["expected_trade"]
-
-        # Trigger BOS/CHOCH: NON piu' un gate. Lo sweep + rientro E' gia' la
-        # configurazione. Il BOS/CHOCH e' "il momento di entrare", che il
-        # trader decide guardando il grafico. Lo registriamo come FLAG per
-        # misurare se migliora davvero il WR (filosofia Entry Zone Finder).
-        trigger = find_post_sweep_trigger(df_m15, sweep, direction)
-
-        diag["sweep"]   = sweep
-        diag["trigger"] = trigger
-
-        # Entry suggerita = rientro dello sweep (close della candela di sweep,
-        # sul lato "buono" del livello). Se c'e' un trigger, usiamo il suo entry
-        # come riferimento; altrimenti il livello sweepato.
-        if trigger is not None:
-            entry = trigger["entry"]
-        else:
-            # Rientro: il prezzo e' tornato dal lato giusto del livello.
-            entry = float(sweep["level_price"])
-
-        # ── Fix Bug 2: SL con buffer adeguato + floor ATR ───
-        sl   = compute_sl(sweep, direction, entry=entry, atr_m15=atr_m15)
-        risk = abs(entry - sl)
-
-        # Validità SL
-        if direction == "BUY" and sl >= entry:
-            logger.debug("LH [%s]: SL_INVALID_BUY sl=%.4f entry=%.4f", asset, sl, entry)
-            continue
-        if direction == "SELL" and sl <= entry:
-            logger.debug("LH [%s]: SL_INVALID_SELL sl=%.4f entry=%.4f", asset, sl, entry)
-            continue
-        if risk <= 0:
-            continue
-
-        tp_level = find_tp_target(mfm, entry, direction, level)
-        if tp_level is None:
-            continue
-
-        tp = tp_level["price"]
-
-        if direction == "BUY" and tp <= entry:
-            continue
-        if direction == "SELL" and tp >= entry:
-            continue
-
-        rr = abs(tp - entry) / risk
-
-        # ── Fix Bug 3: RR minimo ─────────────────────────────
-        if rr < MIN_RR:
-            logger.info("LH [%s]: RR_TOO_LOW (%.2f < %.1f)", asset, rr, MIN_RR)
-            continue
-
-        # ── Confluenze dalla teoria (doc 004/005/013) come FLAG ──
-        # "Maggiore il numero di conferme indipendenti, maggiore la probabilita'"
-        # Confluenza misurata dal LIVELLO SWEEPATO (doc 005: OB si forma dopo lo
-        # sweep, quindi e' vicino al livello, non all'entry del trigger che e'
-        # piu' distante). Usare l'entry sottostimerebbe le confluenze.
-        conf = _near_confluence_ob_fvg(mie_context or {}, sweep["level_price"], direction, atr_m15)
-        pool_type = _pool_type(level.get("label"))
-        # HTF pool = pool su timeframe superiori (piu' rilevanti per la teoria)
-        flag_htf_pool = level.get("priority_label") in ("CRITICAL", "HIGH")
-        # Numero di conferme (confluence score): quante confluenze presenti
-        confluence_count = sum([
-            conf["flag_near_order_block"],
-            conf["flag_near_fvg"],
-            trigger is not None,                    # BOS/CHOCH
-            pool_type in ("EQUAL", "WEEKLY", "DAILY"),  # pool forte
-            flag_htf_pool,
-        ])
-
-        quality_score, quality_label = compute_quality(level, sweep, trigger, df_m15)
-        # NOTA: quality NON blocca piu'. I dati mostrano che e' invertito
-        # (HIGH perde, MEDIUM vince) perche' premia penetration alta e molti
-        # touch, cioe' i fattori dei breakout. Si registra come flag.
-
-        try:
-            trig_candle = df_m15.iloc[trigger["candle_idx"]]
-            trig_ts_ms  = int(trig_candle["timestamp"])
-            trig_dt     = datetime.fromtimestamp(trig_ts_ms / 1000, tz=timezone.utc)
-        except Exception:
-            trig_dt = now
-
-        signal = {
-            "signal_id":        str(uuid.uuid4()),
-            "strategy_name":    STRATEGY_NAME,
-            "strategy_version": STRATEGY_VERSION,
-            "asset":            asset,
-            "direction":        direction,
-            "timestamp_setup":  trig_dt.isoformat(),
-
-            "entry":     entry,
-            "stop_loss": sl,
-            "tp":        tp,
-            "risk":      risk,
-            "rr":        round(rr, 2),
-
-            "swept_level_label":    level["label"],
-            "swept_level_price":    level["price"],
-            "swept_level_priority": level.get("priority_label"),
-            "swept_level_touches":  level.get("historical_touches", 0),
-
-            "sweep_direction":     sweep["direction"],
-            "sweep_peak_price":    sweep["peak_price"],
-            "sweep_candle_idx":    sweep["candle_idx"],
-            "sweep_penetration":   round(sweep["penetration"], 6),
-            "sweep_penetration_pct": round(sweep.get("penetration_pct", 0), 6),
-
-            # Trigger ora e' un FLAG, non un gate: puo' essere assente.
-            "trigger_type":      trigger["trigger_type"] if trigger else None,
-            "trigger_ref_level": trigger["ref_level"]    if trigger else None,
-            "flag_bos_present":    bool(trigger and trigger["trigger_type"] == "BOS"),
-            "flag_choch_present":  bool(trigger and trigger["trigger_type"] == "CHOCH"),
-            "flag_trigger_present": trigger is not None,
-
-            # ── Confluenze dalla teoria (informative, NON gate) ──
-            "flag_near_order_block": conf["flag_near_order_block"],
-            "flag_near_fvg":         conf["flag_near_fvg"],
-            "ob_quality":            conf["ob_quality"],
-            "ob_match_type":         conf["ob_match_type"],
-            "pool_type":             pool_type,
-            "flag_htf_pool":         bool(flag_htf_pool),
-            "confluence_count":      confluence_count,
-
-            "tp_label":    tp_level["label"],
-            "tp_priority": tp_level.get("priority_label"),
-
-            "quality_score": quality_score,
-            "quality_label": quality_label,
-
-            "final_outcome": "OPEN",
-            "expiry_bars":   EXPIRY_BARS_M15,
-        }
-
-        logger.info(
-            "LH [%s %s]: SIGNAL entry=%.4f sl=%.4f tp=%.4f rr=%.2f "
-            "level=%s sweep=%s trigger=%s quality=%d (%s)",
-            asset, direction, entry, sl, tp, rr,
-            level["label"], sweep["direction"],
-            trigger["trigger_type"] if trigger else "NONE", quality_score, quality_label,
-        )
-
-        return {"signal": signal, "diagnostics": diag}
-
-    return reject("NO_VALID_SETUP (nessuno sweep valido nella fascia di penetrazione sui livelli attivi)")
+    return {"signal": signal, "diagnostics": {"status": "SIGNAL_GENERATED"}}
