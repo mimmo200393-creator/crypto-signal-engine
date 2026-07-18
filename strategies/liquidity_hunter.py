@@ -438,24 +438,43 @@ def _near_confluence_ob_fvg(mie_context: dict, ref_price: float, direction: str,
     Confluenze Order Block / FVG dalla teoria (doc 004: "sweep + Order Block",
     "sweep + FVG"; doc 005: un OB di qualita' richiede uno sweep precedente).
     Ritorna flag informativi (NON gate). Usa i campi reali del mie_context.
+
+    FIX: mie_order_block_nearest_fresh_{side} non e' mai esistito nello
+    snapshot OB (a differenza di FVG, che lo calcola gia'). L'engine OB
+    salva solo la lista grezza "order_blocks". Cerchiamo il match qui,
+    considerando sia FRESH (mai mitigato, criterio #4 doc 005) sia
+    BREAKER (zona che ha cambiato ruolo e viene ri-testata piu' volte -
+    unico segnale di persistenza osservato finora nei dati reali).
     """
     out = {"flag_near_order_block": False, "flag_near_fvg": False,
-           "ob_quality": None, "fvg_ref": None}
+           "ob_quality": None, "ob_match_type": None, "fvg_ref": None}
     if not mie_context or atr_m15 <= 0:
         return out
     max_dist = 0.5 * atr_m15
     side = "bullish" if direction == "BUY" else "bearish"
+    want_dir = "BULLISH" if direction == "BUY" else "BEARISH"
 
-    ob = mie_context.get(f"mie_order_block_nearest_fresh_{side}")
-    if isinstance(ob, dict):
+    ob_list = mie_context.get("mie_order_block_order_blocks") or []
+    best, best_dist, best_type = None, None, None
+    for ob in ob_list:
+        if ob.get("direction") != want_dir:
+            continue
+        status = ob.get("status")
+        if status not in ("FRESH", "BREAKER"):
+            continue
         mid = ob.get("zone_midpoint")
         if mid is None:
             zh, zl = ob.get("zone_high"), ob.get("zone_low")
-            if zh is not None and zl is not None:
-                mid = (float(zh) + float(zl)) / 2
-        if mid is not None and abs(ref_price - float(mid)) <= max_dist:
-            out["flag_near_order_block"] = True
-            out["ob_quality"] = ob.get("quality_score")
+            if zh is None or zl is None:
+                continue
+            mid = (float(zh) + float(zl)) / 2
+        dist = abs(ref_price - float(mid))
+        if dist <= max_dist and (best_dist is None or dist < best_dist):
+            best, best_dist, best_type = ob, dist, status
+    if best:
+        out["flag_near_order_block"] = True
+        out["ob_quality"] = best.get("quality_score")
+        out["ob_match_type"] = best_type
 
     fvg = mie_context.get(f"mie_fvg_nearest_open_{side}")
     if isinstance(fvg, dict) and not fvg.get("is_invalidated"):
@@ -642,6 +661,7 @@ def generate_lh_signal(
             "flag_near_order_block": conf["flag_near_order_block"],
             "flag_near_fvg":         conf["flag_near_fvg"],
             "ob_quality":            conf["ob_quality"],
+            "ob_match_type":         conf["ob_match_type"],
             "pool_type":             pool_type,
             "flag_htf_pool":         bool(flag_htf_pool),
             "confluence_count":      confluence_count,
