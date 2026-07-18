@@ -88,6 +88,7 @@ def _trade_dict(signal: dict) -> dict:
         "flag_bos_present":      signal.get("flag_bos_present"),
         "flag_choch_present":    signal.get("flag_choch_present"),
         "flag_near_order_block": signal.get("flag_near_order_block"),
+        "ob_match_type":         signal.get("ob_match_type"),
         "flag_near_fvg":         signal.get("flag_near_fvg"),
         "flag_htf_pool":         signal.get("flag_htf_pool"),
         "sweep_penetration_pct": signal.get("sweep_penetration_pct"),
@@ -191,3 +192,4 @@ def link_outcome(decision_id: str, outcome: str, entry: float, stop_loss: float,
         )
     except Exception as e:
         logger.warning("LH link_outcome fallito (non-blocking): %s", e)
+        
