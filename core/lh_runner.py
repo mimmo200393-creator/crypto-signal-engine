@@ -1,18 +1,17 @@
 """
 core/lh_runner.py
-Liquidity Hunter — Runner
+Liquidity Hunter v2.0 — Runner
 
-Sprint 13: MIE Context Enrichment
-    - Ogni segnale LH riceve lo snapshot completo di tutti
-      gli engine MIE salvato in market_snapshot JSON
-    - Filtri statistici (OVERLAP, risk floor)
+Confluence Sniper: entry su Order Block con bias allineato.
+    - M15 per contesto (bias, OB, premium/discount, sessione)
+    - M5 per entry precisa (solo XAU — Twelve Data)
+    - BTC resta su M15
 
-Per ogni asset (BTC_USDT, PAXG_USDT):
-    1. Carica candele M15 e MFM
-    2. Monitora segnali aperti
-    3. Legge MIE context da snapshot DB
-    4. Genera segnale LH
-    5. Se valido → arricchisce con MIE, inserisce e notifica
+Per ogni asset (BTC_USDT, XAU_USD):
+    1. Carica candele M15 (+ M5 per XAU)
+    2. Legge MIE context da snapshot DB
+    3. Genera segnale LH v2
+    4. Se valido → arricchisce con MIE, inserisce e notifica
 """
 
 from __future__ import annotations
@@ -26,12 +25,11 @@ from core import v3_db
 from core import lh_db
 from core.decision_ledger import lh_integration as ledger_link
 from strategies.liquidity_hunter import generate_lh_signal
-from strategies.money_flow_map import build_money_flow_map
 
 logger = logging.getLogger("lh.runner")
 
-LH_ASSETS      = ["BTC_USDT", "PAXG_USDT"]
-LH_TIMEFRAMES  = {"H4": "4h", "M15": "15m", "D1": "1D"}
+LH_ASSETS      = ["BTC_USDT", "XAU_USD"]
+LH_TIMEFRAMES  = {"H4": "4h", "M15": "15m", "M5": "5m", "D1": "1D"}
 
 
 # ============================================================
@@ -130,19 +128,59 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     limit  = config.get("BOOTSTRAP_TARGET_CANDLES", 300)
     df_h4  = core_db.get_candles_df(conn, asset, LH_TIMEFRAMES["H4"], limit=limit)
     df_m15 = v3_db.get_v3_candles_df(conn, asset, LH_TIMEFRAMES["M15"], limit=limit)
-    df_d1  = v3_db.get_v3_candles_df(conn, asset, LH_TIMEFRAMES["D1"], limit=60)
 
     if len(df_m15) < 20 or len(df_h4) < 10:
         logger.warning("LH [%s]: dati insufficienti, skip.", asset)
         return
 
+    # ── M5 per XAU (entry precisa) ───────────────────────────
+    df_m5 = None
+    if asset == "XAU_USD":
+        _fetch_m5_candles(conn, asset, config)
+        df_m5 = v3_db.get_v3_candles_df(conn, asset, LH_TIMEFRAMES["M5"], limit=100)
+        if df_m5 is None or len(df_m5) < 5:
+            logger.info("LH [%s]: candele M5 insufficienti, uso M15.", asset)
+            df_m5 = None
+
     # Monitora segnali aperti
     try:
-        last_m15 = df_m15.iloc[-1]
+        last_candle = df_m5.iloc[-1] if df_m5 is not None and len(df_m5) > 0 else df_m15.iloc[-1]
+        current_high_m = float(last_candle["high"])
+        current_low_m  = float(last_candle["low"])
+
+        # ── Breakeven: se MFE >= 0.3 ATR, sposta SL a entry ──
+        atr_m15 = mie_context.get("mie_volatility_atr_m15", 0) or 0
+        be_threshold = 0.3 * atr_m15 if atr_m15 > 0 else 0
+
+        if be_threshold > 0:
+            open_rows = conn.execute(
+                "SELECT signal_id, direction, entry, stop_loss, mfe "
+                "FROM lh_signals WHERE final_outcome='OPEN' AND asset=?",
+                (asset,)
+            ).fetchall()
+            for sid, d, entry_p, sl_p, mfe_p in open_rows:
+                if entry_p is None or sl_p is None:
+                    continue
+                fav = max(current_high_m - entry_p, 0) if d == "BUY" else max(entry_p - current_low_m, 0)
+                cur_mfe = max(float(mfe_p or 0), fav)
+                # SL non ancora a breakeven e MFE supera soglia
+                if cur_mfe >= be_threshold:
+                    if (d == "BUY" and float(sl_p) < float(entry_p)) or \
+                       (d == "SELL" and float(sl_p) > float(entry_p)):
+                        conn.execute(
+                            "UPDATE lh_signals SET stop_loss=? WHERE signal_id=?",
+                            (entry_p, sid)
+                        )
+                        conn.commit()
+                        logger.info(
+                            "LH BE [%s]: %s SL spostato a breakeven (entry=%.4f, mfe=%.2f)",
+                            asset, sid[:8], entry_p, cur_mfe
+                        )
+
         updated  = lh_db.monitor_open_lh_signals(
             conn, asset,
-            current_high=float(last_m15["high"]),
-            current_low=float(last_m15["low"]),
+            current_high=current_high_m,
+            current_low=current_low_m,
             now_iso=now.isoformat(),
         )
         for upd in updated:
@@ -150,7 +188,6 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                 "LH Monitor [%s]: %s → outcome=%s bars=%d",
                 asset, upd["signal_id"][:8], upd["outcome"], upd["bars_open"],
             )
-            # ── Collega l'esito al Decision Ledger (passivo) ──
             try:
                 row = conn.execute(
                     "SELECT entry, stop_loss, rr FROM lh_signals WHERE signal_id=?",
@@ -170,16 +207,13 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     except Exception as e:
         logger.error("LH Monitor [%s]: errore: %s", asset, e)
 
-    # Costruisce MFM
-    current_price = float(df_m15.iloc[-1]["close"])
-    mfm = build_money_flow_map(df_h4, df_d1, current_price)
-
-    # ── Leggi MIE context (Sprint 13) ────────────────────────
+    # ── Leggi MIE context ────────────────────────────────────
     mie_context = _read_mie_context(conn, asset)
 
     # Genera segnale
     try:
-        result = generate_lh_signal(asset, df_m15, mfm, now, mie_context=mie_context)
+        result = generate_lh_signal(asset, df_m15, now,
+                                    mie_context=mie_context, df_m5=df_m5)
     except Exception as e:
         logger.error("LH [%s]: errore generazione: %s", asset, e)
         return
@@ -193,56 +227,38 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
 
     direction = signal["direction"]
 
-    # ── Check posizione già aperta (fix: prima era un ciclo morto) ──
-    # LH genera un solo segnale per asset e la direzione emerge dallo
-    # sweep, quindi il check va fatto QUI (direzione nota) e con return,
-    # non in un for anticipato il cui `continue` non bloccava l'insert.
+    # ── Check posizione già aperta ───────────────────────────
     if lh_db.has_open_lh_signal(conn, asset, direction):
         logger.info(
-            "LH [%s %s]: segnale OPEN già presente, skip (no duplicato).",
+            "LH [%s %s]: segnale OPEN già presente, skip.",
             asset, direction,
         )
         return
 
-    # ══════════════════════════════════════════════════════════
-    # ── Filtri statistici (Sprint 13) ────────────────────────
-    # ══════════════════════════════════════════════════════════
-
-    current_session = _get_session(now)
-    signal["session"] = signal.get("session", current_session)
-
-    # OVERLAP: WR 8.7% cross-strategy
-    if signal.get("session") == "OVERLAP":
-        logger.info("LH [%s %s]: REJECT SESSION_OVERLAP", asset, direction)
-        return
-
-    # Risk floor: SL troppo stretto
+    # ── Risk floor: SL troppo stretto ────────────────────────
     entry = signal.get("entry", 0)
     sl = signal.get("stop_loss", 0)
     if entry and sl:
         risk_pct = abs(entry - sl) / entry
-        if risk_pct < 0.002:
+        if risk_pct < 0.001:
             logger.info(
                 "LH [%s %s]: REJECT RISK_TOO_TIGHT (%.4f)",
                 asset, direction, risk_pct,
             )
             return
 
-    # ══════════════════════════════════════════════════════════
-
-    # Check duplicati: stesso livello sweepato nelle ultime 4h
-    if lh_db.has_recent_lh_signal(
-        conn, asset, direction, signal["swept_level_label"], hours=4
+    # ── Check duplicati: stesso OB nelle ultime 4h ───────────
+    ob_ref = signal.get("swept_level_label", "")
+    if ob_ref and lh_db.has_recent_lh_signal(
+        conn, asset, direction, ob_ref, hours=0.5
     ):
         logger.info(
-            "LH [%s %s]: duplicato (livello=%s), skip.",
-            asset, direction, signal["swept_level_label"],
+            "LH [%s %s]: duplicato OB=%s, skip.",
+            asset, direction, ob_ref,
         )
         return
 
-    # ══════════════════════════════════════════════════════════
-    # ── MIE Context Enrichment (Sprint 13) ───────────────────
-    # ══════════════════════════════════════════════════════════
+    # ── MIE Context Enrichment ───────────────────────────────
     signal["market_snapshot"] = json.dumps(mie_context, default=str)
 
     try:
@@ -251,9 +267,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         logger.error("LH [%s]: errore inserimento: %s", asset, e)
         return
 
-    # ── Decision Ledger: registra i voti dei 13 engine (passivo) ──
-    # Modalita' solo-registrazione: accumula dati per l'analisi futura
-    # engine+confluenze. Non-blocking: se fallisce, LH continua.
+    # ── Decision Ledger ──────────────────────────────────────
     try:
         raw_snaps = _read_raw_snapshots(conn, asset)
         snapshots = ledger_link.build_snapshots_dict(
@@ -261,7 +275,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
             raw_snaps.get("order_block"), raw_snaps.get("fvg"),
             raw_snaps.get("liquidity"), raw_snaps.get("session_sweep"),
             raw_snaps.get("reaction_map"), raw_snaps.get("candlestick"),
-            raw_snaps.get("macro"), raw_snaps.get("market_state"), mfm,
+            raw_snaps.get("macro"), raw_snaps.get("market_state"), None,
         )
         ledger_link.capture_executed(signal_id, asset, signal, snapshots)
     except Exception as e:
@@ -269,18 +283,37 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
 
     logger.info(
         "LH [%s %s]: SEGNALE entry=%.4f sl=%.4f tp=%.4f rr=%.2f "
-        "level=%s sweep=%s trigger=%s quality=%d (%s) "
-        "mie=%d engines (id=%s)",
+        "ob=%s quality=%d (%s) (id=%s)",
         asset, direction,
         signal["entry"], signal["stop_loss"], signal["tp"], signal["rr"],
-        signal["swept_level_label"], signal["sweep_direction"],
-        signal.get("trigger_type") or "NONE", signal["quality_score"], signal["quality_label"],
-        sum(1 for k, v in mie_context.items()
-            if k.endswith("_available") and v),
+        signal.get("swept_level_label", "?"),
+        signal["quality_score"], signal["quality_label"],
         signal_id,
     )
 
     _notify(signal, config)
+
+    _notify(signal, config)
+
+
+def _fetch_m5_candles(conn, asset: str, config: dict):
+    """Fetch candele M5 per XAU via Twelve Data e salva in v3_candles_cache."""
+    try:
+        from core.data_source import get_provider, should_fetch
+        last_ts = v3_db.get_v3_latest_timestamp(conn, asset, "5m")
+        if not should_fetch(asset, "5m", last_ts):
+            return
+        provider = get_provider(asset, family="v3")
+        base_url = config.get("V3_EXCHANGE_BASE_URL", "")
+        delay = config.get("V3_EXCHANGE_REQUEST_DELAY", 0.5)
+        candles = provider.fetch_latest_candles(
+            base_url, asset, "5m", 50, delay
+        )
+        if candles:
+            v3_db.upsert_v3_candles(conn, asset, "5m", candles)
+            logger.debug("LH [%s]: fetched %d candele M5", asset, len(candles))
+    except Exception as e:
+        logger.warning("LH [%s]: M5 fetch fallito (non-blocking): %s", asset, e)
 
 
 def _notify(signal: dict, config: dict):
@@ -299,17 +332,14 @@ def _notify(signal: dict, config: dict):
             return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
 
         text = (
-            f"{emoji} *LIQUIDITY HUNTER v1.0*\n\n"
+            f"{emoji} *LIQUIDITY HUNTER v2.0*\n\n"
             f"*{asset.replace('_',' ')}* — {direction}\n\n"
             f"Score: *{signal['quality_score']}* ({signal['quality_label']})\n\n"
             f"Entry:  `{fp(signal['entry'])}`\n"
             f"SL:     `{fp(signal['stop_loss'])}`\n"
             f"TP:     `{fp(signal['tp'])}` ({signal['rr']:.2f}R)\n\n"
-            f"Livello: {signal['swept_level_label']} "
-            f"({signal.get('swept_level_priority','?')})\n"
-            f"Sweep:   {signal['sweep_direction']}\n"
-            f"Trigger: {signal['trigger_type']}\n"
-            f"Target:  {signal['tp_label']}"
+            f"OB: {signal.get('swept_level_label', '?')}\n"
+            f"Target: {signal.get('tp_label', '?')}"
         )
 
         bot_token  = config.get("TELEGRAM_BOT_TOKEN", "")
