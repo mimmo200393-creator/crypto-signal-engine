@@ -44,10 +44,7 @@ def _update_v3_candles(conn, asset: str, config: dict):
 
     exchange = data_source.get_provider(asset, family="v3")
 
-    # M5 solo per XAU (scalping LH v2, Twelve Data budget OK: 534/800)
-    fetch_tfs = ["D1", "M30", "M15"]
-    if asset == "XAU_USD":
-        fetch_tfs.append("M5")
+    fetch_tfs = ["D1", "M30", "M15", "M5"]
 
     for tf_label in fetch_tfs:
         tf = V3_TIMEFRAMES[tf_label]
