@@ -404,6 +404,7 @@ def compute_features(conn, asset, df_m15, price, cfg, now=None,
         "zone_kind":       zone_kind,
         "atr":             atr,
         "price":           price,
+        "m5_reversal":     None,  # popolato dal runner se df_m5 disponibile
     }
 
 
@@ -493,9 +494,12 @@ def next_state(cur_state: str, f: dict, cfg,
         if (max_bars and bars_in_observe is not None
                 and bars_in_observe >= max_bars):
             return (STATE_REST, False)
-        # Emette SOLO se l'esaurimento avviene SU una zona tecnica.
+        # Emette SOLO se l'esaurimento avviene SU una zona tecnica
+        # E il M5 conferma l'inversione (se disponibile).
         if exhausted and context_ok:
-            return (STATE_OBSERVE, True)          # EMETTI Entry Zone, resta in osservazione
+            m5r = f.get("m5_reversal")
+            if m5r is None or m5r is True:  # None = M5 non disponibile, non bloccare
+                return (STATE_OBSERVE, True)          # EMETTI Entry Zone, resta in osservazione
         # Nota: NON invalidiamo su continuazione del prezzo. Il respiro puo'
         # arrivare anche dopo che il prezzo e' andato un po' contro. Lo stop
         # loss viene REGISTRATO nel monitor, ma non interrompe la misura.
@@ -582,6 +586,21 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     open_refs = market_radar_db.get_open_zone_refs(conn, asset)
     f = compute_features(conn, asset, df_m15, price, cfg, now=now,
                          cur_state=state)
+
+    # ── M5 reversal confirmation (solo XAU, dove M5 è disponibile) ──
+    if asset == "XAU_USD":
+        try:
+            df_m5 = v3_db.get_v3_candles_df(conn, asset, "5m", limit=20)
+            if df_m5 is not None and len(df_m5) >= 3 and f.get("direction"):
+                # Le ultime 3 candele M5 confermano la direzione del rimbalzo?
+                # BUY: 3 close consecutive crescenti. SELL: 3 close decrescenti.
+                closes = df_m5["close"].astype(float).values[-3:]
+                if f["direction"] == "BUY":
+                    f["m5_reversal"] = bool(closes[2] > closes[1] > closes[0])
+                else:
+                    f["m5_reversal"] = bool(closes[2] < closes[1] < closes[0])
+        except Exception as e:
+            logger.debug("Radar [%s]: M5 reversal check fallito: %s", asset, e)
 
     # 4) Da quanto tempo siamo in OSSERVAZIONE (per la scadenza della finestra)
     bars_in_observe = None
