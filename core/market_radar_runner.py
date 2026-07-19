@@ -591,11 +591,43 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     try:
         df_m5 = v3_db.get_v3_candles_df(conn, asset, "5m", limit=20)
         if df_m5 is not None and len(df_m5) >= 3 and f.get("direction"):
-            closes = df_m5["close"].astype(float).values[-3:]
-            if f["direction"] == "BUY":
-                f["m5_reversal"] = bool(closes[2] > closes[1] > closes[0])
-            else:
-                f["m5_reversal"] = bool(closes[2] < closes[1] < closes[0])
+            # Conferma inversione sulle ultime 3 candele M5:
+            # Cerchiamo UN pattern di rifiuto (basta 1 candela su 3):
+            #   BUY: ombra inferiore > corpo E close > open (rifiuto dal basso)
+            #   SELL: ombra superiore > corpo E close < open (rifiuto dall'alto)
+            # Oppure engulfing: corpo candela attuale copre il corpo precedente
+            # nella direzione del rimbalzo.
+            confirmed = False
+            last3 = df_m5.iloc[-3:]
+            for i in range(len(last3)):
+                c = last3.iloc[i]
+                o, h, l, cl = float(c["open"]), float(c["high"]), float(c["low"]), float(c["close"])
+                body = abs(cl - o)
+                upper_shadow = h - max(cl, o)
+                lower_shadow = min(cl, o) - l
+                if body <= 0:
+                    continue
+                if f["direction"] == "BUY":
+                    # Pin bar rialzista: ombra inferiore >= 2x corpo, close > open
+                    if lower_shadow >= 2 * body and cl > o:
+                        confirmed = True
+                        break
+                else:
+                    # Pin bar ribassista: ombra superiore >= 2x corpo, close < open
+                    if upper_shadow >= 2 * body and cl < o:
+                        confirmed = True
+                        break
+            # Engulfing: ultima candela copre la precedente nella direzione giusta
+            if not confirmed and len(last3) >= 2:
+                prev = last3.iloc[-2]
+                curr = last3.iloc[-1]
+                p_o, p_c = float(prev["open"]), float(prev["close"])
+                c_o, c_c = float(curr["open"]), float(curr["close"])
+                if f["direction"] == "BUY" and c_c > c_o and c_c > max(p_o, p_c) and c_o < min(p_o, p_c):
+                    confirmed = True
+                elif f["direction"] == "SELL" and c_c < c_o and c_c < min(p_o, p_c) and c_o > max(p_o, p_c):
+                    confirmed = True
+            f["m5_reversal"] = confirmed
     except Exception as e:
         logger.debug("Radar [%s]: M5 reversal check fallito: %s", asset, e)
 
