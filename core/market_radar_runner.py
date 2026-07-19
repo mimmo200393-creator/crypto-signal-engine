@@ -587,20 +587,17 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     f = compute_features(conn, asset, df_m15, price, cfg, now=now,
                          cur_state=state)
 
-    # ── M5 reversal confirmation (solo XAU, dove M5 è disponibile) ──
-    if asset == "XAU_USD":
-        try:
-            df_m5 = v3_db.get_v3_candles_df(conn, asset, "5m", limit=20)
-            if df_m5 is not None and len(df_m5) >= 3 and f.get("direction"):
-                # Le ultime 3 candele M5 confermano la direzione del rimbalzo?
-                # BUY: 3 close consecutive crescenti. SELL: 3 close decrescenti.
-                closes = df_m5["close"].astype(float).values[-3:]
-                if f["direction"] == "BUY":
-                    f["m5_reversal"] = bool(closes[2] > closes[1] > closes[0])
-                else:
-                    f["m5_reversal"] = bool(closes[2] < closes[1] < closes[0])
-        except Exception as e:
-            logger.debug("Radar [%s]: M5 reversal check fallito: %s", asset, e)
+    # ── M5 reversal confirmation ───────────────────────────────
+    try:
+        df_m5 = v3_db.get_v3_candles_df(conn, asset, "5m", limit=20)
+        if df_m5 is not None and len(df_m5) >= 3 and f.get("direction"):
+            closes = df_m5["close"].astype(float).values[-3:]
+            if f["direction"] == "BUY":
+                f["m5_reversal"] = bool(closes[2] > closes[1] > closes[0])
+            else:
+                f["m5_reversal"] = bool(closes[2] < closes[1] < closes[0])
+    except Exception as e:
+        logger.debug("Radar [%s]: M5 reversal check fallito: %s", asset, e)
 
     # 4) Da quanto tempo siamo in OSSERVAZIONE (per la scadenza della finestra)
     bars_in_observe = None
