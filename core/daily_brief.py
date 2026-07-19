@@ -232,9 +232,7 @@ def send_daily_brief(conn, config: dict):
     ntfy_topic = config.get("NTFY_TOPIC", "")
     limit      = config.get("BOOTSTRAP_TARGET_CANDLES", 300)
 
-    assets_in_watchlist = [a for a in ZONE_ASSETS if a in config.get("WATCHLIST", [])]
-    if not assets_in_watchlist:
-        assets_in_watchlist = ZONE_ASSETS
+    assets_in_watchlist = ZONE_ASSETS
 
     full_message_parts = []
 
