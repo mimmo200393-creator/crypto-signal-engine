@@ -13,8 +13,10 @@ Invia su Telegram e ntfy.
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 
+import requests
 from core.indicators import find_pivots, cluster_levels
 from storage import db
 from notifications import telegram_bot, ntfy_bot
@@ -25,6 +27,55 @@ ZONE_ASSETS = ["BTC_USDT", "XAU_USD"]
 ZONE_LOOKBACK_H4 = 60
 ZONE_MIN_TOUCHES = 1
 ZONE_CLUSTER_ATR = 0.5
+
+# Paesi i cui eventi impattano XAU e BTC
+MACRO_COUNTRIES = ("US", "EU", "JP", "CN")
+
+
+def _get_macro_events() -> list:
+    """Fetcha il calendario economico FMP per oggi, filtra High/Medium."""
+    api_key = os.environ.get("FMP_API_KEY", "")
+    if not api_key:
+        return []
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        resp = requests.get(
+            "https://financialmodelingprep.com/api/v3/economic_calendar",
+            params={"from": today, "to": today, "apikey": api_key},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return []
+        events = resp.json()
+        if not isinstance(events, list):
+            return []
+        filtered = []
+        for ev in events:
+            if ev.get("country") not in MACRO_COUNTRIES:
+                continue
+            if ev.get("impact") not in ("High",):
+                continue
+            time_utc = ev["date"].split(" ")[1][:5] if " " in ev.get("date", "") else "?"
+            # Ora locale Brussels (UTC+2 estate, UTC+1 inverno — approssimato a +2)
+            try:
+                h_utc = int(time_utc[:2])
+                m = time_utc[3:]
+                h_local = h_utc + 2
+                if h_local >= 24:
+                    h_local -= 24
+                time_local = f"{h_local:02d}:{m}"
+            except (ValueError, IndexError):
+                time_local = time_utc
+            filtered.append({
+                "time": time_local,
+                "event": ev.get("event", "?"),
+                "country": ev.get("country", "?"),
+                "impact": ev.get("impact", "?"),
+            })
+        filtered.sort(key=lambda e: e["time"])
+        return filtered
+    except Exception:
+        return []
 
 
 def _get_bias(df_h4) -> str:
@@ -219,6 +270,7 @@ def _build_brief_message(asset: str, df_h1, df_h4, conn=None) -> str:
         lines.append("*Resistenze:* nessuna significativa")
 
     lines.extend(["", hint])
+
     return "\n".join(lines)
 
 
@@ -261,6 +313,15 @@ def send_daily_brief(conn, config: dict):
         return
 
     full_message = "\n\n---\n\n".join(full_message_parts)
+
+    # ── Eventi macro del giorno ──────────────────────────────
+    macro_events = _get_macro_events()
+    if macro_events:
+        macro_lines = ["", "---", "", "⚡ *Volatilità prevista oggi:*"]
+        for ev in macro_events:
+            emoji = "🔴" if ev["impact"] == "High" else "🟡"
+            macro_lines.append(f"  {emoji} {ev['time']} {ev['event']} ({ev['country']})")
+        full_message += "\n".join(macro_lines)
 
     if bot_token and chat_id:
         sent = telegram_bot.send_message(bot_token, chat_id, full_message)
