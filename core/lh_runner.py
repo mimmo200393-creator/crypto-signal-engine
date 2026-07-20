@@ -141,6 +141,9 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
             logger.info("LH [%s]: candele M5 insufficienti, uso M15.", asset)
             df_m5 = None
 
+    # ── Leggi MIE context ────────────────────────────────────
+    mie_context = _read_mie_context(conn, asset)
+
     # Monitora segnali aperti
     try:
         last_candle = df_m5.iloc[-1] if df_m5 is not None and len(df_m5) > 0 else df_m15.iloc[-1]
@@ -205,9 +208,6 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                 logger.warning("LH ledger link_outcome fallito (non-blocking): %s", e)
     except Exception as e:
         logger.error("LH Monitor [%s]: errore: %s", asset, e)
-
-    # ── Leggi MIE context ────────────────────────────────────
-    mie_context = _read_mie_context(conn, asset)
 
     # Genera segnale
     try:
