@@ -33,7 +33,7 @@ STRATEGY_NAME    = "LH"
 STRATEGY_VERSION = "v2.0"
 
 # ── Configurazione ──────────────────────────────────────────
-OB_PROXIMITY_PCT      = 0.005    # 0.5% — distanza max OB dal prezzo
+OB_PROXIMITY_PCT      = 0.010    # 1.0% — distanza max OB dal prezzo
 SL_BUFFER_ATR_MULT    = 0.4      # buffer SL oltre la zona OB (0.4 ATR = ~2.4pt XAU)
 MIN_RR                = 1.0      # RR minimo (scalping: piu' basso, WR piu' alto)
 EXPIRY_BARS           = 6        # 30 min su M5, ~1.5h su M15 — scalping rapido
@@ -277,10 +277,10 @@ def generate_lh_signal(
 
     direction = "BUY" if bias == "BULLISH" else "SELL"
 
-    if direction == "BUY" and zone != "DISCOUNT":
-        return _reject(f"BUY_NOT_IN_DISCOUNT (zone={zone})")
-    if direction == "SELL" and zone != "PREMIUM":
-        return _reject(f"SELL_NOT_IN_PREMIUM (zone={zone})")
+    if direction == "BUY" and zone == "PREMIUM":
+        return _reject(f"BUY_IN_PREMIUM (zone={zone})")
+    if direction == "SELL" and zone == "DISCOUNT":
+        return _reject(f"SELL_IN_DISCOUNT (zone={zone})")
 
     # ── 5. TROVA OB ──────────────────────────────────────────
     # Prezzo corrente dalla candela piu' recente disponibile
