@@ -33,48 +33,64 @@ MACRO_COUNTRIES = ("US", "EU", "JP", "CN", "DE", "UK")
 
 
 def _get_macro_events() -> list:
-    """Fetcha il calendario economico Finnhub per oggi, filtra High impact."""
-    api_key = os.environ.get("FINNHUB_API_KEY", "")
-    if not api_key:
-        return []
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    """Fetcha il calendario economico da Forex Factory (gratuito, no API key)."""
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     try:
         resp = requests.get(
-            "https://finnhub.io/api/v1/calendar/economic",
-            params={"from": today, "to": today, "token": api_key},
+            "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
             timeout=10,
         )
         if resp.status_code != 200:
             return []
-        data = resp.json()
-        events = data.get("economicCalendar", [])
+        events = resp.json()
         if not isinstance(events, list):
             return []
+
+        # Mappa valute FF → paesi
+        currency_map = {
+            "USD": "US", "EUR": "EU", "GBP": "UK", "JPY": "JP",
+            "CNY": "CN", "CHF": "CH", "AUD": "AU", "CAD": "CA",
+        }
+
         filtered = []
         for ev in events:
-            country = ev.get("country", "")
+            # Filtra solo impatto alto
+            if ev.get("impact") not in ("High",):
+                continue
+
+            # Filtra per valuta/paese
+            currency = ev.get("country", "")
+            country = currency_map.get(currency, currency)
             if country not in MACRO_COUNTRIES:
                 continue
-            impact = ev.get("impact", "low")
-            if impact not in ("high",):
+
+            # Data evento (FF usa timezone US Eastern, -04:00)
+            date_str = ev.get("date", "")
+            if not date_str:
                 continue
-            time_utc = ev.get("time", "?")
-            # Ora locale Brussels (UTC+2 estate)
             try:
-                h_utc = int(time_utc[:2])
-                m = time_utc[3:5]
-                h_local = h_utc + 2
+                from dateutil.parser import parse as parse_dt
+                dt_event = parse_dt(date_str)
+                # Converti a UTC
+                dt_utc = dt_event.astimezone(timezone.utc)
+                # Solo eventi di oggi
+                if dt_utc.strftime("%Y-%m-%d") != today_str:
+                    continue
+                # Ora locale Brussels (UTC+2)
+                h_local = dt_utc.hour + 2
                 if h_local >= 24:
                     h_local -= 24
-                time_local = f"{h_local:02d}:{m}"
-            except (ValueError, IndexError):
-                time_local = time_utc
+                time_local = f"{h_local:02d}:{dt_utc.minute:02d}"
+            except Exception:
+                continue
+
             filtered.append({
                 "time": time_local,
-                "event": ev.get("event", "?"),
+                "event": ev.get("title", "?"),
                 "country": country,
-                "impact": impact,
+                "impact": "High",
             })
+
         filtered.sort(key=lambda e: e["time"])
         return filtered
     except Exception:
