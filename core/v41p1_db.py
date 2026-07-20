@@ -519,14 +519,14 @@ def insert_watchlist_alert(conn: sqlite3.Connection, asset: str,
 def get_last_alert_state(conn: sqlite3.Connection,
                           asset: str) -> Optional[dict]:
     row = conn.execute(
-        "SELECT direction, trigger_type, liquidity_source "
+        "SELECT direction, trigger_type, liquidity_source, last_updated "
         "FROM v41p1_last_alert_state WHERE asset = ?",
         (asset,)
     ).fetchone()
     if row is None:
         return None
     return {"direction": row[0], "trigger_type": row[1],
-            "liquidity_source": row[2]}
+            "liquidity_source": row[2], "last_updated": row[3]}
 
 
 def set_last_alert_state(conn: sqlite3.Connection, asset: str,
