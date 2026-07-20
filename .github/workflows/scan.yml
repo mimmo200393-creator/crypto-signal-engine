@@ -60,7 +60,7 @@ jobs:
         run: |
           HOUR=$(date -u +%H)
           MINUTE=$(date -u +%M)
-          if [ "$HOUR" = "08" ] && [ "$MINUTE" -lt "15" ]; then
+          if [ "$HOUR" = "08" ] && [ "$MINUTE" -lt "5" ]; then
             python3 daily_brief_runner.py
           fi
 
