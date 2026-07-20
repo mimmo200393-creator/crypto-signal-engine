@@ -606,9 +606,27 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
     current_trigger_type     = "BOS" if signal.get("bos_direction") else "CHOCH"
     current_liquidity_source = signal.get("liquidity_source")
 
-    last_state   = v41p1_db.get_last_alert_state(conn, asset)
+    last_state = v41p1_db.get_last_alert_state(conn, asset)
+
+    # Sprint 16: fix DUPLICATE_SIGNAL senza time-decay. Prima confrontava
+    # solo direzione/trigger/liquidity_source contro l'ULTIMO stato salvato,
+    # senza mai guardarne l'età. Risultato osservato: dopo un gap (es. weekend
+    # con mercato gold chiuso), la prima scan utile ritrovava per puro caso
+    # struttura la stessa direzione/trigger/liquidity_source di giorni prima
+    # e la scartava come duplicata — zero segnali eseguiti sul nuovo movimento.
+    DUPLICATE_SIGNAL_MAX_AGE_HOURS = 6
+
+    is_stale = False
+    if last_state is not None and last_state.get("last_updated"):
+        last_ts = datetime.fromisoformat(last_state["last_updated"])
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.replace(tzinfo=timezone.utc)
+        age_hours = (now - last_ts).total_seconds() / 3600
+        is_stale = age_hours > DUPLICATE_SIGNAL_MAX_AGE_HOURS
+
     is_duplicate = (
         last_state is not None
+        and not is_stale
         and last_state["direction"]        == signal["direction"]
         and last_state["trigger_type"]     == current_trigger_type
         and last_state["liquidity_source"] == current_liquidity_source
