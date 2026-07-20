@@ -29,7 +29,7 @@ ZONE_MIN_TOUCHES = 1
 ZONE_CLUSTER_ATR = 0.5
 
 # Paesi i cui eventi impattano XAU e BTC
-MACRO_COUNTRIES = ("US", "EU", "JP", "CN")
+MACRO_COUNTRIES = ("US", "EU", "JP", "CN", "DE", "UK")
 
 
 def _get_macro_events() -> list:
@@ -40,7 +40,7 @@ def _get_macro_events() -> list:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     try:
         resp = requests.get(
-            "https://financialmodelingprep.com/api/v3/economic_calendar",
+            "https://financialmodelingprep.com/stable/economic-calendar",
             params={"from": today, "to": today, "apikey": api_key},
             timeout=10,
         )
