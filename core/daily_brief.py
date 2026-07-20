@@ -69,10 +69,8 @@ def _get_macro_events() -> list:
             if not date_str:
                 continue
             try:
-                from dateutil.parser import parse as parse_dt
-                dt_event = parse_dt(date_str)
-                # Converti a UTC
-                dt_utc = dt_event.astimezone(timezone.utc)
+                # Formato FF: "2026-07-21T02:00:00-04:00"
+                dt_utc = datetime.fromisoformat(date_str).astimezone(timezone.utc)
                 # Solo eventi di oggi
                 if dt_utc.strftime("%Y-%m-%d") != today_str:
                     continue
