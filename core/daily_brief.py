@@ -33,33 +33,36 @@ MACRO_COUNTRIES = ("US", "EU", "JP", "CN", "DE", "UK")
 
 
 def _get_macro_events() -> list:
-    """Fetcha il calendario economico FMP per oggi, filtra High/Medium."""
-    api_key = os.environ.get("FMP_API_KEY", "")
+    """Fetcha il calendario economico Finnhub per oggi, filtra High impact."""
+    api_key = os.environ.get("FINNHUB_API_KEY", "")
     if not api_key:
         return []
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     try:
         resp = requests.get(
-            "https://financialmodelingprep.com/stable/economic-calendar",
-            params={"from": today, "to": today, "apikey": api_key},
+            "https://finnhub.io/api/v1/calendar/economic",
+            params={"from": today, "to": today, "token": api_key},
             timeout=10,
         )
         if resp.status_code != 200:
             return []
-        events = resp.json()
+        data = resp.json()
+        events = data.get("economicCalendar", [])
         if not isinstance(events, list):
             return []
         filtered = []
         for ev in events:
-            if ev.get("country") not in MACRO_COUNTRIES:
+            country = ev.get("country", "")
+            if country not in MACRO_COUNTRIES:
                 continue
-            if ev.get("impact") not in ("High",):
+            impact = ev.get("impact", "low")
+            if impact not in ("high",):
                 continue
-            time_utc = ev["date"].split(" ")[1][:5] if " " in ev.get("date", "") else "?"
-            # Ora locale Brussels (UTC+2 estate, UTC+1 inverno — approssimato a +2)
+            time_utc = ev.get("time", "?")
+            # Ora locale Brussels (UTC+2 estate)
             try:
                 h_utc = int(time_utc[:2])
-                m = time_utc[3:]
+                m = time_utc[3:5]
                 h_local = h_utc + 2
                 if h_local >= 24:
                     h_local -= 24
@@ -69,8 +72,8 @@ def _get_macro_events() -> list:
             filtered.append({
                 "time": time_local,
                 "event": ev.get("event", "?"),
-                "country": ev.get("country", "?"),
-                "impact": ev.get("impact", "?"),
+                "country": country,
+                "impact": impact,
             })
         filtered.sort(key=lambda e: e["time"])
         return filtered
