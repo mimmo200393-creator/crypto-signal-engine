@@ -58,7 +58,19 @@ SNAPSHOT_VERSION = "2.2.0"
 
 DEFAULT_CONFIG = {
     "zone_proximity_pct": 0.01,       # zona RM entro 1% del prezzo = "vicina"
-    "min_confluence_for_high": 25,    # score >= 25 per confirmation_quality HIGH
+    # CALIBRAZIONE 23/07/2026 — misurata su 154 pattern reali.
+    # PROBLEMA: min_confluence_for_high era 25, ma il 100% dei pattern
+    # rilevati aveva una zona con score >= 25 -> confirmation_quality
+    # risultava HIGH SEMPRE (154/154), quindi non distingueva nulla.
+    # I punteggi reali vanno da 31.5 a 86 (mediana 74): l'informazione
+    # c'era tutta, semplicemente non veniva usata.
+    # NOTA: zone_proximity_pct e' di fatto ininfluente — _find_nearest_zone
+    # assegna distanza 0 quando il prezzo e' DENTRO la zona, e la Reaction
+    # Map fonde le zone sovrapposte, quindi il prezzo e' quasi sempre
+    # dentro una. Solo la confluenza discrimina.
+    "min_confluence_for_zone": 40,    # sotto questo la zona non conta
+    "confirmation_high_min": 75,      # HIGH   (~45% dei pattern)
+    "confirmation_medium_min": 55,    # MEDIUM (~20%), sotto -> LOW
     "doji_body_max_pct": 0.10,
     "pin_bar_wick_min_pct": 0.60,
     "engulfing_min_body_pct": 0.50,
@@ -77,6 +89,20 @@ DEFAULT_CONFIG = {
     # Priorità di rilevamento: la prima voce che matcha vince.
     # Modificabile senza toccare la logica del motore.
     "pattern_priority": ["ENGULFING", "HAMMER", "INVERTED_HAMMER", "PIN_BAR", "DOJI"],
+    # --- Naming contestuale (23/07/2026) ---
+    # Hammer e Hanging Man hanno la STESSA forma: sono pattern DIVERSI
+    # distinti dalla posizione nel movimento. Idem Inverted Hammer e
+    # Shooting Star. Nominarli correttamente e' parte di "che pattern e'
+    # questo?", quindi compete a questo engine.
+    # Il trend locale e' calcolato dalle SOLE candele del modulo: nessuna
+    # dipendenza da Structure o altri engine.
+    # PRIMA: HAMMER -> sempre BULLISH (38/38 nei dati)
+    #        INVERTED_HAMMER -> sempre BEARISH (55/55)
+    # Entrambi sbagliati circa meta' delle volte.
+    "contextual_naming": True,        # False = comportamento geometrico precedente
+    "trend_lookback_bars": 20,        # candele PRIMA del pattern per il range
+    "trend_position_threshold": 0.30, # <0.30 = FONDO, >0.70 = CIMA, resto MEZZO
+                                      # (misurato: ~1/3 fondo, ~1/3 cima, ~1/3 mezzo)
     # Soglie per bucket di Pattern Quality (score 0-100, solo geometria)
     "pattern_quality_high_min": 75,
     "pattern_quality_medium_min": 45,
@@ -361,6 +387,90 @@ def _detect_pin_bar(candle: dict, cfg: dict) -> dict | None:
 # Zone proximity check
 # ============================================================
 
+def _local_position(df, idx: int, cfg: dict) -> tuple:
+    """
+    Dove si trova la candela nel movimento recente?
+
+    Serve a distinguere pattern che hanno la STESSA forma ma significato
+    opposto secondo la posizione:
+        Hammer (fondo)          vs  Hanging Man (cima)
+        Inverted Hammer (fondo) vs  Shooting Star (cima)
+
+    AUTONOMO: usa solo le candele che il modulo ha gia' in mano.
+
+    Ritorna (posizione 0-1, etichetta BOTTOM/TOP/MIDDLE).
+    posizione = dove cade la chiusura nel range delle `lookback` candele
+    PRECEDENTI (il pattern stesso escluso, per non falsare il range).
+    """
+    lookback = int(cfg.get("trend_lookback_bars", 20))
+    th = float(cfg.get("trend_position_threshold", 0.30))
+
+    start = max(0, idx - lookback)
+    if idx - start < 5:
+        return (0.5, "MIDDLE")          # storia insufficiente: non decidiamo
+
+    try:
+        window = df.iloc[start:idx]
+        rh = float(window["high"].max())
+        rl = float(window["low"].min())
+        close = float(df.iloc[idx]["close"])
+    except Exception:
+        return (0.5, "MIDDLE")
+
+    if rh <= rl:
+        return (0.5, "MIDDLE")
+
+    pos = (close - rl) / (rh - rl)
+    pos = max(0.0, min(1.0, pos))
+
+    if pos < th:
+        return (round(pos, 3), "BOTTOM")
+    if pos > 1.0 - th:
+        return (round(pos, 3), "TOP")
+    return (round(pos, 3), "MIDDLE")
+
+
+# Forme ambigue: stesso disegno, nome e direzione dipendono dalla posizione.
+# (Engulfing NON e' incluso: la sua direzione e' intrinseca — la candela ha
+#  realmente chiuso al rialzo o al ribasso — non e' una forma ambigua.)
+_CONTEXTUAL_RENAME = {
+    # pattern geometrico: (nome+direzione al FONDO, nome+direzione in CIMA)
+    "HAMMER":          (("HAMMER", "BULLISH"),          ("HANGING_MAN", "BEARISH")),
+    "INVERTED_HAMMER": (("INVERTED_HAMMER", "BULLISH"), ("SHOOTING_STAR", "BEARISH")),
+}
+
+
+def _apply_contextual_naming(pattern: dict, position_label: str, cfg: dict) -> dict:
+    """
+    Rinomina il pattern e ne corregge la direzione secondo la posizione.
+    In MIDDLE non si forza nulla: la forma resta, la direzione geometrica
+    viene mantenuta ma marcata come non confermata dal contesto.
+    """
+    if not cfg.get("contextual_naming", True):
+        return pattern
+
+    name = pattern.get("pattern")
+    rename = _CONTEXTUAL_RENAME.get(name)
+    if rename is None:
+        return pattern
+
+    pattern["geometric_pattern"] = name
+    pattern["geometric_direction"] = pattern.get("direction")
+
+    if position_label == "BOTTOM":
+        new_name, new_dir = rename[0]
+    elif position_label == "TOP":
+        new_name, new_dir = rename[1]
+    else:
+        pattern["context_confirmed"] = False
+        return pattern
+
+    pattern["pattern"] = new_name
+    pattern["direction"] = new_dir
+    pattern["context_confirmed"] = True
+    return pattern
+
+
 def _find_nearest_zone(current_price: float, zones: list,
                         proximity_pct: float, min_confluence: float) -> dict | None:
     """
@@ -458,13 +568,20 @@ def produce_candlestick_snapshot(
                 continue
             result = detector()
             if result:
+                # Naming contestuale: hammer/hanging man e inverted
+                # hammer/shooting star hanno la stessa forma ma sono
+                # pattern diversi secondo la posizione nel movimento.
+                pos_value, pos_label = _local_position(df_m15, len(df_m15) - 1, cfg)
+                result["position_in_range"] = pos_value
+                result["position_label"] = pos_label
+                result = _apply_contextual_naming(result, pos_label, cfg)
                 patterns.append(result)
                 break  # un solo pattern principale per candela
 
     # ── Step 2: Valuta se il pattern è in una zona RM ────────
     zones = reaction_map_snapshot.get("zones", []) if reaction_map_snapshot else []
     proximity_pct = cfg.get("zone_proximity_pct", 0.01)
-    min_confluence = cfg.get("min_confluence_for_high", 25)
+    min_confluence = cfg.get("min_confluence_for_zone", 40)
 
     nearest_zone = _find_nearest_zone(current_price, zones, proximity_pct, min_confluence)
 
@@ -489,10 +606,21 @@ def produce_candlestick_snapshot(
     else:
         strongest = None
 
+    # confirmation_quality GRADUATA sulla forza della zona, non binaria.
+    # Prima: in_reaction_zone -> HIGH, altrimenti LOW. Con la soglia a 25
+    # era HIGH nel 100% dei casi.
+    high_min = cfg.get("confirmation_high_min", 75)
+    med_min = cfg.get("confirmation_medium_min", 55)
     confirmation_quality = "NONE"
     if strongest:
         if strongest.get("in_reaction_zone"):
-            confirmation_quality = "HIGH"
+            zs = strongest.get("zone_confluence_score", 0)
+            if zs >= high_min:
+                confirmation_quality = "HIGH"
+            elif zs >= med_min:
+                confirmation_quality = "MEDIUM"
+            else:
+                confirmation_quality = "LOW"
         else:
             confirmation_quality = "LOW"
 
