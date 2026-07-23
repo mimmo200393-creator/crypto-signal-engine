@@ -33,11 +33,52 @@ STRATEGY_NAME    = "LH"
 STRATEGY_VERSION = "v2.0"
 
 # ── Configurazione ──────────────────────────────────────────
+# CALIBRAZIONE 23/07/2026 — su geometria REALE delle zone OB (2.876 zone
+# FRESH/BREAKER misurate negli snapshot).
+#
+# DIAGNOSI del blocco (LH v2 = 0 segnali dal 19/07):
+#   larghezza mediana zona OB:  BTC 0.44 ATR  |  XAU 1.84 ATR
+#   Su XAU lo SL va oltre TUTTA la zona (+buffer) -> rischio ~1.3 ATR,
+#   ma il TP era FISSO a 0.8 ATR -> RR = 0.61 < MIN_RR 1.0
+#   -> il 97% dei segnali XAU moriva all'ultimo controllo.
+#
+# FIX: il TP deve SCALARE col rischio, non essere fisso. Su BTC (zone
+# strette) lo scalping funzionava gia' (76% passava) e resta invariato.
 OB_PROXIMITY_PCT      = 0.010    # 1.0% — distanza max OB dal prezzo
-SL_BUFFER_ATR_MULT    = 0.4      # buffer SL oltre la zona OB (0.4 ATR = ~2.4pt XAU)
-MIN_RR                = 1.0      # RR minimo (scalping: piu' basso, WR piu' alto)
-EXPIRY_BARS           = 6        # 30 min su M5, ~1.5h su M15 — scalping rapido
-SCALP_TP_ATR_MULT     = 0.8      # TP = 0.8x ATR M15 dall'entry (mediana 30min)
+
+# Parametri per asset: la geometria delle zone e' troppo diversa per
+# usare gli stessi numeri (BTC zone strette = scalping; XAU zone larghe
+# = trade strutturale piu' lento).
+ASSET_PARAMS = {
+    "BTC_USDT": {
+        "sl_buffer_atr":    0.3,
+        "min_rr":           1.0,
+        "expiry_bars":      6,     # 30 min su M5 — scalping
+        "scalp_tp_atr":     0.8,   # TP fisso: su BTC e' raggiungibile
+        "max_zone_atr":     2.0,   # scarta zone abnormi (bassa precisione entry)
+        "tp_mode":          "fixed",
+    },
+    "XAU_USD": {
+        "sl_buffer_atr":    0.3,
+        "min_rr":           1.5,
+        "expiry_bars":      18,    # 90 min su M5 — NON e' piu' scalping:
+                                   # il rischio e' ~1 ATR, serve tempo al TP
+        "scalp_tp_atr":     0.8,   # usato solo come pavimento minimo
+        "max_zone_atr":     2.0,   # tiene il 61% delle zone, scarta le peggiori
+        "tp_mode":          "proportional",   # TP = min_rr * rischio
+    },
+}
+DEFAULT_PARAMS = ASSET_PARAMS["BTC_USDT"]
+
+# Retrocompatibilita' (alcuni runner leggono questi nomi)
+SL_BUFFER_ATR_MULT    = 0.3
+MIN_RR                = 1.0
+EXPIRY_BARS           = 6
+SCALP_TP_ATR_MULT     = 0.8
+
+
+def _params(asset: str) -> dict:
+    return ASSET_PARAMS.get(asset, DEFAULT_PARAMS)
 
 # Sessioni ammesse per asset
 ALLOWED_SESSIONS = {
@@ -67,11 +108,16 @@ def _reject(reason: str) -> dict:
 # Core: trova OB candidato dal MIE context
 # ============================================================
 
-def _find_best_ob(mie_context: dict, bias: str, current_price: float) -> Optional[dict]:
+def _find_best_ob(mie_context: dict, bias: str, current_price: float,
+                  max_zone_atr: float = 99, atr_m15: float = 0) -> Optional[dict]:
     """
     Cerca l'OB migliore (FRESH o BREAKER) nella direzione del bias,
     entro OB_PROXIMITY_PCT dal prezzo corrente.
     Priorita': FRESH > BREAKER, poi per distanza piu' vicina.
+
+    NUOVO: scarta le zone troppo larghe (> max_zone_atr * ATR). Una zona
+    molto ampia da' un entry impreciso e un rischio enorme: su XAU il p75
+    e' 3.15 ATR, zone del genere rendono il trade ingestibile.
     """
     want_dir = bias  # "BULLISH" o "BEARISH"
     ob_list = mie_context.get("mie_order_block_order_blocks") or []
@@ -89,6 +135,12 @@ def _find_best_ob(mie_context: dict, bias: str, current_price: float) -> Optiona
         zl = ob.get("zone_low")
         if zh is None or zl is None:
             continue
+
+        # Filtro larghezza zona (nuovo)
+        if atr_m15 and atr_m15 > 0:
+            zone_w = abs(float(zh) - float(zl))
+            if zone_w / atr_m15 > max_zone_atr:
+                continue
 
         mid = (float(zh) + float(zl)) / 2
         dist_pct = abs(current_price - mid) / current_price if current_price > 0 else 1
@@ -121,14 +173,28 @@ def _price_in_ob_zone(ob: dict, current_high: float, current_low: float) -> bool
 
 def _find_tp_target(mie_context: dict, direction: str,
                     entry: float, current_price: float,
-                    atr_m15: float) -> tuple:
+                    atr_m15: float, risk: float = 0,
+                    params: dict = None) -> tuple:
     """
-    TP da scalping: primo target raggiungibile ENTRO ~1 ATR dall'entry.
-    1. Cerca OB opposto o livello liquidita' vicino (entro 1.5 ATR)
-    2. Se non trova nulla di strutturale: TP = entry ± 0.8 ATR
-    Ritorna (tp_price, tp_label).
+    TP: primo target STRUTTURALE raggiungibile che soddisfi l'RR minimo.
+
+    Ordine di preferenza (principio MIE: il TP punta a struttura/liquidita',
+    non a una formula):
+      1. OB opposto o livello di liquidita' vicino CHE DIA RR >= min_rr
+      2. fallback proporzionale: TP = min_rr * rischio  (tp_mode
+         "proportional") oppure TP fisso 0.8 ATR (tp_mode "fixed")
+
+    FIX 23/07: prima la funzione restituiva None implicitamente quando
+    atr_m15 <= 0 (nessun ramo else) -> reject NO_TP_TARGET. Ora c'e'
+    sempre un valore di ritorno.
+
+    Il tp_label distingue i target strutturali da quelli scalati, cosi'
+    si potra' misurare a posteriori quali rendono di piu'.
     """
-    max_structural_dist = 1.5 * atr_m15  # oltre non e' scalping
+    if params is None:
+        params = DEFAULT_PARAMS
+    min_rr = params.get("min_rr", 1.0)
+    max_structural_dist = 1.5 * atr_m15 if atr_m15 > 0 else 0
     targets = []
 
     # ── OB opposti vicini ────────────────────────────────────
@@ -147,7 +213,7 @@ def _find_tp_target(mie_context: dict, direction: str,
             mid = (float(zh) + float(zl)) / 2
         mid = float(mid)
         dist = abs(mid - entry)
-        if dist > max_structural_dist:
+        if max_structural_dist and dist > max_structural_dist:
             continue
         if direction == "BUY" and mid > entry:
             targets.append((mid, f"OB_{ob.get('id', '?')[:4]}"))
@@ -165,26 +231,44 @@ def _find_tp_target(mie_context: dict, direction: str,
         if price <= 0:
             continue
         dist = abs(price - entry)
-        if dist > max_structural_dist:
+        if max_structural_dist and dist > max_structural_dist:
             continue
         if direction == "BUY" and price > entry:
             targets.append((price, lv.get("label", "LIQ")))
         elif direction == "SELL" and price < entry:
             targets.append((price, lv.get("label", "LIQ")))
 
-    # Target strutturale piu' vicino
-    if targets:
+    # Target strutturale piu' vicino CHE SODDISFI L'RR
+    if targets and risk > 0:
+        targets.sort(key=lambda t: abs(t[0] - entry))
+        for tp, label in targets:
+            if abs(tp - entry) / risk >= min_rr:
+                return (round(tp, 4), label)
+    elif targets:
         targets.sort(key=lambda t: abs(t[0] - entry))
         return targets[0]
 
-    # ── Fallback: TP su ATR (scalping puro) ──────────────────
-    if atr_m15 > 0:
-        tp_dist = SCALP_TP_ATR_MULT * atr_m15
-        if direction == "BUY":
-            tp = entry + tp_dist
-        else:
-            tp = entry - tp_dist
-        return (round(tp, 4), "SCALP_ATR")
+    # ── Fallback ─────────────────────────────────────────────
+    tp_mode = params.get("tp_mode", "fixed")
+    scalp_mult = params.get("scalp_tp_atr", 0.8)
+
+    if tp_mode == "proportional" and risk > 0:
+        # TP scalato sul rischio: garantisce RR >= min_rr per costruzione.
+        # Necessario dove le zone OB sono larghe (XAU: mediana 1.84 ATR),
+        # perche' un TP fisso da' RR 0.61 e il segnale viene sempre scartato.
+        tp_dist = max(min_rr * risk * 1.002, scalp_mult * atr_m15 if atr_m15 > 0 else 0)
+        label = "RR_SCALED"
+    elif atr_m15 > 0:
+        tp_dist = scalp_mult * atr_m15
+        label = "SCALP_ATR"
+    elif risk > 0:
+        tp_dist = min_rr * risk        # ultimo fallback: niente ATR
+        label = "RR_SCALED_NOATR"
+    else:
+        return (None, None)            # non piu' None implicito
+
+    tp = entry + tp_dist if direction == "BUY" else entry - tp_dist
+    return (round(tp, 4), label)
 
 
 # ============================================================
@@ -252,6 +336,9 @@ def generate_lh_signal(
     if not mie_context:
         return _reject("NO_MIE_CONTEXT")
 
+    # Parametri calibrati per asset (geometria zone OB molto diversa)
+    P = _params(asset)
+
     # ── 1. SESSIONE ──────────────────────────────────────────
     session = _get_session(now)
     allowed = ALLOWED_SESSIONS.get(asset, ("LONDON", "NEW_YORK"))
@@ -293,7 +380,24 @@ def generate_lh_signal(
     current_high  = float(last["high"])
     current_low   = float(last["low"])
 
-    ob = _find_best_ob(mie_context, bias, current_price)
+    # ── ATR M15 (serve PRIMA, per il filtro larghezza zona) ──
+    atr_m15 = mie_context.get("mie_volatility_atr_m15", 0)
+    if not atr_m15 or atr_m15 <= 0:
+        if len(df_m15) >= 15:
+            highs = df_m15["high"].astype(float).values
+            lows  = df_m15["low"].astype(float).values
+            closes = df_m15["close"].astype(float).values
+            trs = []
+            for i in range(-14, 0):
+                tr = max(highs[i]-lows[i], abs(highs[i]-closes[i-1]),
+                         abs(lows[i]-closes[i-1]))
+                trs.append(tr)
+            atr_m15 = sum(trs) / len(trs)
+        else:
+            atr_m15 = 0
+
+    ob = _find_best_ob(mie_context, bias, current_price,
+                       max_zone_atr=P["max_zone_atr"], atr_m15=atr_m15)
     if ob is None:
         return _reject("NO_OB_NEARBY")
 
@@ -308,32 +412,20 @@ def generate_lh_signal(
         return _reject("NO_CANDLESTICK_CONFIRMATION")
 
     # ══════════════════════════════════════════════════════════
-    # TUTTE LE 5 CONDIZIONI SODDISFATTE — calcola Entry/SL/TP
+    # TUTTE LE CONDIZIONI SODDISFATTE — calcola Entry/SL/TP
     # ══════════════════════════════════════════════════════════
 
     zh = float(ob["zone_high"])
     zl = float(ob["zone_low"])
 
-    # ATR per buffer SL
-    atr_m15 = mie_context.get("mie_volatility_atr_m15", 0)
-    if not atr_m15 or atr_m15 <= 0:
-        # Fallback: calcola da candele
-        if len(df_m15) >= 14:
-            highs = df_m15["high"].astype(float).values
-            lows  = df_m15["low"].astype(float).values
-            closes = df_m15["close"].astype(float).values
-            trs = []
-            for i in range(-14, 0):
-                tr = max(highs[i]-lows[i], abs(highs[i]-closes[i-1]),
-                         abs(lows[i]-closes[i-1]))
-                trs.append(tr)
-            atr_m15 = sum(trs) / len(trs)
-        else:
-            atr_m15 = abs(zh - zl) * 2  # fallback estremo
+    if atr_m15 <= 0:
+        atr_m15 = abs(zh - zl) * 2  # fallback estremo
 
-    buffer = SL_BUFFER_ATR_MULT * atr_m15
+    buffer = P["sl_buffer_atr"] * atr_m15
 
-    # Entry / SL
+    # Entry / SL — lo SL resta al punto di invalidazione STRUTTURALE
+    # (oltre la zona OB), come da metodologia. Non lo stringiamo:
+    # e' il TP che si adatta al rischio, non il contrario.
     entry = current_price
     if direction == "BUY":
         sl = zl - buffer
@@ -344,17 +436,19 @@ def generate_lh_signal(
     if risk <= 0:
         return _reject("ZERO_RISK")
 
-    # TP
+    # TP — ora riceve il rischio: preferisce target strutturali che
+    # soddisfano l'RR, altrimenti scala (tp_label distingue i due casi)
     tp_price, tp_label = _find_tp_target(mie_context, direction, entry,
-                                          current_price, atr_m15)
+                                          current_price, atr_m15,
+                                          risk=risk, params=P)
     if tp_price is None:
         return _reject("NO_TP_TARGET")
 
     reward = abs(tp_price - entry)
     rr = reward / risk if risk > 0 else 0
 
-    if rr < MIN_RR:
-        return _reject(f"RR_TOO_LOW ({rr:.2f} < {MIN_RR})")
+    if rr < P["min_rr"] - 1e-6:   # tolleranza: il round() del TP puo' limare l'RR
+        return _reject(f"RR_TOO_LOW ({rr:.2f} < {P['min_rr']})")
 
     # Quality
     quality_score, quality_label = _compute_quality(ob, mie_context, bias_confidence)
@@ -405,7 +499,7 @@ def generate_lh_signal(
         "quality_label":        quality_label,
 
         "session":              session,
-        "expiry_bars":          EXPIRY_BARS,
+        "expiry_bars":          P["expiry_bars"],
     }
 
     return {"signal": signal, "diagnostics": {"status": "SIGNAL_GENERATED"}}
