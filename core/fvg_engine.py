@@ -266,36 +266,71 @@ def _update_fvg_states(active_fvgs: list, current_price: float,
             # Bullish FVG: si riempie quando il prezzo scende nella zona
             if current_low <= zone_high:
                 filled = zone_high - max(current_low, zone_low)
-                fill_pct = min(filled / zone_size, 1.0)
-                fvg["fill_percentage"] = round(max(fvg.get("fill_percentage", 0), fill_pct) * 100, 1)
-                fvg["fill_percentage"] = min(fvg["fill_percentage"], 100.0)
+                # FIX 23/07/2026 — unita' di misura: fill_percentage e' salvato
+                # in PERCENTUALE (0-100) mentre filled/zone_size e' una FRAZIONE
+                # (0-1). Confrontarli direttamente faceva saltare il valore a
+                # 100% dal SECONDO aggiornamento in poi:
+                #   max(30.0, 0.4) = 30.0 -> *100 = 3000 -> min(3000,100) = 100
+                # Effetto: ogni FVG toccata due volte diventava FILLED,
+                # is_invalidated e ifvg_active prematuramente.
+                fill_pct = min(filled / zone_size, 1.0) * 100.0
+                prev_fill = float(fvg.get("fill_percentage") or 0.0)
+                fvg["fill_percentage"] = round(min(max(prev_fill, fill_pct), 100.0), 1)
                 if fvg.get("first_touch_ts") is None:
                     fvg["first_touch_ts"] = now_iso
         else:
             # Bearish FVG: si riempie quando il prezzo sale nella zona
             if current_high >= zone_low:
                 filled = min(current_high, zone_high) - zone_low
-                fill_pct = min(filled / zone_size, 1.0)
-                fvg["fill_percentage"] = round(max(fvg.get("fill_percentage", 0), fill_pct) * 100, 1)
-                fvg["fill_percentage"] = min(fvg["fill_percentage"], 100.0)
+                # stesso fix del ramo BULLISH: confronto in percentuale
+                fill_pct = min(filled / zone_size, 1.0) * 100.0
+                prev_fill = float(fvg.get("fill_percentage") or 0.0)
+                fvg["fill_percentage"] = round(min(max(prev_fill, fill_pct), 100.0), 1)
                 if fvg.get("first_touch_ts") is None:
                     fvg["first_touch_ts"] = now_iso
 
-        # Aggiorna stato
+        # Aggiorna stato di riempimento
         fill = fvg.get("fill_percentage", 0)
         if fill >= fill_threshold * 100:
             fvg["status"] = "FILLED"
-            fvg["is_invalidated"] = True
-            # IFVG: un FVG riempito completamente diventa zona inversa
-            fvg["ifvg_active"] = True
         elif fill > 0:
             fvg["status"] = "PARTIALLY_FILLED"
 
-        # IFVG retest check
-        if fvg.get("ifvg_active", False):
-            if fvg["direction"] == "BULLISH" and current_price > zone_high:
-                fvg["ifvg_retested"] = True
-            elif fvg["direction"] == "BEARISH" and current_price < zone_low:
+        # ── INVALIDAZIONE e IFVG (doc 006) ───────────────────
+        # FIX 23/07/2026 — il doc 006 richiede la ROTTURA COMPLETA:
+        #   "attendere che il prezzo rompa completamente la Fair Value Gap;
+        #    considerare la FVG invalidata"
+        # Il codice precedente attivava l'IFVG al 90% di RIEMPIMENTO, che e'
+        # una mitigazione, non un'invalidazione: il prezzo puo' entrare in
+        # profondita' e rimbalzare senza mai rompere la zona.
+        # Rottura completa = CHIUSURA oltre il bordo opposto della zona.
+        if not fvg.get("is_invalidated", False):
+            if fvg["direction"] == "BULLISH":
+                broke_through = current_price < zone_low
+            else:
+                broke_through = current_price > zone_high
+            if broke_through:
+                # Il ciclo di vita resta ai 4 stati del doc FVG
+                # (OPEN / PARTIALLY_FILLED / FILLED / EXPIRED): la rottura
+                # completa E' un gap colmato, quindi FILLED. L'informazione
+                # IFVG resta come FLAG per chi la usa (doc 006), senza
+                # introdurre uno stato fuori specifica.
+                fvg["is_invalidated"] = True
+                fvg["ifvg_active"] = True
+                fvg["status"] = "FILLED"
+                fvg["fill_percentage"] = 100.0
+
+        # ── IFVG retest (doc 006) ────────────────────────────
+        # FIX 23/07/2026 — il retest e' il RITORNO del prezzo NELLA zona,
+        # non il suo superamento.
+        #   FVG rialzista invalidata -> diventa RESISTENZA: il retest e' il
+        #   prezzo che risale DENTRO la zona (e li' dovrebbe essere rifiutato).
+        # Il codice precedente marcava il retest quando il prezzo superava
+        # tutta la zona (price > zone_high), cioe' quando la resistenza aveva
+        # FALLITO: esattamente il caso opposto.
+        if fvg.get("ifvg_active", False) and not fvg.get("ifvg_retested", False):
+            in_zone = zone_low <= current_price <= zone_high
+            if in_zone:
                 fvg["ifvg_retested"] = True
 
         updated.append(fvg)
