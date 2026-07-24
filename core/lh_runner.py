@@ -179,6 +179,27 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                             asset, sid[:8], entry_p, cur_mfe
                         )
 
+        # ── LH v3.1: ordini PENDENTI ─────────────────────────
+        # Un segnale WATCHING e' un ordine in attesa al bordo della zona OB,
+        # non un trade. Diventa un trade solo quando il prezzo raggiunge
+        # l'entry. Va chiamato PRIMA del monitor: un ordine riempito ORA
+        # deve essere gia' monitorato in questo stesso ciclo, altrimenti si
+        # perdono 5 minuti di movimento.
+        try:
+            filled = lh_db.monitor_pending_lh_signals(
+                conn, asset,
+                current_high=current_high_m,
+                current_low=current_low_m,
+                now_iso=now.isoformat(),
+            )
+            for ev in filled:
+                logger.info(
+                    "LH Pending [%s]: %s -> %s (dopo %d barre)",
+                    asset, ev["signal_id"][:8], ev["event"], ev["pending_bars"],
+                )
+        except AttributeError:
+            pass          # lh_db non aggiornato: nessun pendente da gestire
+
         updated  = lh_db.monitor_open_lh_signals(
             conn, asset,
             current_high=current_high_m,
@@ -267,7 +288,19 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         return
 
     # ── Decision Ledger ──────────────────────────────────────
-    try:
+    # SOLO i segnali realmente ENTRATI a mercato. Un ordine PENDENTE
+    # (setup_state=WATCHING) non e' una decisione eseguita: registrarlo qui
+    # inquinerebbe l'analisi di expectancy con trade mai aperti — e quella
+    # analisi e' la base di ogni calibrazione.
+    # I pendenti restano tracciati in lh_signals; quando verranno riempiti
+    # potranno essere catturati al momento del fill (miglioramento futuro).
+    if signal.get("setup_state") == "WATCHING":
+        logger.info(
+            "LH [%s %s]: ordine PENDENTE — non inviato al Decision Ledger "
+            "(sara' catturato al riempimento)", asset, direction,
+        )
+    else:
+      try:
         raw_snaps = _read_raw_snapshots(conn, asset)
         snapshots = ledger_link.build_snapshots_dict(
             raw_snaps.get("structure"), raw_snaps.get("volatility"),
@@ -277,20 +310,20 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
             raw_snaps.get("macro"), raw_snaps.get("market_state"), None,
         )
         ledger_link.capture_executed(signal_id, asset, signal, snapshots)
-    except Exception as e:
+      except Exception as e:
         logger.warning("LH [%s]: ledger capture fallito (non-blocking): %s", asset, e)
 
     logger.info(
-        "LH [%s %s]: SEGNALE entry=%.4f sl=%.4f tp=%.4f rr=%.2f "
-        "ob=%s quality=%d (%s) (id=%s)",
+        "LH [%s %s]: SEGNALE %s (%s) entry=%.4f sl=%.4f tp1=%.4f rr=%.2f "
+        "ob=%s score=%.2f (%s) (id=%s)",
         asset, direction,
+        signal.get("setup_state", "TRIGGERED"),
+        signal.get("order_type", "MARKET"),
         signal["entry"], signal["stop_loss"], signal["tp"], signal["rr"],
         signal.get("swept_level_label", "?"),
-        signal["quality_score"], signal["quality_label"],
+        float(signal["quality_score"]), signal["quality_label"],
         signal_id,
     )
-
-    _notify(signal, config)
 
     _notify(signal, config)
 
@@ -310,15 +343,42 @@ def _notify(signal: dict, config: dict):
             if v is None: return "N/A"
             return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
 
+        state = signal.get("setup_state", "TRIGGERED")
+        if state == "WATCHING":
+            head = f"👁 *IN ATTESA* — ordine pendente ({signal.get('distance_atr', 0)} ATR)"
+        else:
+            head = "⚡ *ENTRY ORA* — a mercato"
+
+        tp_lines = f"TP1:    `{fp(signal.get('tp1') or signal['tp'])}`  [{signal.get('tp1_label','?')}]  ({signal['rr']:.2f}R)\n"
+        if signal.get("tp2"):
+            tp_lines += f"TP2:    `{fp(signal['tp2'])}`  [{signal.get('tp2_label','?')}]\n"
+        if signal.get("tp3"):
+            tp_lines += f"TP3:    `{fp(signal['tp3'])}`  [{signal.get('tp3_label','?')}]\n"
+
+        # fattori di confluenza che hanno davvero contribuito
+        att = ""
+        try:
+            import json as _j
+            facs = signal.get("confluence_factors")
+            if isinstance(facs, str):
+                facs = _j.loads(facs)
+            if isinstance(facs, dict):
+                strong = [k for k, v in facs.items() if v >= 0.5]
+                att = ", ".join(strong) if strong else "nessun fattore forte"
+        except Exception:
+            att = ""
+
         text = (
-            f"{emoji} *LIQUIDITY HUNTER v2.0*\n\n"
-            f"*{asset.replace('_',' ')}* — {direction}\n\n"
-            f"Score: *{signal['quality_score']}* ({signal['quality_label']})\n\n"
+            f"{emoji} *LIQUIDITY HUNTER v3.1*\n"
+            f"*{asset.replace('_',' ')}* — {direction}\n"
+            f"{head}\n\n"
+            f"Qualita: *{signal['quality_score']}*/9 ({signal['quality_label']})\n\n"
             f"Entry:  `{fp(signal['entry'])}`\n"
-            f"SL:     `{fp(signal['stop_loss'])}`\n"
-            f"TP:     `{fp(signal['tp'])}` ({signal['rr']:.2f}R)\n\n"
-            f"OB: {signal.get('swept_level_label', '?')}\n"
-            f"Target: {signal.get('tp_label', '?')}"
+            f"SL:     `{fp(signal['stop_loss'])}`\n\n"
+            f"{tp_lines}\n"
+            f"OB: {signal.get('swept_level_label', '?')} ({signal.get('ob_match_type','?')})\n"
+            + (f"Confluenza: {att}\n" if att else "")
+            + f"Sessione: {signal.get('session','?')}"
         )
 
         bot_token  = config.get("TELEGRAM_BOT_TOKEN", "")
@@ -328,7 +388,9 @@ def _notify(signal: dict, config: dict):
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
         if ntfy_topic:
-            title = f"LH {asset.replace('_',' ')} {direction} | Q{signal['quality_score']} {signal['quality_label']}"
+            tag = "ATTESA" if signal.get("setup_state") == "WATCHING" else "ENTRY"
+            title = (f"LH {tag} {asset.replace('_',' ')} {direction} | "
+                     f"{signal['quality_score']}/9 {signal['quality_label']}")
             ntfy_bot.send_message(ntfy_topic, title, text.replace("*","").replace("`",""))
 
     except Exception as e:
@@ -352,3 +414,4 @@ def run_lh_scan(config: dict):
 
     conn.close()
     logger.info("=== LH Scanner: fine ciclo ===")
+    
