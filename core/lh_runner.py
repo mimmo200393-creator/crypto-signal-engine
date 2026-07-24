@@ -270,10 +270,15 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     if entry and sl:
         risk_abs = abs(entry - sl)
         atr_m15 = mie_context.get("mie_volatility_atr_m15", 0) or 0
+        # Soglia a 0.25 ATR e non 0.30: la strategia costruisce lo stop come
+        # "bordo della zona OB +/- 0.3 ATR", quindi il rischio MINIMO che puo'
+        # produrre e' esattamente 0.3 ATR. Una soglia identica rischierebbe di
+        # scartare per arrotondamento un segnale che la strategia ha gia'
+        # validato. 0.25 lascia margine senza far passare stop patologici.
         if atr_m15 > 0:
-            if risk_abs < 0.3 * atr_m15:
+            if risk_abs < 0.25 * atr_m15:
                 logger.info(
-                    "LH [%s %s]: REJECT RISK_TOO_TIGHT (%.4f = %.2f ATR < 0.3)",
+                    "LH [%s %s]: REJECT RISK_TOO_TIGHT (%.4f = %.2f ATR < 0.25)",
                     asset, direction, risk_abs, risk_abs / atr_m15,
                 )
                 return
@@ -396,7 +401,8 @@ def _notify(signal: dict, config: dict):
             f"Entry:  `{fp(signal['entry'])}`\n"
             f"SL:     `{fp(signal['stop_loss'])}`\n\n"
             f"{tp_lines}\n"
-            f"OB: {signal.get('swept_level_label', '?')} ({signal.get('ob_match_type','?')})\n"
+            f"Zona OB: `{fp(signal.get('ob_zone_low'))}` - `{fp(signal.get('ob_zone_high'))}` "
+            f"({signal.get('ob_match_type','?')})\n"
             + (f"Confluenza: {att}\n" if att else "")
             + f"Sessione: {signal.get('session','?')}"
         )
@@ -434,3 +440,4 @@ def run_lh_scan(config: dict):
 
     conn.close()
     logger.info("=== LH Scanner: fine ciclo ===")
+                        
