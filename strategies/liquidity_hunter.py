@@ -1,25 +1,60 @@
 """
 strategies/liquidity_hunter.py
-Liquidity Hunter v2.0 — Confluence Sniper
+Liquidity Hunter v3.1 — Confluence Engine
 
-Entry su Order Block con bias allineato e confluenza multi-sensore.
-M15 per contesto, M5 per entry precisa (solo XAU).
+FILOSOFIA: gli engine non bloccano il trade, contribuiscono a determinarne
+probabilita' e qualita'. La decisione nasce dalla combinazione.
 
-5 condizioni obbligatorie + 1 trigger (tutte devono essere vere):
-    1. Bias BULLISH o BEARISH (no NEUTRAL)
-    2. OB FRESH o BREAKER vicino nella direzione del bias
-    3. Premium/Discount corretto (BUY in DISCOUNT, SELL in PREMIUM)
-    4. Sessione attiva (Asia+London+NY per XAU, London+NY per BTC)
-    5. No blackout macro
-    6. Candlestick confirmation (pattern di reazione sulla zona OB)
+    v2.0 = 6 gate obbligatori -> 0 segnali in 5 giorni (misurato)
+    v3.0 = punteggio di confluenza, 9 fattori binari
+    v3.1 = punteggio GRADUATO + anticipazione del setup
 
-Entry: prezzo tocca/entra nella zona OB
-SL:    oltre zona OB + buffer ATR
-TP:    primo target raggiungibile (OB opposto o livello liquidita')
+RUOLI (uno per concetto):
+    Order Block  -> ZONA di ingresso
+    FVG          -> QUALITA' della zona (sovrapposizione, distanza, purezza)
+    Candlestick  -> il mercato REAGISCE (qualita' del pattern, non solo direzione)
+    Liquidity    -> SWEEP (con recenza) e TARGET (con spazio disponibile)
+    Reaction Map -> CONFLUENZA complessiva
+    Structure    -> trend, premium/discount
+
+ANTICIPAZIONE (v3.1):
+    Un setup non nasce quando il prezzo tocca la zona: nasce prima.
+        prezzo NELLA zona  -> TRIGGERED, entry a mercato
+        prezzo VICINO      -> WATCHING, entry PENDENTE al bordo della zona
+        prezzo lontano     -> nessun setup
+    Perche' pendente e non a mercato: misurato sui dati, entrando a mercato
+    con prezzo a 0.5-1% dalla zona il rischio passa da 2.6 a 10.8 ATR
+    (lo stop resta al punto di invalidazione strutturale). L'ordine pendente
+    al bordo della zona mantiene il rischio corretto E anticipa il setup.
+
+STOP LOSS: strutturale, oltre l'Order Block + buffer ATR.
+    OB rialzista -> stop SOTTO la zona: se il prezzo chiude li', il supporto
+    ha ceduto e la tesi e' morta. Mai stretto per far tornare l'RR.
+
+TAKE PROFIT: scala a 3 livelli.
+    TP1 = primo target strutturale vicino (OB opposto / FVG / zona RM)
+    TP2 = prima area di liquidita'
+    TP3 = seconda area di liquidita'
+    (i target di liquidita' sono lontani — mediana 12.6 ATR su XAU, 29.4 su
+    BTC — quindi non possono fare da TP1: servirebbe un orizzonte di giorni)
+
+TRACCIAMENTO: `tp` resta TP1, cosi' lh_db e il Decision Ledger continuano a
+    funzionare e la serie storica degli esiti non si rompe. TP2/TP3 sono
+    osservazione fino a quando i dati non diranno se vengono raggiunti.
+
+PESI: tutti i fattori valgono al massimo 1 punto. Deliberato — non abbiamo
+    dati per pesarli diversamente e pesi inventati inquinerebbero proprio i
+    dati che servono a calibrarli. `confluence_factors` registra il valore di
+    ogni fattore in ogni segnale: sara' quello a permettere la calibrazione.
+
+NON usiamo ob.quality_score: misurato sul Ledger, order_block_conf alta rende
+    +0.068R contro +0.483R della bassa (invertito, p=0.048, consistente su
+    BTC/XAU e BUY/SELL). Usiamo fatti verificabili, non quel giudizio.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -30,65 +65,51 @@ import pandas as pd
 logger = logging.getLogger("liquidity_hunter")
 
 STRATEGY_NAME    = "LH"
-STRATEGY_VERSION = "v2.0"
+STRATEGY_VERSION = "v3.1"
 
-# ── Configurazione ──────────────────────────────────────────
-# CALIBRAZIONE 23/07/2026 — su geometria REALE delle zone OB (2.876 zone
-# FRESH/BREAKER misurate negli snapshot).
-#
-# DIAGNOSI del blocco (LH v2 = 0 segnali dal 19/07):
-#   larghezza mediana zona OB:  BTC 0.44 ATR  |  XAU 1.84 ATR
-#   Su XAU lo SL va oltre TUTTA la zona (+buffer) -> rischio ~1.3 ATR,
-#   ma il TP era FISSO a 0.8 ATR -> RR = 0.61 < MIN_RR 1.0
-#   -> il 97% dei segnali XAU moriva all'ultimo controllo.
-#
-# FIX: il TP deve SCALARE col rischio, non essere fisso. Su BTC (zone
-# strette) lo scalping funzionava gia' (76% passava) e resta invariato.
-OB_PROXIMITY_PCT      = 0.010    # 1.0% — distanza max OB dal prezzo
+OB_PROXIMITY_PCT = 0.010     # distanza max dell'OB dal prezzo
 
-# Parametri per asset: la geometria delle zone e' troppo diversa per
-# usare gli stessi numeri (BTC zone strette = scalping; XAU zone larghe
-# = trade strutturale piu' lento).
+# CALIBRAZIONE 23/07/2026 — soglie misurate sulla distribuzione REALE dei
+# punteggi (133 setup ricostruiti dal DB), non scelte a priori.
+#   distribuzione: min 1.90, mediana 3.15, max 6.30
+#   con le soglie iniziali (MED 5.0 / HIGH 6.5): HIGH 0%, MEDIUM 13%, LOW 87%
+#   -> HIGH era irraggiungibile e quasi tutto finiva LOW (quindi non notificato)
+# Il punteggio massimo teorico e' 9, ma nella pratica diversi fattori
+# contribuiscono di rado (candlestick ~0, reaction_map basso su XAU), quindi
+# la scala utile si ferma intorno a 6.3. Le soglie seguono quella scala.
+MIN_SCORE        = 3.5       # su 9 — sotto, il setup e' debole
+QUALITY_HIGH_MIN = 5.0
+QUALITY_MED_MIN  = 4.2
+
 ASSET_PARAMS = {
     "BTC_USDT": {
-        "sl_buffer_atr":    0.3,
-        "min_rr":           1.0,
-        "expiry_bars":      6,     # 30 min su M5 — scalping
-        "scalp_tp_atr":     0.8,   # TP fisso: su BTC e' raggiungibile
-        "max_zone_atr":     2.0,   # scarta zone abnormi (bassa precisione entry)
-        "tp_mode":          "fixed",
+        "sl_buffer_atr": 0.3, "min_rr": 1.0, "expiry_bars": 12,
+        "max_zone_atr": 2.0, "tp1_max_atr": 3.0,
+        "watch_max_atr": 1.5,      # entro quanto il prezzo e' "in avvicinamento"
+        "liq_tight_atr": 3.0,      # sotto questo, poco spazio davanti
+        "liq_ample_atr": 10.0,     # sopra questo, molto spazio
     },
     "XAU_USD": {
-        "sl_buffer_atr":    0.3,
-        "min_rr":           1.5,
-        "expiry_bars":      18,    # 90 min su M5 — NON e' piu' scalping:
-                                   # il rischio e' ~1 ATR, serve tempo al TP
-        "scalp_tp_atr":     0.8,   # usato solo come pavimento minimo
-        "max_zone_atr":     2.0,   # tiene il 61% delle zone, scarta le peggiori
-        "tp_mode":          "proportional",   # TP = min_rr * rischio
+        "sl_buffer_atr": 0.3, "min_rr": 1.2, "expiry_bars": 18,
+        "max_zone_atr": 2.0, "tp1_max_atr": 3.0,
+        "watch_max_atr": 1.5,
+        "liq_tight_atr": 3.0,
+        "liq_ample_atr": 10.0,
     },
 }
 DEFAULT_PARAMS = ASSET_PARAMS["BTC_USDT"]
 
-# Retrocompatibilita' (alcuni runner leggono questi nomi)
-SL_BUFFER_ATR_MULT    = 0.3
-MIN_RR                = 1.0
-EXPIRY_BARS           = 6
-SCALP_TP_ATR_MULT     = 0.8
+ALLOWED_SESSIONS = {
+    "XAU_USD":  ("ASIA", "LONDON", "NEW_YORK", "OVERLAP"),
+    "BTC_USDT": ("LONDON", "NEW_YORK", "OVERLAP"),
+}
 
 
 def _params(asset: str) -> dict:
     return ASSET_PARAMS.get(asset, DEFAULT_PARAMS)
 
-# Sessioni ammesse per asset
-ALLOWED_SESSIONS = {
-    "XAU_USD":  ("ASIA", "LONDON", "NEW_YORK"),
-    "BTC_USDT": ("LONDON", "NEW_YORK"),
-}
-
 
 def _get_session(now: datetime) -> str:
-    """Sessione di mercato in UTC."""
     t = now.hour * 60 + now.minute
     if 7 * 60 <= t < 12 * 60:
         return "LONDON"
@@ -104,106 +125,206 @@ def _reject(reason: str) -> dict:
     return {"signal": None, "diagnostics": {"rejection": reason}}
 
 
+def _clamp(x, lo=0.0, hi=1.0):
+    return max(lo, min(hi, x))
+
+
+def _overlap(h1, l1, h2, l2) -> float:
+    """Frazione di sovrapposizione tra due zone (0-1)."""
+    ov = max(0.0, min(h1, h2) - max(l1, l2))
+    smaller = min(h1 - l1, h2 - l2)
+    return ov / smaller if smaller > 0 else 0.0
+
+
 # ============================================================
-# Core: trova OB candidato dal MIE context
+# Order Block — la ZONA di ingresso
 # ============================================================
 
-def _find_best_ob(mie_context: dict, bias: str, current_price: float,
-                  max_zone_atr: float = 99, atr_m15: float = 0) -> Optional[dict]:
-    """
-    Cerca l'OB migliore (FRESH o BREAKER) nella direzione del bias,
-    entro OB_PROXIMITY_PCT dal prezzo corrente.
-    Priorita': FRESH > BREAKER, poi per distanza piu' vicina.
-
-    NUOVO: scarta le zone troppo larghe (> max_zone_atr * ATR). Una zona
-    molto ampia da' un entry impreciso e un rischio enorme: su XAU il p75
-    e' 3.15 ATR, zone del genere rendono il trade ingestibile.
-    """
-    want_dir = bias  # "BULLISH" o "BEARISH"
-    ob_list = mie_context.get("mie_order_block_order_blocks") or []
-
-    best, best_dist, best_priority = None, None, 99
-
-    for ob in ob_list:
-        if ob.get("direction") != want_dir:
+def _find_best_ob(mie_context: dict, want_dir: str, price: float,
+                  max_zone_atr: float, atr: float) -> Optional[dict]:
+    """OB piu' vicino nella direzione, entro OB_PROXIMITY_PCT.
+    Priorita' FRESH > TESTED > MITIGATED > BREAKER, poi distanza.
+    Zone troppo larghe scartate: entry impreciso e rischio ingestibile."""
+    prio = {"FRESH": 0, "TESTED": 1, "MITIGATED": 2, "BREAKER": 3}
+    best, best_d, best_p = None, None, 99
+    for ob in (mie_context.get("mie_order_block_order_blocks") or []):
+        if ob.get("direction") != want_dir or ob.get("status") not in prio:
             continue
-        status = ob.get("status")
-        if status not in ("FRESH", "BREAKER"):
-            continue
-
-        zh = ob.get("zone_high")
-        zl = ob.get("zone_low")
+        zh, zl = ob.get("zone_high"), ob.get("zone_low")
         if zh is None or zl is None:
             continue
-
-        # Filtro larghezza zona (nuovo)
-        if atr_m15 and atr_m15 > 0:
-            zone_w = abs(float(zh) - float(zl))
-            if zone_w / atr_m15 > max_zone_atr:
-                continue
-
-        mid = (float(zh) + float(zl)) / 2
-        dist_pct = abs(current_price - mid) / current_price if current_price > 0 else 1
-
-        if dist_pct > OB_PROXIMITY_PCT:
+        zh, zl = float(zh), float(zl)
+        if atr > 0 and abs(zh - zl) / atr > max_zone_atr:
             continue
-
-        # Priorita': FRESH=0, BREAKER=1
-        priority = 0 if status == "FRESH" else 1
-
-        if priority < best_priority or (priority == best_priority and
-                                         (best_dist is None or dist_pct < best_dist)):
-            best = ob
-            best_dist = dist_pct
-            best_priority = priority
-
+        mid = (zh + zl) / 2
+        d = abs(price - mid) / price if price > 0 else 1
+        if d > OB_PROXIMITY_PCT:
+            continue
+        p = prio[ob["status"]]
+        if p < best_p or (p == best_p and (best_d is None or d < best_d)):
+            best, best_d, best_p = ob, d, p
     return best
 
 
-def _price_in_ob_zone(ob: dict, current_high: float, current_low: float) -> bool:
-    """La candela corrente tocca/entra nella zona OB?"""
-    zh = float(ob["zone_high"])
-    zl = float(ob["zone_low"])
-    return current_low <= zh and current_high >= zl
+def _ob_position(ob: dict, high: float, low: float, price: float,
+                 atr: float, watch_max_atr: float) -> tuple:
+    """
+    Dove si trova il prezzo rispetto alla zona OB?
+    Ritorna (stato, distanza_in_atr):
+        TRIGGERED  -> la candela tocca/entra nella zona: entry a mercato
+        WATCHING   -> vicino (entro watch_max_atr): entry PENDENTE al bordo
+        FAR        -> lontano: nessun setup
+    """
+    zh, zl = float(ob["zone_high"]), float(ob["zone_low"])
+    if low <= zh and high >= zl:
+        return ("TRIGGERED", 0.0)
+    d = min(abs(price - zh), abs(price - zl))
+    d_atr = d / atr if atr > 0 else 999
+    if d_atr <= watch_max_atr:
+        return ("WATCHING", d_atr)
+    return ("FAR", d_atr)
 
 
 # ============================================================
-# Target: primo livello raggiungibile
+# Punteggio di confluenza — GRADUATO (0..1 per fattore)
 # ============================================================
 
-def _find_tp_target(mie_context: dict, direction: str,
-                    entry: float, current_price: float,
-                    atr_m15: float, risk: float = 0,
-                    params: dict = None) -> tuple:
-    """
-    TP: primo target STRUTTURALE raggiungibile che soddisfi l'RR minimo.
+def _score_confluence(direction: str, want_dir: str, ob: dict,
+                      mie_context: dict, entry: float, atr: float,
+                      session: str, asset: str, params: dict) -> tuple:
+    """Ritorna (score, factors). Ogni fattore vale da 0 a 1."""
+    f = {}
+    zh, zl = float(ob["zone_high"]), float(ob["zone_low"])
+    up = direction == "BUY"
 
-    Ordine di preferenza (principio MIE: il TP punta a struttura/liquidita',
-    non a una formula):
-      1. OB opposto o livello di liquidita' vicino CHE DIA RR >= min_rr
-      2. fallback proporzionale: TP = min_rr * rischio  (tp_mode
-         "proportional") oppure TP fisso 0.8 ATR (tp_mode "fixed")
+    # 1. OB formato in un trend coerente (doc 005, passo 1)
+    f["ob_trend_aligned"] = 1.0 if ob.get("trend_at_formation") == want_dir else 0.0
 
-    FIX 23/07: prima la funzione restituiva None implicitamente quando
-    atr_m15 <= 0 (nessun ramo else) -> reject NO_TP_TARGET. Ora c'e'
-    sempre un valore di ritorno.
+    # 2. Freschezza dell'OB — graduata: piu' e' vergine, meglio e'
+    f["ob_freshness"] = {"FRESH": 1.0, "TESTED": 0.5,
+                          "MITIGATED": 0.25, "BREAKER": 0.0}.get(ob.get("status"), 0.0)
 
-    Il tp_label distingue i target strutturali da quelli scalati, cosi'
-    si potra' misurare a posteriori quali rendono di piu'.
-    """
-    if params is None:
-        params = DEFAULT_PARAMS
-    min_rr = params.get("min_rr", 1.0)
-    max_structural_dist = 1.5 * atr_m15 if atr_m15 > 0 else 0
-    targets = []
+    # 3. Premium/Discount — equilibrium vale meta'
+    pdz = mie_context.get("mie_structure_premium_discount") or {}
+    zone = pdz.get("zone", "EQUILIBRIUM") if isinstance(pdz, dict) else "EQUILIBRIUM"
+    if (up and zone == "DISCOUNT") or (not up and zone == "PREMIUM"):
+        f["premium_discount"] = 1.0
+    elif zone == "EQUILIBRIUM":
+        f["premium_discount"] = 0.5
+    else:
+        f["premium_discount"] = 0.0
 
-    # ── OB opposti vicini ────────────────────────────────────
-    opposite_dir = "BEARISH" if direction == "BUY" else "BULLISH"
-    ob_list = mie_context.get("mie_order_block_order_blocks") or []
-    for ob in ob_list:
-        if ob.get("direction") != opposite_dir:
+    # 4. Reaction Map — graduata sul confluence_score (50->0, 90->1)
+    want_reaction = "BOUNCE_UP" if up else "BOUNCE_DOWN"
+    rm = 0.0
+    for key in ("mie_reaction_map_strongest_below", "mie_reaction_map_strongest_above"):
+        z = mie_context.get(key)
+        if isinstance(z, dict) and z.get("expected_reaction") == want_reaction:
+            rm = max(rm, _clamp((z.get("confluence_score", 0) - 50) / 40.0))
+    f["reaction_map"] = rm
+
+    # 5. FVG — qualita' della zona (proposta: sovrapposizione, distanza, purezza)
+    fvg = mie_context.get("mie_fvg_nearest_open_bullish" if up
+                          else "mie_fvg_nearest_open_bearish")
+    fv = 0.0
+    if isinstance(fvg, dict) and fvg.get("status") in ("OPEN", "PARTIALLY_FILLED"):
+        fv += 0.25                                   # esiste un gap aperto
+        if fvg.get("during_displacement"):
+            fv += 0.25                               # nato da impulso (criterio doc)
+        fzh, fzl = fvg.get("zone_high"), fvg.get("zone_low")
+        if fzh is not None and fzl is not None:
+            fzh, fzl = float(fzh), float(fzl)
+            ov = _overlap(zh, zl, fzh, fzl)
+            if ov > 0:
+                fv += 0.25 * _clamp(ov)              # sovrapposta all'OB
+            elif atr > 0:
+                gap = min(abs(zl - fzh), abs(fzl - zh))
+                fv += 0.15 * _clamp(1 - gap / (2 * atr))   # vicina all'OB
+        fill = float(fvg.get("fill_percentage") or 0)
+        fv += 0.25 * _clamp(1 - fill / 100.0)        # ancora "pulita"
+    f["fvg_quality"] = _clamp(fv)
+
+    # 6. Sweep di liquidita' — conta la RECENZA, non la presenza
+    #    (su XAU active_sweeps e' non vuoto nell'86% dei casi: troppo comune)
+    sw = 0.0
+    for lv in (mie_context.get("mie_liquidity_levels") or []):
+        if not lv.get("swept"):
             continue
-        if ob.get("status") in ("INVALIDATED",):
+        ba = lv.get("swept_bars_ago")
+        if ba is None:
+            sw = max(sw, 0.3)
+        else:
+            sw = max(sw, _clamp(1 - float(ba) / 20.0))   # 0 barre->1, 20->0
+    f["liquidity_sweep"] = sw
+
+    # 7. Candlestick — non solo direzione: qualita', zona, e se nasce sull'OB
+    cs_dir = mie_context.get("mie_candlestick_strongest_direction")
+    cs = 0.0
+    if mie_context.get("mie_candlestick_has_confirmation"):
+        if (up and cs_dir == "BULLISH") or (not up and cs_dir == "BEARISH"):
+            cs += 0.45                                # direzione contestuale ok
+            pq = float(mie_context.get("mie_candlestick_pattern_quality_score") or 0)
+            cs += 0.30 * _clamp(pq / 100.0)           # qualita' del pattern
+            if mie_context.get("mie_candlestick_in_reaction_zone"):
+                cs += 0.10
+            # il pattern nasce DENTRO la zona OB?
+            zsc = mie_context.get("mie_candlestick_zone_confluence_score")
+            if zsc is not None and float(zsc) >= 70:
+                cs += 0.15
+        elif cs_dir:
+            cs = -0.25                                # pattern CONTRO il trade
+    f["candlestick"] = round(cs, 3)
+
+    # 8. Spazio davanti al trade (proposta 4): poco spazio penalizza.
+    #    Misurato: il 63-70% dei casi ha molto spazio, quindi premiare
+    #    l'abbondanza discrimina poco — e' la strettezza che informa.
+    targets = mie_context.get("mie_liquidity_buy_targets" if up
+                              else "mie_liquidity_sell_targets") or []
+    dists = [abs(float(t["price"]) - entry) / atr
+             for t in targets if t.get("price") and atr > 0]
+    if not dists:
+        f["liquidity_space"] = 0.3                    # nessun target noto
+    else:
+        nearest = min(dists)
+        tight = params.get("liq_tight_atr", 3.0)
+        ample = params.get("liq_ample_atr", 10.0)
+        if nearest < tight:
+            f["liquidity_space"] = 0.0                # muro davanti
+        else:
+            f["liquidity_space"] = _clamp((nearest - tight) / (ample - tight))
+
+    # 9. Sessione attiva per l'asset
+    f["session_active"] = 1.0 if session in ALLOWED_SESSIONS.get(asset, ()) else 0.0
+
+    return round(sum(f.values()), 2), {k: round(v, 3) for k, v in f.items()}
+
+
+def _quality_label(score: float) -> str:
+    if score >= QUALITY_HIGH_MIN:
+        return "HIGH"
+    if score >= QUALITY_MED_MIN:
+        return "MEDIUM"
+    return "LOW"
+
+
+# ============================================================
+# Take Profit — scala strutturale
+# ============================================================
+
+def _build_tp_ladder(direction: str, entry: float, risk: float, atr: float,
+                     mie_context: dict, params: dict) -> list:
+    """TP1 vicino (OB opposto -> FVG -> zona RM -> fallback su rischio),
+    TP2/TP3 dalle aree di liquidita'. Ritorna [(price,label), ...]."""
+    up = direction == "BUY"
+    tp1_max = params.get("tp1_max_atr", 3.0) * atr if atr > 0 else 0
+
+    def ahead(p): return p > entry if up else p < entry
+    def near_ok(p): return not tp1_max or abs(p - entry) <= tp1_max
+
+    near = []
+    opp = "BEARISH" if up else "BULLISH"
+    for ob in (mie_context.get("mie_order_block_order_blocks") or []):
+        if ob.get("direction") != opp or ob.get("status") == "EXPIRED":
             continue
         mid = ob.get("zone_midpoint")
         if mid is None:
@@ -212,294 +333,197 @@ def _find_tp_target(mie_context: dict, direction: str,
                 continue
             mid = (float(zh) + float(zl)) / 2
         mid = float(mid)
-        dist = abs(mid - entry)
-        if max_structural_dist and dist > max_structural_dist:
-            continue
-        if direction == "BUY" and mid > entry:
-            targets.append((mid, f"OB_{ob.get('id', '?')[:4]}"))
-        elif direction == "SELL" and mid < entry:
-            targets.append((mid, f"OB_{ob.get('id', '?')[:4]}"))
+        if ahead(mid) and near_ok(mid):
+            near.append((mid, f"OB_{str(ob.get('id','?'))[:4]}"))
 
-    # ── Livelli di liquidita' vicini ─────────────────────────
-    if direction == "BUY":
-        liq_targets = mie_context.get("mie_liquidity_buy_targets") or []
+    fvg = mie_context.get("mie_fvg_nearest_open_bearish" if up
+                          else "mie_fvg_nearest_open_bullish")
+    if isinstance(fvg, dict):
+        for edge in ("zone_low", "zone_high"):
+            v = fvg.get(edge)
+            if v and ahead(float(v)) and near_ok(float(v)):
+                near.append((float(v), "FVG")); break
+
+    for key in ("mie_reaction_map_strongest_above", "mie_reaction_map_strongest_below"):
+        z = mie_context.get(key)
+        if isinstance(z, dict):
+            mid = z.get("zone_midpoint")
+            if mid and ahead(float(mid)) and near_ok(float(mid)):
+                near.append((float(mid), "RM_ZONE"))
+
+    ladder = []
+    if near:
+        near.sort(key=lambda t: abs(t[0] - entry))
+        ladder.append(near[0])
     else:
-        liq_targets = mie_context.get("mie_liquidity_sell_targets") or []
+        d = params.get("min_rr", 1.0) * risk * 1.002
+        ladder.append((entry + d if up else entry - d, "RR_SCALED"))
 
-    for lv in liq_targets:
-        price = lv.get("price", 0)
-        if price <= 0:
+    liq = mie_context.get("mie_liquidity_buy_targets" if up
+                          else "mie_liquidity_sell_targets") or []
+    pts = sorted([(float(t["price"]), t.get("label", "LIQ")) for t in liq
+                  if t.get("price") and ahead(float(t["price"]))],
+                 key=lambda t: abs(t[0] - entry))
+    for price, label in pts:
+        if abs(price - entry) <= abs(ladder[-1][0] - entry) * 1.05:
             continue
-        dist = abs(price - entry)
-        if max_structural_dist and dist > max_structural_dist:
-            continue
-        if direction == "BUY" and price > entry:
-            targets.append((price, lv.get("label", "LIQ")))
-        elif direction == "SELL" and price < entry:
-            targets.append((price, lv.get("label", "LIQ")))
-
-    # Target strutturale piu' vicino CHE SODDISFI L'RR
-    if targets and risk > 0:
-        targets.sort(key=lambda t: abs(t[0] - entry))
-        for tp, label in targets:
-            if abs(tp - entry) / risk >= min_rr:
-                return (round(tp, 4), label)
-    elif targets:
-        targets.sort(key=lambda t: abs(t[0] - entry))
-        return targets[0]
-
-    # ── Fallback ─────────────────────────────────────────────
-    tp_mode = params.get("tp_mode", "fixed")
-    scalp_mult = params.get("scalp_tp_atr", 0.8)
-
-    if tp_mode == "proportional" and risk > 0:
-        # TP scalato sul rischio: garantisce RR >= min_rr per costruzione.
-        # Necessario dove le zone OB sono larghe (XAU: mediana 1.84 ATR),
-        # perche' un TP fisso da' RR 0.61 e il segnale viene sempre scartato.
-        tp_dist = max(min_rr * risk * 1.002, scalp_mult * atr_m15 if atr_m15 > 0 else 0)
-        label = "RR_SCALED"
-    elif atr_m15 > 0:
-        tp_dist = scalp_mult * atr_m15
-        label = "SCALP_ATR"
-    elif risk > 0:
-        tp_dist = min_rr * risk        # ultimo fallback: niente ATR
-        label = "RR_SCALED_NOATR"
-    else:
-        return (None, None)            # non piu' None implicito
-
-    tp = entry + tp_dist if direction == "BUY" else entry - tp_dist
-    return (round(tp, 4), label)
-
-
-# ============================================================
-# Quality Score
-# ============================================================
-
-def _compute_quality(ob: dict, mie_context: dict, bias_confidence: int) -> tuple:
-    """
-    Quality score 0-7 (informativo, non gate).
-    Ritorna (score, label).
-    """
-    score = 0
-
-    # +2  OB quality_score >= 5
-    if ob.get("quality_score", 0) >= 5:
-        score += 2
-
-    # +1  OB ha FVG associata
-    if ob.get("has_fvg"):
-        score += 1
-
-    # +1  OB ha sweep before
-    if ob.get("has_sweep_before"):
-        score += 1
-
-    # +1  bias_confidence >= 50
-    if bias_confidence >= 50:
-        score += 1
-
-    # +1  displacement confermato
-    disp = mie_context.get("mie_structure_displacement", {})
-    if isinstance(disp, dict) and disp.get("confirmed"):
-        score += 1
-
-    # +1  candlestick confirmation
-    if mie_context.get("mie_candlestick_has_confirmation"):
-        score += 1
-
-    if score >= 5:
-        label = "HIGH"
-    elif score >= 3:
-        label = "MEDIUM"
-    else:
-        label = "LOW"
-
-    return score, label
+        ladder.append((price, label))
+        if len(ladder) >= 3:
+            break
+    return [(round(p, 4), l) for p, l in ladder]
 
 
 # ============================================================
 # Entry Point
 # ============================================================
 
-def generate_lh_signal(
-    asset: str,
-    df_m15: pd.DataFrame,
-    now: datetime,
-    mie_context: dict = None,
-    df_m5: pd.DataFrame = None,
-) -> dict:
-    """
-    LH v2.0 — Confluence Sniper.
-
-    Ritorna {"signal": dict | None, "diagnostics": dict}.
-    """
+def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
+                       mie_context: dict = None,
+                       df_m5: pd.DataFrame = None) -> dict:
+    """LH v3.1 — Confluence Engine. Ritorna {"signal", "diagnostics"}."""
     if not mie_context:
         return _reject("NO_MIE_CONTEXT")
 
-    # Parametri calibrati per asset (geometria zone OB molto diversa)
     P = _params(asset)
-
-    # ── 1. SESSIONE ──────────────────────────────────────────
     session = _get_session(now)
-    allowed = ALLOWED_SESSIONS.get(asset, ("LONDON", "NEW_YORK"))
-    if session not in allowed:
-        return _reject(f"SESSION_{session}_NOT_ALLOWED")
 
-    # ── 2. BIAS ──────────────────────────────────────────────
-    bias = mie_context.get("mie_market_state_bias", "NEUTRAL")
-    bias_confidence = mie_context.get("mie_market_state_bias_confidence", 0)
-    if bias == "NEUTRAL":
-        return _reject("BIAS_NEUTRAL")
-
-    # ── 3. MACRO BLACKOUT ────────────────────────────────────
     if mie_context.get("mie_macro_is_blackout"):
         return _reject("MACRO_BLACKOUT")
 
-    # ── 4. PREMIUM/DISCOUNT ──────────────────────────────────
-    pd_zone = mie_context.get("mie_structure_premium_discount", {})
-    if isinstance(pd_zone, dict):
-        zone = pd_zone.get("zone", "EQUILIBRIUM")
+    src = df_m5 if (df_m5 is not None and len(df_m5) > 0) else df_m15
+    if src is None or len(src) == 0:
+        return _reject("NO_CANDLES")
+    last = src.iloc[-1]
+    price = float(last["close"])
+    hi_c  = float(last["high"])
+    lo_c  = float(last["low"])
+
+    atr = mie_context.get("mie_volatility_atr_m15", 0) or 0
+    if atr <= 0 and df_m15 is not None and len(df_m15) >= 15:
+        h = df_m15["high"].astype(float).values
+        l = df_m15["low"].astype(float).values
+        c = df_m15["close"].astype(float).values
+        atr = sum(max(h[i]-l[i], abs(h[i]-c[i-1]), abs(l[i]-c[i-1]))
+                  for i in range(-14, 0)) / 14
+
+    # Direzione: dal bias se c'e', altrimenti dall'OB piu' vicino
+    bias = mie_context.get("mie_market_state_bias", "NEUTRAL")
+    if bias in ("BULLISH", "BEARISH"):
+        want_dir = bias
     else:
-        zone = "EQUILIBRIUM"
+        cand = [(d, _find_best_ob(mie_context, d, price, P["max_zone_atr"], atr))
+                for d in ("BULLISH", "BEARISH")]
+        cand = [(d, o) for d, o in cand if o]
+        if not cand:
+            return _reject("NO_OB_NEARBY (bias neutro)")
+        want_dir = min(cand, key=lambda x: x[1].get("distance_from_price_pct", 1))[0]
+    direction = "BUY" if want_dir == "BULLISH" else "SELL"
 
-    direction = "BUY" if bias == "BULLISH" else "SELL"
-
-    if direction == "BUY" and zone == "PREMIUM":
-        return _reject(f"BUY_IN_PREMIUM (zone={zone})")
-    if direction == "SELL" and zone == "DISCOUNT":
-        return _reject(f"SELL_IN_DISCOUNT (zone={zone})")
-
-    # ── 5. TROVA OB ──────────────────────────────────────────
-    # Prezzo corrente dalla candela piu' recente disponibile
-    if df_m5 is not None and len(df_m5) > 0:
-        last = df_m5.iloc[-1]
-    else:
-        last = df_m15.iloc[-1]
-
-    current_price = float(last["close"])
-    current_high  = float(last["high"])
-    current_low   = float(last["low"])
-
-    # ── ATR M15 (serve PRIMA, per il filtro larghezza zona) ──
-    atr_m15 = mie_context.get("mie_volatility_atr_m15", 0)
-    if not atr_m15 or atr_m15 <= 0:
-        if len(df_m15) >= 15:
-            highs = df_m15["high"].astype(float).values
-            lows  = df_m15["low"].astype(float).values
-            closes = df_m15["close"].astype(float).values
-            trs = []
-            for i in range(-14, 0):
-                tr = max(highs[i]-lows[i], abs(highs[i]-closes[i-1]),
-                         abs(lows[i]-closes[i-1]))
-                trs.append(tr)
-            atr_m15 = sum(trs) / len(trs)
-        else:
-            atr_m15 = 0
-
-    ob = _find_best_ob(mie_context, bias, current_price,
-                       max_zone_atr=P["max_zone_atr"], atr_m15=atr_m15)
+    ob = _find_best_ob(mie_context, want_dir, price, P["max_zone_atr"], atr)
     if ob is None:
         return _reject("NO_OB_NEARBY")
 
-    # ── 6. PREZZO TOCCA LA ZONA OB ───────────────────────────
-    if not _price_in_ob_zone(ob, current_high, current_low):
-        ob_mid = (float(ob["zone_high"]) + float(ob["zone_low"])) / 2
-        dist = abs(current_price - ob_mid) / current_price
-        return _reject(f"PRICE_NOT_AT_OB (dist={dist:.4f})")
+    zh, zl = float(ob["zone_high"]), float(ob["zone_low"])
+    if atr <= 0:
+        atr = abs(zh - zl) * 2
 
-    # ── 7. CANDLESTICK CONFIRMATION ──────────────────────────
-    if not mie_context.get("mie_candlestick_has_confirmation"):
-        return _reject("NO_CANDLESTICK_CONFIRMATION")
+    # ── Anticipazione: TRIGGERED / WATCHING / FAR ────────────
+    state, dist_atr = _ob_position(ob, hi_c, lo_c, price, atr, P["watch_max_atr"])
+    if state == "FAR":
+        return _reject(f"PRICE_FAR_FROM_OB ({dist_atr:.1f} ATR)")
 
-    # ══════════════════════════════════════════════════════════
-    # TUTTE LE CONDIZIONI SODDISFATTE — calcola Entry/SL/TP
-    # ══════════════════════════════════════════════════════════
-
-    zh = float(ob["zone_high"])
-    zl = float(ob["zone_low"])
-
-    if atr_m15 <= 0:
-        atr_m15 = abs(zh - zl) * 2  # fallback estremo
-
-    buffer = P["sl_buffer_atr"] * atr_m15
-
-    # Entry / SL — lo SL resta al punto di invalidazione STRUTTURALE
-    # (oltre la zona OB), come da metodologia. Non lo stringiamo:
-    # e' il TP che si adatta al rischio, non il contrario.
-    entry = current_price
-    if direction == "BUY":
-        sl = zl - buffer
+    if state == "TRIGGERED":
+        entry = price                       # ingresso a mercato
+        order_type = "MARKET"
     else:
-        sl = zh + buffer
+        # ordine PENDENTE al bordo della zona: mantiene il rischio corretto
+        entry = zh if direction == "BUY" else zl
+        order_type = "PENDING"
 
+    # Stop STRUTTURALE oltre l'Order Block
+    buf = P["sl_buffer_atr"] * atr
+    sl = zl - buf if direction == "BUY" else zh + buf
     risk = abs(entry - sl)
     if risk <= 0:
         return _reject("ZERO_RISK")
 
-    # TP — ora riceve il rischio: preferisce target strutturali che
-    # soddisfano l'RR, altrimenti scala (tp_label distingue i due casi)
-    tp_price, tp_label = _find_tp_target(mie_context, direction, entry,
-                                          current_price, atr_m15,
-                                          risk=risk, params=P)
-    if tp_price is None:
-        return _reject("NO_TP_TARGET")
+    score, factors = _score_confluence(direction, want_dir, ob, mie_context,
+                                        entry, atr, session, asset, P)
+    if score < MIN_SCORE:
+        return {"signal": None, "diagnostics": {
+            "rejection": f"SCORE_TOO_LOW ({score}/9 < {MIN_SCORE})",
+            "score": score, "factors": factors, "setup_state": state}}
 
-    reward = abs(tp_price - entry)
-    rr = reward / risk if risk > 0 else 0
+    ladder = _build_tp_ladder(direction, entry, risk, atr, mie_context, P)
+    tp1, tp1_label = ladder[0]
+    rr = abs(tp1 - entry) / risk if risk > 0 else 0
+    if rr < P["min_rr"] - 1e-6:
+        return {"signal": None, "diagnostics": {
+            "rejection": f"RR_TOO_LOW ({rr:.2f} < {P['min_rr']})",
+            "score": score, "factors": factors, "setup_state": state}}
 
-    if rr < P["min_rr"] - 1e-6:   # tolleranza: il round() del TP puo' limare l'RR
-        return _reject(f"RR_TOO_LOW ({rr:.2f} < {P['min_rr']})")
-
-    # Quality
-    quality_score, quality_label = _compute_quality(ob, mie_context, bias_confidence)
-
-    # ── Costruisci segnale ───────────────────────────────────
     signal = {
-        "signal_id":            str(uuid.uuid4()),
-        "strategy_name":        STRATEGY_NAME,
-        "strategy_version":     STRATEGY_VERSION,
-        "asset":                asset,
-        "direction":            direction,
-        "timestamp_setup":      now.isoformat(),
+        "signal_id":        str(uuid.uuid4()),
+        "strategy_name":    STRATEGY_NAME,
+        "strategy_version": STRATEGY_VERSION,
+        "asset":            asset,
+        "direction":        direction,
+        "timestamp_setup":  now.isoformat(),
 
-        "entry":                round(entry, 4),
-        "stop_loss":            round(sl, 4),
-        "tp":                   round(tp_price, 4),
-        "risk":                 round(risk, 4),
-        "rr":                   round(rr, 2),
+        "entry":     round(entry, 4),
+        "stop_loss": round(sl, 4),
+        "tp":        tp1,               # TP1: usato da lh_db e dal Ledger
+        "risk":      round(risk, 4),
+        "rr":        round(rr, 2),
 
-        # Campi legacy LH DB — riutilizzati per OB context
-        "swept_level_label":    ob.get("id", "?"),           # OB id (per dedup)
-        "swept_level_price":    round((zh + zl) / 2, 4),     # OB midpoint
-        "swept_level_priority": ob.get("status", "FRESH"),   # FRESH/BREAKER
-        "swept_level_touches":  ob.get("test_count", 0),
-        "sweep_direction":      bias,                        # bias direction
-        "sweep_peak_price":     zh if direction == "BUY" else zl,
-        "sweep_penetration":    0,
+        # anticipazione
+        "setup_state":  state,          # TRIGGERED | WATCHING
+        "order_type":   order_type,     # MARKET | PENDING
+        "distance_atr": round(dist_atr, 2),
+
+        # scala TP (osservazione, non ancora uscite parziali)
+        "tp1": tp1, "tp1_label": tp1_label,
+        "tp2": ladder[1][0] if len(ladder) > 1 else None,
+        "tp2_label": ladder[1][1] if len(ladder) > 1 else None,
+        "tp3": ladder[2][0] if len(ladder) > 2 else None,
+        "tp3_label": ladder[2][1] if len(ladder) > 2 else None,
+
+        # campi legacy LH DB — riusati per il contesto OB
+        "swept_level_label":     ob.get("id", "?"),
+        "swept_level_price":     round((zh + zl) / 2, 4),
+        "swept_level_priority":  ob.get("status", "FRESH"),
+        "swept_level_touches":   ob.get("test_count", 0),
+        "sweep_direction":       want_dir,
+        "sweep_peak_price":      zh if direction == "BUY" else zl,
+        "sweep_penetration":     0,
         "sweep_penetration_pct": 0,
 
-        "flag_bos_present":     False,
-        "flag_choch_present":   False,
-        "flag_trigger_present": True,
+        "flag_bos_present":      bool(ob.get("has_bos")),
+        "flag_choch_present":    False,
+        "flag_trigger_present":  state == "TRIGGERED",
         "flag_near_order_block": True,
-        "flag_near_fvg":        bool(ob.get("has_fvg")),
-        "ob_quality":           ob.get("quality_score"),
-        "ob_match_type":        ob.get("status"),
-        "pool_type":            f"OB_{ob.get('status', 'FRESH')}",
-        "flag_htf_pool":        False,
-        "confluence_count":     6,  # tutte e 6 le condizioni soddisfatte
+        "flag_near_fvg":         factors.get("fvg_quality", 0) > 0,
+        "ob_quality":            ob.get("quality_score"),
+        "ob_match_type":         ob.get("status"),
+        "pool_type":             f"OB_{ob.get('status','FRESH')}",
+        "flag_htf_pool":         False,
+        "confluence_count":      score,
 
-        "trigger_type":         "OB_TOUCH",
-        "trigger_ref_level":    round((zh + zl) / 2, 4),
+        "trigger_type":      "OB_TOUCH" if state == "TRIGGERED" else "OB_PENDING",
+        "trigger_ref_level": round((zh + zl) / 2, 4),
+        "tp_label":          tp1_label,
+        "tp_priority":       "STRUCTURAL_LADDER",
 
-        "tp_label":             tp_label,
-        "tp_priority":          "FIRST_REACHABLE",
+        "quality_score":      score,
+        "quality_label":      _quality_label(score),
+        # serializzato: un dict non e' inseribile in una colonna SQLite.
+        # Il dict resta disponibile in diagnostics["factors"].
+        "confluence_factors": json.dumps(factors),
 
-        "quality_score":        quality_score,
-        "quality_label":        quality_label,
-
-        "session":              session,
-        "expiry_bars":          P["expiry_bars"],
+        "session":     session,
+        "expiry_bars": P["expiry_bars"],
     }
 
-    return {"signal": signal, "diagnostics": {"status": "SIGNAL_GENERATED"}}
+    return {"signal": signal, "diagnostics": {
+        "status": "SIGNAL_GENERATED", "score": score,
+        "factors": factors, "ladder": ladder, "setup_state": state}}
