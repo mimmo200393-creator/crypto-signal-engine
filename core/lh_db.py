@@ -86,7 +86,24 @@ def _migrate_lh_flags(conn: sqlite3.Connection):
                      ("ob_quality", "INTEGER"),
                      ("pool_type", "TEXT"),
                      ("flag_htf_pool", "BOOLEAN DEFAULT 0"),
-                     ("confluence_count", "INTEGER DEFAULT 0")]:
+                     ("confluence_count", "INTEGER DEFAULT 0"),
+                     # --- LH v3.1 ---
+                     ("setup_state", "TEXT DEFAULT 'TRIGGERED'"),
+                     ("order_type", "TEXT DEFAULT 'MARKET'"),
+                     ("distance_atr", "REAL DEFAULT 0"),
+                     ("tp1", "REAL"), ("tp1_label", "TEXT"),
+                     ("tp2", "REAL"), ("tp2_label", "TEXT"),
+                     ("tp3", "REAL"), ("tp3_label", "TEXT"),
+                     ("confluence_factors", "TEXT"),
+                     ("pending_bars", "INTEGER DEFAULT 0"),
+                     ("filled_ts", "TEXT"),
+                     # Stato dell'ORDINE, separato dall'esito del trade.
+                     # Non si tocca final_outcome perche' ha un CHECK
+                     # constraint (OPEN/TP/SL/EXPIRED) che SQLite non
+                     # permette di modificare senza ricostruire la tabella.
+                     ("order_status", "TEXT DEFAULT 'FILLED'"),
+                     ("ob_match_type", "TEXT"),
+                     ("session", "TEXT")]:
         if col not in cols:
             conn.execute(f"ALTER TABLE lh_signals ADD COLUMN {col} {typ}")
     conn.commit()
@@ -114,9 +131,13 @@ def insert_lh_signal(conn: sqlite3.Connection, signal: dict) -> str:
             trigger_type, trigger_ref_level,
             tp_label, tp_priority,
             quality_score, quality_label,
-            final_outcome, expiry_bars
+            final_outcome, expiry_bars,
+            setup_state, order_type, distance_atr,
+            tp1, tp1_label, tp2, tp2_label, tp3, tp3_label,
+            confluence_factors, order_status, ob_match_type, session
         ) VALUES (
-            ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+            ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+            ?,?,?,?,?,?,?,?,?,?,?,?,?
         )
         """,
         (
@@ -156,6 +177,20 @@ def insert_lh_signal(conn: sqlite3.Connection, signal: dict) -> str:
             signal.get("quality_label"),
             "OPEN",
             signal.get("expiry_bars", 96),
+            signal.get("setup_state", "TRIGGERED"),
+            signal.get("order_type", "MARKET"),
+            signal.get("distance_atr", 0),
+            signal.get("tp1"), signal.get("tp1_label"),
+            signal.get("tp2"), signal.get("tp2_label"),
+            signal.get("tp3"), signal.get("tp3_label"),
+            signal.get("confluence_factors"),
+            # LH v3.1 — un ordine PENDENTE non e' un trade aperto: diventa
+            # FILLED solo quando il prezzo raggiunge l'entry. Senza questa
+            # distinzione il monitor calcolerebbe MAE/MFE e colpi di TP/SL
+            # da un prezzo mai scambiato.
+            "PENDING" if signal.get("setup_state") == "WATCHING" else "FILLED",
+            signal.get("ob_match_type"),
+            signal.get("session"),
         ),
     )
     conn.commit()
@@ -201,6 +236,77 @@ def has_open_lh_signal(
     return row is not None
 
 
+def monitor_pending_lh_signals(
+    conn: sqlite3.Connection,
+    asset: str,
+    current_high: float,
+    current_low: float,
+    now_iso: str,
+    max_pending_bars: int = 24,
+) -> list[dict]:
+    """
+    Gestisce gli ordini PENDENTI di LH v3.1 (setup_state = WATCHING).
+
+    Un pendente NON e' un trade: e' un ordine in attesa al bordo della zona
+    Order Block. Va promosso a OPEN solo quando il prezzo raggiunge davvero
+    l'entry — altrimenti il monitor calcolerebbe MAE/MFE e colpi di TP/SL
+    da un prezzo mai scambiato, inquinando il Ledger con esiti inventati.
+
+    - prezzo raggiunge l'entry -> final_outcome = 'OPEN', il trade parte ORA
+      (bars_open azzerato: la vita del trade comincia dal riempimento)
+    - troppo tempo senza riempimento -> final_outcome = 'CANCELLED'
+
+    Da chiamare PRIMA di monitor_open_lh_signals nel runner.
+    """
+    rows = conn.execute(
+        """
+        SELECT signal_id, direction, entry, pending_bars
+        FROM lh_signals
+        WHERE order_status = 'PENDING' AND final_outcome = 'OPEN' AND asset = ?
+        """,
+        (asset,),
+    ).fetchall()
+
+    updated = []
+    for sid, direction, entry, pending_bars in rows:
+        if entry is None:
+            continue
+        pending_bars = (pending_bars or 0) + 1
+        entry = float(entry)
+
+        # riempimento: il prezzo ha raggiunto il livello dell'ordine
+        if direction == "BUY":
+            filled = current_low <= entry
+        else:
+            filled = current_high >= entry
+
+        if filled:
+            conn.execute(
+                "UPDATE lh_signals SET order_status='FILLED', pending_bars=?, "
+                "filled_ts=?, bars_open=0, mae=0, mfe=0 WHERE signal_id=?",
+                (pending_bars, now_iso, sid),
+            )
+            updated.append({"signal_id": sid, "event": "FILLED",
+                            "pending_bars": pending_bars})
+        elif pending_bars >= max_pending_bars:
+            conn.execute(
+                "UPDATE lh_signals SET order_status='CANCELLED', "
+                "final_outcome='EXPIRED', pending_bars=?, "
+                "timestamp_closed=? WHERE signal_id=?",
+                (pending_bars, now_iso, sid),
+            )
+            updated.append({"signal_id": sid, "event": "CANCELLED",
+                            "pending_bars": pending_bars})
+        else:
+            conn.execute(
+                "UPDATE lh_signals SET pending_bars=? WHERE signal_id=?",
+                (pending_bars, sid),
+            )
+
+    conn.commit()
+    return updated
+
+
 def monitor_open_lh_signals(
     conn: sqlite3.Connection,
     asset: str,
@@ -214,6 +320,7 @@ def monitor_open_lh_signals(
                mae, mfe, bars_open, expiry_bars
         FROM lh_signals
         WHERE final_outcome = 'OPEN' AND asset = ?
+          AND COALESCE(order_status, 'FILLED') = 'FILLED' 
         """,
         (asset,),
     ).fetchall()
