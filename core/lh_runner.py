@@ -255,17 +255,37 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         )
         return
 
-    # ── Risk floor: SL troppo stretto ────────────────────────
+    # ── Risk floor basato su ATR (fix 24/07/2026) ────────────
+    # PRIMA: floor percentuale a 0.1% del prezzo. Bloccava sistematicamente
+    # XAU: a 4000 lo 0.1% e' 4 punti, ma l'ATR M15 dell'oro e' ~3.66, quindi
+    # un rischio normale di 1 ATR (3.6 pt = 0.09%) finiva sotto la soglia.
+    # Misurato in produzione: REJECT RISK_TOO_TIGHT (0.0009) su un segnale
+    # con rischio di circa 1 ATR — cioe' del tutto sano.
+    # Stesso identico problema gia' risolto in v41p1_runner (Sprint 13c),
+    # dove il floor percentuale bloccava tutti i PAXG.
+    # ORA: il rischio si misura in ATR, che e' l'unita' naturale e vale
+    # su qualsiasi asset e livello di prezzo.
     entry = signal.get("entry", 0)
     sl = signal.get("stop_loss", 0)
     if entry and sl:
-        risk_pct = abs(entry - sl) / entry
-        if risk_pct < 0.001:
-            logger.info(
-                "LH [%s %s]: REJECT RISK_TOO_TIGHT (%.4f)",
-                asset, direction, risk_pct,
-            )
-            return
+        risk_abs = abs(entry - sl)
+        atr_m15 = mie_context.get("mie_volatility_atr_m15", 0) or 0
+        if atr_m15 > 0:
+            if risk_abs < 0.3 * atr_m15:
+                logger.info(
+                    "LH [%s %s]: REJECT RISK_TOO_TIGHT (%.4f = %.2f ATR < 0.3)",
+                    asset, direction, risk_abs, risk_abs / atr_m15,
+                )
+                return
+        else:
+            # fallback percentuale solo se l'ATR non e' disponibile,
+            # con soglia molto piu' bassa per non bloccare l'oro
+            if abs(entry - sl) / entry < 0.0002:
+                logger.info(
+                    "LH [%s %s]: REJECT RISK_TOO_TIGHT (%.5f, no ATR)",
+                    asset, direction, abs(entry - sl) / entry,
+                )
+                return
 
     # ── Check duplicati: stesso OB nelle ultime 4h ───────────
     ob_ref = signal.get("swept_level_label", "")
@@ -414,4 +434,3 @@ def run_lh_scan(config: dict):
 
     conn.close()
     logger.info("=== LH Scanner: fine ciclo ===")
-    
