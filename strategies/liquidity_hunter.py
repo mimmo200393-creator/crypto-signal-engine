@@ -488,6 +488,11 @@ def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
         "tp3": ladder[2][0] if len(ladder) > 2 else None,
         "tp3_label": ladder[2][1] if len(ladder) > 2 else None,
 
+        # zona OB in PREZZO (per notifica e analisi): l'id interno non dice
+        # nulla a chi legge, i bordi della zona si'
+        "ob_zone_low":  round(zl, 4),
+        "ob_zone_high": round(zh, 4),
+
         # campi legacy LH DB — riusati per il contesto OB
         "swept_level_label":     ob.get("id", "?"),
         "swept_level_price":     round((zh + zl) / 2, 4),
