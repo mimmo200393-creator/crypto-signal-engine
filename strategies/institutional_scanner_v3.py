@@ -435,24 +435,17 @@ def find_opposing_h4_zone(zones: list, direction: str, entry: float) -> Optional
 
 
 def compute_ordered_targets(
-    m15_target: Optional[float],
-    h1_target: Optional[float],
-    h4_target: Optional[float],
+    m15_target,
+    h1_target,
+    h4_target,
     entry: float,
 ) -> tuple:
     """
     BUGFIX: i tre target venivano prima etichettati per timeframe di origine
     (M15 -> TP1, H1 -> TP2, H4 zone -> TP3) senza mai verificare che fossero
-    effettivamente ordinati per distanza crescente da entry. Poiche' i pivot
-    M15/H1/H4 sono trovati in modo indipendente, il pivot H1 puo' risultare
-    piu' vicino del pivot M15, invertendo di fatto TP1 e TP2 (e falsando
-    l'RR dichiarato, calcolato sempre sul primo target).
-
-    Questa funzione ordina i candidati per distanza assoluta |target - entry|
-    crescente, cosi' che TP1 sia sempre il target realmente piu' vicino,
-    TP2 il successivo, TP3 il piu' lontano -- indipendentemente dal
-    timeframe che lo ha generato. I livelli duplicati (stesso prezzo da
-    fonti diverse) vengono deduplicati; gli slot mancanti restano None.
+    effettivamente ordinati per distanza crescente da entry. Ordina i
+    candidati per distanza assoluta |target - entry| crescente, cosi'
+    TP1 e' sempre il piu' vicino, TP2 il successivo, TP3 il piu' lontano.
     """
     raw = [m15_target, h1_target, h4_target]
     candidates = sorted(
@@ -651,6 +644,7 @@ def generate_v3_signal(market_data: dict) -> dict:
         "m15_bos_confirmed": True,
         "session": session,
         "timestamp_setup": now.isoformat(),
+        "m15_trigger_ts": int(df_m15.iloc[-1]["timestamp"]),
     }
 
     return {"signal": signal, "diagnostics": diagnostics}
