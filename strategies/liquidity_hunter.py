@@ -31,16 +31,14 @@ STOP LOSS: strutturale, oltre l'Order Block + buffer ATR.
     OB rialzista -> stop SOTTO la zona: se il prezzo chiude li', il supporto
     ha ceduto e la tesi e' morta. Mai stretto per far tornare l'RR.
 
-TAKE PROFIT: scala a 3 livelli.
+TAKE PROFIT: scala a 2 livelli strutturali + livelli di liquidita' informativi.
     TP1 = primo target strutturale vicino (OB opposto / FVG / zona RM)
-    TP2 = prima area di liquidita'
-    TP3 = seconda area di liquidita'
-    (i target di liquidita' sono lontani — mediana 12.6 ATR su XAU, 29.4 su
-    BTC — quindi non possono fare da TP1: servirebbe un orizzonte di giorni)
+    TP2 = secondo target strutturale (se disponibile)
+    Livelli di liquidita' (Equal Lows/Highs): solo informativi, non TP.
+    Se non esiste nessun target strutturale: il segnale NON viene emesso.
 
 TRACCIAMENTO: `tp` resta TP1, cosi' lh_db e il Decision Ledger continuano a
-    funzionare e la serie storica degli esiti non si rompe. TP2/TP3 sono
-    osservazione fino a quando i dati non diranno se vengono raggiunti.
+    funzionare e la serie storica degli esiti non si rompe.
 
 PESI: tutti i fattori valgono al massimo 1 punto. Deliberato — non abbiamo
     dati per pesarli diversamente e pesi inventati inquinerebbero proprio i
@@ -65,7 +63,7 @@ import pandas as pd
 logger = logging.getLogger("liquidity_hunter")
 
 STRATEGY_NAME    = "LH"
-STRATEGY_VERSION = "v3.1"
+STRATEGY_VERSION = "v3.2"
 
 OB_PROXIMITY_PCT = 0.010     # distanza max dell'OB dal prezzo
 
@@ -83,11 +81,11 @@ QUALITY_MED_MIN  = 4.2
 
 ASSET_PARAMS = {
     "BTC_USDT": {
-        "sl_buffer_atr": 0.3, "min_rr": 1.0, "expiry_bars": 12,
+        "sl_buffer_atr": 0.5, "min_rr": 1.0, "expiry_bars": 12,
         "max_zone_atr": 2.0, "tp1_max_atr": 3.0,
-        "watch_max_atr": 1.5,      # entro quanto il prezzo e' "in avvicinamento"
-        "liq_tight_atr": 3.0,      # sotto questo, poco spazio davanti
-        "liq_ample_atr": 10.0,     # sopra questo, molto spazio
+        "watch_max_atr": 1.5,
+        "liq_tight_atr": 3.0,
+        "liq_ample_atr": 10.0,
     },
     "XAU_USD": {
         "sl_buffer_atr": 0.3, "min_rr": 1.2, "expiry_bars": 18,
@@ -223,7 +221,7 @@ def _score_confluence(direction: str, want_dir: str, ob: dict,
             rm = max(rm, _clamp((z.get("confluence_score", 0) - 50) / 40.0))
     f["reaction_map"] = rm
 
-    # 5. FVG — qualita' della zona (proposta: sovrapposizione, distanza, purezza)
+    # 5. FVG — qualita' della zona (sovrapposizione, distanza, purezza)
     fvg = mie_context.get("mie_fvg_nearest_open_bullish" if up
                           else "mie_fvg_nearest_open_bearish")
     fv = 0.0
@@ -245,7 +243,6 @@ def _score_confluence(direction: str, want_dir: str, ob: dict,
     f["fvg_quality"] = _clamp(fv)
 
     # 6. Sweep di liquidita' — conta la RECENZA, non la presenza
-    #    (su XAU active_sweeps e' non vuoto nell'86% dei casi: troppo comune)
     sw = 0.0
     for lv in (mie_context.get("mie_liquidity_levels") or []):
         if not lv.get("swept"):
@@ -254,42 +251,39 @@ def _score_confluence(direction: str, want_dir: str, ob: dict,
         if ba is None:
             sw = max(sw, 0.3)
         else:
-            sw = max(sw, _clamp(1 - float(ba) / 20.0))   # 0 barre->1, 20->0
+            sw = max(sw, _clamp(1 - float(ba) / 20.0))
     f["liquidity_sweep"] = sw
 
-    # 7. Candlestick — non solo direzione: qualita', zona, e se nasce sull'OB
+    # 7. Candlestick — qualita', zona, e se nasce sull'OB
     cs_dir = mie_context.get("mie_candlestick_strongest_direction")
     cs = 0.0
     if mie_context.get("mie_candlestick_has_confirmation"):
         if (up and cs_dir == "BULLISH") or (not up and cs_dir == "BEARISH"):
-            cs += 0.45                                # direzione contestuale ok
+            cs += 0.45
             pq = float(mie_context.get("mie_candlestick_pattern_quality_score") or 0)
-            cs += 0.30 * _clamp(pq / 100.0)           # qualita' del pattern
+            cs += 0.30 * _clamp(pq / 100.0)
             if mie_context.get("mie_candlestick_in_reaction_zone"):
                 cs += 0.10
-            # il pattern nasce DENTRO la zona OB?
             zsc = mie_context.get("mie_candlestick_zone_confluence_score")
             if zsc is not None and float(zsc) >= 70:
                 cs += 0.15
         elif cs_dir:
-            cs = -0.25                                # pattern CONTRO il trade
+            cs = -0.25
     f["candlestick"] = round(cs, 3)
 
-    # 8. Spazio davanti al trade (proposta 4): poco spazio penalizza.
-    #    Misurato: il 63-70% dei casi ha molto spazio, quindi premiare
-    #    l'abbondanza discrimina poco — e' la strettezza che informa.
+    # 8. Spazio davanti al trade
     targets = mie_context.get("mie_liquidity_buy_targets" if up
                               else "mie_liquidity_sell_targets") or []
     dists = [abs(float(t["price"]) - entry) / atr
              for t in targets if t.get("price") and atr > 0]
     if not dists:
-        f["liquidity_space"] = 0.3                    # nessun target noto
+        f["liquidity_space"] = 0.3
     else:
         nearest = min(dists)
         tight = params.get("liq_tight_atr", 3.0)
         ample = params.get("liq_ample_atr", 10.0)
         if nearest < tight:
-            f["liquidity_space"] = 0.0                # muro davanti
+            f["liquidity_space"] = 0.0
         else:
             f["liquidity_space"] = _clamp((nearest - tight) / (ample - tight))
 
@@ -308,19 +302,33 @@ def _quality_label(score: float) -> str:
 
 
 # ============================================================
-# Take Profit — scala strutturale
+# Take Profit — scala strutturale + livelli liquidita' informativi
 # ============================================================
 
 def _build_tp_ladder(direction: str, entry: float, risk: float, atr: float,
-                     mie_context: dict, params: dict) -> list:
-    """TP1 vicino (OB opposto -> FVG -> zona RM -> fallback su rischio),
-    TP2/TP3 dalle aree di liquidita'. Ritorna [(price,label), ...]."""
+                     mie_context: dict, params: dict) -> dict:
+    """
+    Costruisce i target separando livelli STRUTTURALI (operativi) da
+    livelli di LIQUIDITA' (informativi).
+
+    Ritorna {
+        "structural": [(price, label), ...],   # max 2, TP operativi
+        "liquidity":  [(price, label), ...],   # informativi, Equal Lows/Highs etc.
+    }
+
+    CAMBIAMENTO v3.2: i livelli di liquidita' (Equal Lows/Highs) non sono
+    piu' etichettati come TP2/TP3. Sono target potenziali a lungo termine
+    (mediana 29 ATR su BTC, 12.6 su XAU) incompatibili con la durata di
+    un trade LH (6-18 barre). Vengono mostrati come informazione di
+    contesto nella notifica, non come obiettivi operativi.
+    """
     up = direction == "BUY"
     tp1_max = params.get("tp1_max_atr", 3.0) * atr if atr > 0 else 0
 
     def ahead(p): return p > entry if up else p < entry
     def near_ok(p): return not tp1_max or abs(p - entry) <= tp1_max
 
+    # ── Target strutturali: OB opposto, FVG, zona RM ────────
     near = []
     opp = "BEARISH" if up else "BULLISH"
     for ob in (mie_context.get("mie_order_block_order_blocks") or []):
@@ -351,26 +359,24 @@ def _build_tp_ladder(direction: str, entry: float, risk: float, atr: float,
             if mid and ahead(float(mid)) and near_ok(float(mid)):
                 near.append((float(mid), "RM_ZONE"))
 
-    ladder = []
+    structural = []
     if near:
         near.sort(key=lambda t: abs(t[0] - entry))
-        ladder.append(near[0])
-    else:
-        d = params.get("min_rr", 1.0) * risk * 1.002
-        ladder.append((entry + d if up else entry - d, "RR_SCALED"))
+        for tp_candidate in near[:2]:
+            structural.append(tp_candidate)
 
+    structural = [(round(p, 4), l) for p, l in structural]
+
+    # ── Livelli di liquidita': informativi, NON target operativi ──
     liq = mie_context.get("mie_liquidity_buy_targets" if up
                           else "mie_liquidity_sell_targets") or []
-    pts = sorted([(float(t["price"]), t.get("label", "LIQ")) for t in liq
-                  if t.get("price") and ahead(float(t["price"]))],
-                 key=lambda t: abs(t[0] - entry))
-    for price, label in pts:
-        if abs(price - entry) <= abs(ladder[-1][0] - entry) * 1.05:
-            continue
-        ladder.append((price, label))
-        if len(ladder) >= 3:
-            break
-    return [(round(p, 4), l) for p, l in ladder]
+    liq_levels = sorted(
+        [(round(float(t["price"]), 4), t.get("label", "LIQ")) for t in liq
+         if t.get("price") and ahead(float(t["price"]))],
+        key=lambda t: abs(t[0] - entry),
+    )
+
+    return {"structural": structural, "liquidity": liq_levels}
 
 
 # ============================================================
@@ -380,7 +386,7 @@ def _build_tp_ladder(direction: str, entry: float, risk: float, atr: float,
 def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
                        mie_context: dict = None,
                        df_m5: pd.DataFrame = None) -> dict:
-    """LH v3.1 — Confluence Engine. Ritorna {"signal", "diagnostics"}."""
+    """LH v3.2 — Confluence Engine. Ritorna {"signal", "diagnostics"}."""
     if not mie_context:
         return _reject("NO_MIE_CONTEXT")
 
@@ -433,10 +439,9 @@ def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
         return _reject(f"PRICE_FAR_FROM_OB ({dist_atr:.1f} ATR)")
 
     if state == "TRIGGERED":
-        entry = price                       # ingresso a mercato
+        entry = price
         order_type = "MARKET"
     else:
-        # ordine PENDENTE al bordo della zona: mantiene il rischio corretto
         entry = zh if direction == "BUY" else zl
         order_type = "PENDING"
 
@@ -454,13 +459,27 @@ def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
             "rejection": f"SCORE_TOO_LOW ({score}/9 < {MIN_SCORE})",
             "score": score, "factors": factors, "setup_state": state}}
 
-    ladder = _build_tp_ladder(direction, entry, risk, atr, mie_context, P)
-    tp1, tp1_label = ladder[0]
+    tp_result = _build_tp_ladder(direction, entry, risk, atr, mie_context, P)
+    structural_targets = tp_result["structural"]
+    liquidity_levels = tp_result["liquidity"]
+
+    # v3.2: NESSUN segnale senza target strutturale reale.
+    # Un "RR_SCALED" significa che non esiste nessun OB opposto, FVG o zona RM
+    # entro 3 ATR — il trade non ha una tesi di uscita strutturale.
+    if not structural_targets or structural_targets[0][1] == "RR_SCALED":
+        return {"signal": None, "diagnostics": {
+            "rejection": "NO_STRUCTURAL_TP1 (nessun target strutturale entro tp1_max_atr)",
+            "score": score, "factors": factors, "setup_state": state}}
+
+    tp1, tp1_label = structural_targets[0]
     rr = abs(tp1 - entry) / risk if risk > 0 else 0
     if rr < P["min_rr"] - 1e-6:
         return {"signal": None, "diagnostics": {
             "rejection": f"RR_TOO_LOW ({rr:.2f} < {P['min_rr']})",
             "score": score, "factors": factors, "setup_state": state}}
+
+    tp2 = structural_targets[1][0] if len(structural_targets) > 1 else None
+    tp2_label = structural_targets[1][1] if len(structural_targets) > 1 else None
 
     signal = {
         "signal_id":        str(uuid.uuid4()),
@@ -472,28 +491,31 @@ def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
 
         "entry":     round(entry, 4),
         "stop_loss": round(sl, 4),
-        "tp":        tp1,               # TP1: usato da lh_db e dal Ledger
+        "tp":        tp1,
         "risk":      round(risk, 4),
         "rr":        round(rr, 2),
 
         # anticipazione
-        "setup_state":  state,          # TRIGGERED | WATCHING
-        "order_type":   order_type,     # MARKET | PENDING
+        "setup_state":  state,
+        "order_type":   order_type,
         "distance_atr": round(dist_atr, 2),
 
-        # scala TP (osservazione, non ancora uscite parziali)
+        # TP operativi (strutturali)
         "tp1": tp1, "tp1_label": tp1_label,
-        "tp2": ladder[1][0] if len(ladder) > 1 else None,
-        "tp2_label": ladder[1][1] if len(ladder) > 1 else None,
-        "tp3": ladder[2][0] if len(ladder) > 2 else None,
-        "tp3_label": ladder[2][1] if len(ladder) > 2 else None,
+        "tp2": tp2, "tp2_label": tp2_label,
+        # TP3 rimosso: i livelli di liquidita' non sono target operativi
+        "tp3": None, "tp3_label": None,
 
-        # zona OB in PREZZO (per notifica e analisi): l'id interno non dice
-        # nulla a chi legge, i bordi della zona si'
+        # Livelli di liquidita' informativi (Equal Lows/Highs)
+        "liquidity_levels": json.dumps(
+            [{"price": p, "label": l} for p, l in liquidity_levels[:3]]
+        ),
+
+        # zona OB
         "ob_zone_low":  round(zl, 4),
         "ob_zone_high": round(zh, 4),
 
-        # campi legacy LH DB — riusati per il contesto OB
+        # campi legacy LH DB
         "swept_level_label":     ob.get("id", "?"),
         "swept_level_price":     round((zh + zl) / 2, 4),
         "swept_level_priority":  ob.get("status", "FRESH"),
@@ -521,8 +543,6 @@ def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
 
         "quality_score":      score,
         "quality_label":      _quality_label(score),
-        # serializzato: un dict non e' inseribile in una colonna SQLite.
-        # Il dict resta disponibile in diagnostics["factors"].
         "confluence_factors": json.dumps(factors),
 
         "session":     session,
@@ -531,4 +551,5 @@ def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
 
     return {"signal": signal, "diagnostics": {
         "status": "SIGNAL_GENERATED", "score": score,
-        "factors": factors, "ladder": ladder, "setup_state": state}}
+        "factors": factors, "structural_targets": structural_targets,
+        "liquidity_levels": liquidity_levels, "setup_state": state}}
