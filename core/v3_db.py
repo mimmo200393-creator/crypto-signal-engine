@@ -17,6 +17,20 @@ def init_v3_schema(conn: sqlite3.Connection, schema_path: str = "storage/v3_sche
     with open(schema_path, "r") as f:
         conn.executescript(f.read())
     conn.commit()
+    _ensure_dedup_column(conn)
+
+
+def _ensure_dedup_column(conn: sqlite3.Connection):
+    """
+    Migrazione difensiva: aggiunge la colonna m15_trigger_ts a v3_signals
+    se non esiste ancora. Necessaria per il dedup dei segnali generati
+    dalla stessa candela M15 (nessun impatto su altre tabelle/sistemi:
+    ALTER TABLE additivo, nullable, su una tabella dedicata al V3).
+    """
+    cols = [row[1] for row in conn.execute("PRAGMA table_info(v3_signals)").fetchall()]
+    if "m15_trigger_ts" not in cols:
+        conn.execute("ALTER TABLE v3_signals ADD COLUMN m15_trigger_ts INTEGER")
+        conn.commit()
 
 
 # ============================================================
@@ -118,6 +132,28 @@ def upsert_structure_state(conn: sqlite3.Connection, asset: str, trend_direction
 # v3_signals
 # ============================================================
 
+def has_duplicate_trigger(conn: sqlite3.Connection, asset: str, direction: str,
+                           m15_trigger_ts: int) -> bool:
+    """
+    True se esiste gia' un segnale OPEN per lo stesso asset+direction generato
+    dalla stessa candela M15 (stesso m15_trigger_ts). Il runner gira ogni 5 min
+    ma una candela M15 dura 15 min (3 cicli): senza questo check, lo stesso
+    identico setup viene salvato 3-4 volte come se fossero eventi distinti.
+    """
+    if m15_trigger_ts is None:
+        return False
+    cur = conn.execute(
+        """
+        SELECT 1 FROM v3_signals
+        WHERE asset = ? AND direction = ? AND final_outcome = 'OPEN'
+          AND m15_trigger_ts = ?
+        LIMIT 1
+        """,
+        (asset, direction, m15_trigger_ts),
+    )
+    return cur.fetchone() is not None
+
+
 def insert_v3_signal(conn: sqlite3.Connection, signal_dict: dict) -> str:
     signal_id = signal_dict.get("signal_id") or str(uuid.uuid4())
     snapshot_json = json.dumps(signal_dict.get("market_snapshot")) if signal_dict.get("market_snapshot") else None
@@ -130,8 +166,8 @@ def insert_v3_signal(conn: sqlite3.Connection, signal_dict: dict) -> str:
             daily_context_status, h4_structure_status, h4_zone_status,
             ote_present, pullback_type, pullback_invalidated,
             m30_transition_status, m15_bos_confirmed, session,
-            trader_decision, final_outcome, market_snapshot
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            trader_decision, final_outcome, market_snapshot, m15_trigger_ts
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             signal_id,
@@ -157,6 +193,7 @@ def insert_v3_signal(conn: sqlite3.Connection, signal_dict: dict) -> str:
             "unknown",
             "OPEN",
             snapshot_json,
+            signal_dict.get("m15_trigger_ts"),
         )
     )
     conn.commit()
