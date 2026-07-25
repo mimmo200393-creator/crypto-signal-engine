@@ -8,7 +8,7 @@ Ad ogni esecuzione, per ciascun asset in V3_ASSETS (PAXG_USDT, BTC_USDT):
     2. Carica H4/H1 dalle tabelle candles_cache esistenti (riuso dati gia' scaricati)
     3. Calcola indicatori (EMA/ATR) sui 5 timeframe
     4. Esegue la pipeline Trend->Pullback->Transition->Continuation->Execution
-    5. Se generato un segnale valido, lo salva e notifica via Telegram e ntfy
+    5. Se generato un segnale valido e non duplicato, lo salva e notifica via Telegram e ntfy
 
 PAXG_USDT e BTC_USDT sono valutati e tracciati in modo indipendente.
 Non importa né modifica core/signal_engine.py.
@@ -147,6 +147,15 @@ def _run_for_asset(conn, asset: str, config: dict):
 
     if signal is None:
         logger.info("V3 Scanner [%s]: nessun segnale generato in questo ciclo.", asset)
+        return
+
+    # DEDUP: la stessa candela M15 resta valida per 3 cicli di scan (15 min / 5 min).
+    # Senza questo check lo stesso identico setup verrebbe salvato piu' volte.
+    if v3_db.has_duplicate_trigger(conn, asset, signal["direction"], signal.get("m15_trigger_ts")):
+        logger.info(
+            "V3 Scanner [%s]: segnale duplicato (stessa candela M15, gia' OPEN), skip insert.",
+            asset
+        )
         return
 
     signal_id = v3_db.insert_v3_signal(conn, signal)
