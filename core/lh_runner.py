@@ -1,6 +1,6 @@
 """
 core/lh_runner.py
-Liquidity Hunter v2.0 — Runner
+Liquidity Hunter v3.2 — Runner
 
 Confluence Sniper: entry su Order Block con bias allineato.
     - M15 per contesto (bias, OB, premium/discount, sessione)
@@ -10,7 +10,7 @@ Confluence Sniper: entry su Order Block con bias allineato.
 Per ogni asset (BTC_USDT, XAU_USD):
     1. Carica candele M15 (+ M5 per XAU)
     2. Legge MIE context da snapshot DB
-    3. Genera segnale LH v2
+    3. Genera segnale LH v3.2
     4. Se valido → arricchisce con MIE, inserisce e notifica
 """
 
@@ -51,13 +51,7 @@ _MIE_SNAPSHOT_TABLES = [
 
 
 def _read_mie_context(conn, asset: str) -> dict:
-    """
-    Legge l'ultimo snapshot di ogni engine MIE dal DB.
-    Restituisce un dizionario con tutti i campi rilevanti,
-    pronto per essere serializzato in market_snapshot JSON.
-    """
     context = {}
-
     for prefix, table in _MIE_SNAPSHOT_TABLES:
         try:
             row = conn.execute(
@@ -65,7 +59,6 @@ def _read_mie_context(conn, asset: str) -> dict:
                 f"WHERE asset = ? ORDER BY timestamp_snapshot DESC LIMIT 1",
                 (asset,)
             ).fetchone()
-
             if row and row[0]:
                 snapshot = json.loads(row[0])
                 if isinstance(snapshot, dict):
@@ -74,23 +67,13 @@ def _read_mie_context(conn, asset: str) -> dict:
                 context[f"mie_{prefix}_available"] = True
             else:
                 context[f"mie_{prefix}_available"] = False
-
         except Exception as e:
             logger.debug("MIE context [%s/%s]: %s", asset, table, e)
             context[f"mie_{prefix}_available"] = False
-
     return context
 
 
 def _read_raw_snapshots(conn, asset: str) -> dict:
-    """
-    Legge gli snapshot GREZZI (JSON non appiattito) di ogni engine MIE,
-    nel formato che il Decision Ledger si aspetta (i reporter leggono la
-    struttura nidificata, es. structure_h4.classification).
-
-    Diverso da _read_mie_context che appiattisce con prefisso mie_ per il
-    market_snapshot. Qui serve la struttura originale per i voti engine.
-    """
     import json as _json
     raw = {}
     for prefix, table in _MIE_SNAPSHOT_TABLES:
@@ -107,7 +90,6 @@ def _read_raw_snapshots(conn, asset: str) -> dict:
 
 
 def _get_session(now: datetime) -> str:
-    """Sessione di mercato in UTC."""
     t = now.hour * 60 + now.minute
     if 8 * 60 <= t < 13 * 60 + 30:
         return "LONDON"
@@ -133,7 +115,6 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         logger.warning("LH [%s]: dati insufficienti, skip.", asset)
         return
 
-    # ── M5 per XAU (entry precisa, fetchato da v3_runner) ────
     df_m5 = None
     if asset == "XAU_USD":
         df_m5 = v3_db.get_v3_candles_df(conn, asset, LH_TIMEFRAMES["M5"], limit=100)
@@ -141,16 +122,13 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
             logger.info("LH [%s]: candele M5 insufficienti, uso M15.", asset)
             df_m5 = None
 
-    # ── Leggi MIE context ────────────────────────────────────
     mie_context = _read_mie_context(conn, asset)
 
-    # Monitora segnali aperti
     try:
         last_candle = df_m5.iloc[-1] if df_m5 is not None and len(df_m5) > 0 else df_m15.iloc[-1]
         current_high_m = float(last_candle["high"])
         current_low_m  = float(last_candle["low"])
 
-        # ── Breakeven: se MFE >= 0.3 ATR, sposta SL a entry ──
         atr_m15 = mie_context.get("mie_volatility_atr_m15", 0) or 0
         be_threshold = 0.3 * atr_m15 if atr_m15 > 0 else 0
 
@@ -165,7 +143,6 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                     continue
                 fav = max(current_high_m - entry_p, 0) if d == "BUY" else max(entry_p - current_low_m, 0)
                 cur_mfe = max(float(mfe_p or 0), fav)
-                # SL non ancora a breakeven e MFE supera soglia
                 if cur_mfe >= be_threshold:
                     if (d == "BUY" and float(sl_p) < float(entry_p)) or \
                        (d == "SELL" and float(sl_p) > float(entry_p)):
@@ -179,12 +156,6 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                             asset, sid[:8], entry_p, cur_mfe
                         )
 
-        # ── LH v3.1: ordini PENDENTI ─────────────────────────
-        # Un segnale WATCHING e' un ordine in attesa al bordo della zona OB,
-        # non un trade. Diventa un trade solo quando il prezzo raggiunge
-        # l'entry. Va chiamato PRIMA del monitor: un ordine riempito ORA
-        # deve essere gia' monitorato in questo stesso ciclo, altrimenti si
-        # perdono 5 minuti di movimento.
         try:
             filled = lh_db.monitor_pending_lh_signals(
                 conn, asset,
@@ -198,7 +169,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                     asset, ev["signal_id"][:8], ev["event"], ev["pending_bars"],
                 )
         except AttributeError:
-            pass          # lh_db non aggiornato: nessun pendente da gestire
+            pass
 
         updated  = lh_db.monitor_open_lh_signals(
             conn, asset,
@@ -230,7 +201,6 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     except Exception as e:
         logger.error("LH Monitor [%s]: errore: %s", asset, e)
 
-    # Genera segnale
     try:
         result = generate_lh_signal(asset, df_m15, now,
                                     mie_context=mie_context, df_m5=df_m5)
@@ -247,7 +217,6 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
 
     direction = signal["direction"]
 
-    # ── Check posizione già aperta ───────────────────────────
     if lh_db.has_open_lh_signal(conn, asset, direction):
         logger.info(
             "LH [%s %s]: segnale OPEN già presente, skip.",
@@ -255,26 +224,11 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         )
         return
 
-    # ── Risk floor basato su ATR (fix 24/07/2026) ────────────
-    # PRIMA: floor percentuale a 0.1% del prezzo. Bloccava sistematicamente
-    # XAU: a 4000 lo 0.1% e' 4 punti, ma l'ATR M15 dell'oro e' ~3.66, quindi
-    # un rischio normale di 1 ATR (3.6 pt = 0.09%) finiva sotto la soglia.
-    # Misurato in produzione: REJECT RISK_TOO_TIGHT (0.0009) su un segnale
-    # con rischio di circa 1 ATR — cioe' del tutto sano.
-    # Stesso identico problema gia' risolto in v41p1_runner (Sprint 13c),
-    # dove il floor percentuale bloccava tutti i PAXG.
-    # ORA: il rischio si misura in ATR, che e' l'unita' naturale e vale
-    # su qualsiasi asset e livello di prezzo.
     entry = signal.get("entry", 0)
     sl = signal.get("stop_loss", 0)
     if entry and sl:
         risk_abs = abs(entry - sl)
         atr_m15 = mie_context.get("mie_volatility_atr_m15", 0) or 0
-        # Soglia a 0.25 ATR e non 0.30: la strategia costruisce lo stop come
-        # "bordo della zona OB +/- 0.3 ATR", quindi il rischio MINIMO che puo'
-        # produrre e' esattamente 0.3 ATR. Una soglia identica rischierebbe di
-        # scartare per arrotondamento un segnale che la strategia ha gia'
-        # validato. 0.25 lascia margine senza far passare stop patologici.
         if atr_m15 > 0:
             if risk_abs < 0.25 * atr_m15:
                 logger.info(
@@ -283,8 +237,6 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                 )
                 return
         else:
-            # fallback percentuale solo se l'ATR non e' disponibile,
-            # con soglia molto piu' bassa per non bloccare l'oro
             if abs(entry - sl) / entry < 0.0002:
                 logger.info(
                     "LH [%s %s]: REJECT RISK_TOO_TIGHT (%.5f, no ATR)",
@@ -292,7 +244,6 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                 )
                 return
 
-    # ── Check duplicati: stesso OB nelle ultime 4h ───────────
     ob_ref = signal.get("swept_level_label", "")
     if ob_ref and lh_db.has_recent_lh_signal(
         conn, asset, direction, ob_ref, hours=0.5
@@ -303,7 +254,6 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         )
         return
 
-    # ── MIE Context Enrichment ───────────────────────────────
     signal["market_snapshot"] = json.dumps(mie_context, default=str)
 
     try:
@@ -312,17 +262,10 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         logger.error("LH [%s]: errore inserimento: %s", asset, e)
         return
 
-    # ── Decision Ledger ──────────────────────────────────────
-    # SOLO i segnali realmente ENTRATI a mercato. Un ordine PENDENTE
-    # (setup_state=WATCHING) non e' una decisione eseguita: registrarlo qui
-    # inquinerebbe l'analisi di expectancy con trade mai aperti — e quella
-    # analisi e' la base di ogni calibrazione.
-    # I pendenti restano tracciati in lh_signals; quando verranno riempiti
-    # potranno essere catturati al momento del fill (miglioramento futuro).
     if signal.get("setup_state") == "WATCHING":
         logger.info(
             "LH [%s %s]: ordine PENDENTE — non inviato al Decision Ledger "
-            "(sara' catturato al riempimento)", asset, direction,
+            "(sara\' catturato al riempimento)", asset, direction,
         )
     else:
       try:
@@ -362,7 +305,7 @@ def _notify(signal: dict, config: dict):
 
         direction = signal["direction"]
         asset     = signal["asset"]
-        emoji     = "🟢" if direction == "BUY" else "🔴"
+        emoji     = "\U0001f7e2" if direction == "BUY" else "\U0001f534"
 
         def fp(v):
             if v is None: return "N/A"
@@ -370,23 +313,35 @@ def _notify(signal: dict, config: dict):
 
         state = signal.get("setup_state", "TRIGGERED")
         if state == "WATCHING":
-            head = f"👁 *IN ATTESA* — ordine pendente ({signal.get('distance_atr', 0)} ATR)"
+            head = f"\U0001f441 *IN ATTESA* — ordine pendente ({signal.get('distance_atr', 0)} ATR)"
         else:
-            head = "⚡ *ENTRY ORA* — a mercato"
+            head = "\u26a1 *ENTRY ORA* — a mercato"
 
         tp_lines = f"TP1:    `{fp(signal.get('tp1') or signal['tp'])}`  [{signal.get('tp1_label','?')}]  ({signal['rr']:.2f}R)\n"
         if signal.get("tp2"):
             tp_lines += f"TP2:    `{fp(signal['tp2'])}`  [{signal.get('tp2_label','?')}]\n"
-        if signal.get("tp3"):
-            tp_lines += f"TP3:    `{fp(signal['tp3'])}`  [{signal.get('tp3_label','?')}]\n"
+
+        # Livelli di liquidita' (informativi, non target operativi)
+        liq_lines = ""
+        try:
+            import json as _j
+            liq_raw = signal.get("liquidity_levels")
+            if isinstance(liq_raw, str):
+                liq_raw = _j.loads(liq_raw)
+            if liq_raw:
+                liq_lines = "\n\U0001f4ca Livelli liquidita (osservazione):\n"
+                for lv in (liq_raw or [])[:3]:
+                    liq_lines += f"  \u2022 `{fp(lv.get('price',0))}`  {lv.get('label','?')}\n"
+        except Exception:
+            pass
 
         # fattori di confluenza che hanno davvero contribuito
         att = ""
         try:
-            import json as _j
+            import json as _j2
             facs = signal.get("confluence_factors")
             if isinstance(facs, str):
-                facs = _j.loads(facs)
+                facs = _j2.loads(facs)
             if isinstance(facs, dict):
                 strong = [k for k, v in facs.items() if v >= 0.5]
                 att = ", ".join(strong) if strong else "nessun fattore forte"
@@ -394,13 +349,15 @@ def _notify(signal: dict, config: dict):
             att = ""
 
         text = (
-            f"{emoji} *LIQUIDITY HUNTER v3.1*\n"
+            f"{emoji} *LIQUIDITY HUNTER v3.2*\n"
             f"*{asset.replace('_',' ')}* — {direction}\n"
             f"{head}\n\n"
             f"Qualita: *{signal['quality_score']}*/9 ({signal['quality_label']})\n\n"
             f"Entry:  `{fp(signal['entry'])}`\n"
             f"SL:     `{fp(signal['stop_loss'])}`\n\n"
-            f"{tp_lines}\n"
+            f"{tp_lines}"
+            + (liq_lines if liq_lines else "")
+            + "\n"
             f"Zona OB: `{fp(signal.get('ob_zone_low'))}` - `{fp(signal.get('ob_zone_high'))}` "
             f"({signal.get('ob_match_type','?')})\n"
             + (f"Confluenza: {att}\n" if att else "")
@@ -440,4 +397,3 @@ def run_lh_scan(config: dict):
 
     conn.close()
     logger.info("=== LH Scanner: fine ciclo ===")
-                        
