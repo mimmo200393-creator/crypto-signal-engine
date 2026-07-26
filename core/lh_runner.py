@@ -105,6 +105,13 @@ def _get_session(now: datetime) -> str:
 # ============================================================
 
 def _run_for_asset(conn, asset: str, config: dict, now: datetime):
+    # XAU chiuso nel weekend (venerdi' 22 UTC -> domenica 22 UTC)
+    if asset == "XAU_USD":
+        wd = now.weekday()  # 0=Mon ... 6=Sun
+        if wd == 6 or (wd == 5 and now.hour >= 22) or (wd == 4 and now.hour >= 22):
+            logger.info("LH [%s]: mercato chiuso (weekend), skip.", asset)
+            return
+
     logger.info("LH Runner: inizio ciclo per %s", asset)
 
     limit  = config.get("BOOTSTRAP_TARGET_CANDLES", 300)
@@ -246,7 +253,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
 
     ob_ref = signal.get("swept_level_label", "")
     if ob_ref and lh_db.has_recent_lh_signal(
-        conn, asset, direction, ob_ref, hours=0.5
+        conn, asset, direction, ob_ref, hours=4
     ):
         logger.info(
             "LH [%s %s]: duplicato OB=%s, skip.",
