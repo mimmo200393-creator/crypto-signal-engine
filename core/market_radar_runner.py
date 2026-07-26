@@ -125,7 +125,7 @@ RADAR_CFG = {
     # Anche questi sono SOLO registrati: il monitor dice se il respiro li ha
     # raggiunti, ma non chiude nulla. Servono a capire, sui dati, se lo scalp
     # bastava o se conveniva lasciar correre (trailing).
-    "TP_SCALP_ATR":              1.0,
+    "TP_SCALP_ATR":              2.0,
     "BE_TRIGGER_ATR":            1.0,
     "NOTIFY":                    False,   # V1: sola registrazione
 }
