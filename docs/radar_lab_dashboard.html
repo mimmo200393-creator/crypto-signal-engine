@@ -17,6 +17,7 @@ header a{color:var(--accent5);text-decoration:none;font-family:'IBM Plex Mono',m
 .intro strong{color:var(--text)}
 .summary-grid{display:grid;gap:1px;background:var(--border);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:20px}
 .summary-grid.c4{grid-template-columns:repeat(4,1fr)}
+.summary-grid.c5{grid-template-columns:repeat(5,1fr)}
 .summary-grid>div{background:var(--surface);padding:16px 8px;text-align:center}
 .big{font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600}
 .big.pos{color:var(--buy)}.big.neg{color:var(--sell)}.big.warn{color:var(--accent3)}
@@ -36,7 +37,8 @@ tr:last-child td{border-bottom:none}tr:hover td{background:rgba(255,255,255,.02)
 @media(max-width:640px){
   header{padding:14px 16px}.container{padding:12px}
   .intro{font-size:12px}
-  .summary-grid.c4{grid-template-columns:repeat(2,1fr)}  /* 2x2 su telefono */
+  .summary-grid.c4{grid-template-columns:repeat(2,1fr)}
+  .summary-grid.c5{grid-template-columns:repeat(2,1fr)}
   .big{font-size:18px}
   .ch{font-size:10px;padding:10px 12px}
   th,td{padding:9px 12px;font-size:12px}
@@ -45,14 +47,14 @@ tr:last-child td{border-bottom:none}tr:hover td{background:rgba(255,255,255,.02)
 <body>
 <header>
   <h1>Radar Lab<span class="beta">BETA</span></h1>
-  <div class="meta">2026-07-26 20:35 UTC &nbsp;|&nbsp; <a href="engine_edge_dashboard.html">&larr; Engine Edge Lab</a></div>
+  <div class="meta">2026-07-26 20:40 UTC &nbsp;|&nbsp; <a href="engine_edge_dashboard.html">&larr; Engine Edge Lab</a></div>
 </header>
 <div class="container">
   <p class="intro">
     Validazione del <strong>Market Radar</strong> in sola osservazione. Il radar non compra
     e non vende: segnala «zone da osservare» dopo un impulso esteso che perde forza.
     Qui misuriamo <strong>cosa fa il prezzo dopo</strong> ogni zona — quanto rimbalza (MFE) e
-    quanto soffre prima (MAE), in unità di ATR. <strong>Nessuna soglia di successo è imposta:</strong>
+    quanto soffre prima (MAE), in unita' di ATR. <strong>Nessuna soglia di successo e' imposta:</strong>
     i dati grezzi mostrano se e quanto esiste un edge. Le conclusioni arrivano dopo 300–500 zone.
   </p>
   <div class="summary-grid c4">
@@ -74,20 +76,23 @@ tr:last-child td{border-bottom:none}tr:hover td{background:rgba(255,255,255,.02)
     <th>Velocità impulso</th><th>N</th><th>MFE atr</th><th>MAE atr</th>
   </tr></thead><tbody><tr><td>sotto soglia (< 0.6) ⚠</td><td class="mono">0</td><td class="empty" colspan="2" style="text-align:left">nessun dato</td></tr><tr><td>normale (0.6–0.8)</td><td class="mono">39</td><td class="mono"><span class="pos">+1.372</span></td><td class="mono"><span class="neg">1.762</span></td></tr><tr><td>veloce (0.8–1.0) <span class="prov">(provv.)</span></td><td class="mono">21</td><td class="mono"><span class="pos">+2.155</span></td><td class="mono"><span class="neg">1.507</span></td></tr><tr><td>molto veloce (≥ 1.0) <span class="prov">(provv.)</span></td><td class="mono">5</td><td class="mono"><span class="pos">+1.092</span></td><td class="mono"><span class="neg">2.758</span></td></tr></tbody></table></div>
   <div class="note">Se il radar ha edge sulla velocità, le fasce più veloci mostrano un MFE medio più alto.
-  Numeri sotto 30 campioni sono provvisori: rumore, non conclusioni.</div></div><div class="card"><div class="ch">Gestione — TP scalp / BE / lascia-correre</div>
+  Numeri sotto 30 campioni sono provvisori: rumore, non conclusioni.</div></div><div class="card"><div class="ch">WR Reale — SL 1 ATR vs TP 2 ATR (chi arriva primo)</div>
+  <div class="empty">Dati first_hit non ancora disponibili.<br>
+  Le zone esistenti usavano TP 1 ATR. I dati si popoleranno con le nuove zone a TP 2 ATR,
+  oppure dopo il backfill delle zone storiche (confronto time_to_tp vs time_to_stop).</div></div><div class="card"><div class="ch">Gestione — TP target / BE / lascia-correre</div>
   <div class="summary-grid c4" style="border:none;margin:0">
-    <div><span class="big pos">63.0%</span><span class="lbl">zone che colpiscono il TP scalp (1 ATR)</span></div>
+    <div><span class="big pos">63.0%</span><span class="lbl">zone che colpiscono il TP (2 ATR)</span></div>
     <div><span class="big ">51</span><span class="lbl">TP colpiti su 81</span></div>
     <div><span class="big ">63.0%</span><span class="lbl">che raggiungono il BE</span></div>
     <div><span class="big pos">1.591</span><span class="lbl">respiro OLTRE il TP (ATR)</span></div>
   </div>
-  <div class="note">Il numero chiave e' l'ultimo: quanto il respiro continua <strong>oltre</strong> il TP scalp.
-  Se e' alto, il trailing (lascia correre) batteva lo scalp secco. Se e' ~0, chiudere a 1 ATR bastava.
-  Tutti i livelli sono suggeriti e registrati: nulla viene chiuso, si misura solo cosa fa il prezzo.</div></div><div class="card"><div class="ch">Stop Loss — equilibrio respiro/stop</div>
+  <div class="note">Il numero chiave e' l'ultimo: quanto il respiro continua <strong>oltre</strong> il TP target (2 ATR).
+  Se e' alto, il trailing batteva il target secco. Se e' ~0, chiudere a 2 ATR bastava.
+  Tutti i livelli sono registrati: nulla viene chiuso, si misura solo cosa fa il prezzo.</div></div><div class="card"><div class="ch">Stop Loss — equilibrio respiro/stop</div>
   <div class="summary-grid c4" style="border:none;margin:0">
     <div><span class="big warn">63.0%</span><span class="lbl">zone che toccano lo stop</span></div>
     <div><span class="big ">51</span><span class="lbl">tocchi su 81</span></div>
-    <div><span class="big pos">31.4%</span><span class="lbl">di cui rimbalza dopo (&ge;1 ATR)</span></div>
+    <div><span class="big pos">31.4%</span><span class="lbl">di cui rimbalza dopo (≥1 ATR)</span></div>
     <div><span class="big ">16</span><span class="lbl">respiro recuperato</span></div>
   </div>
   <div class="note">Se molte zone toccano lo stop <strong>ma poi rimbalzano</strong>, lo stop e'
