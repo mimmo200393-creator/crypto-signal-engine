@@ -82,14 +82,14 @@ QUALITY_MED_MIN  = 4.2
 ASSET_PARAMS = {
     "BTC_USDT": {
         "sl_buffer_atr": 0.5, "min_rr": 1.0, "expiry_bars": 12,
-        "max_zone_atr": 2.0, "tp1_max_atr": 3.0,
+        "max_zone_atr": 2.0, "min_zone_atr": 0.25, "tp1_max_atr": 3.0,
         "watch_max_atr": 1.5,
         "liq_tight_atr": 3.0,
         "liq_ample_atr": 10.0,
     },
     "XAU_USD": {
         "sl_buffer_atr": 0.3, "min_rr": 1.2, "expiry_bars": 18,
-        "max_zone_atr": 2.0, "tp1_max_atr": 3.0,
+        "max_zone_atr": 2.0, "min_zone_atr": 0.25, "tp1_max_atr": 3.0,
         "watch_max_atr": 1.5,
         "liq_tight_atr": 3.0,
         "liq_ample_atr": 10.0,
@@ -139,10 +139,13 @@ def _overlap(h1, l1, h2, l2) -> float:
 # ============================================================
 
 def _find_best_ob(mie_context: dict, want_dir: str, price: float,
-                  max_zone_atr: float, atr: float) -> Optional[dict]:
+                  max_zone_atr: float, min_zone_atr: float, atr: float) -> Optional[dict]:
     """OB piu' vicino nella direzione, entro OB_PROXIMITY_PCT.
     Priorita' FRESH > TESTED > MITIGATED > BREAKER, poi distanza.
-    Zone troppo larghe scartate: entry impreciso e rischio ingestibile."""
+    Zone troppo larghe o troppo strette scartate: le prime hanno entry
+    impreciso e rischio ingestibile, le seconde sono rumore di prezzo,
+    non struttura (soglia 0.25 ATR misurata sulla distribuzione reale
+    degli OB in signals.db — gap naturale tra 0.21 e 0.33)."""
     prio = {"FRESH": 0, "TESTED": 1, "MITIGATED": 2, "BREAKER": 3}
     best, best_d, best_p = None, None, 99
     for ob in (mie_context.get("mie_order_block_order_blocks") or []):
@@ -152,8 +155,10 @@ def _find_best_ob(mie_context: dict, want_dir: str, price: float,
         if zh is None or zl is None:
             continue
         zh, zl = float(zh), float(zl)
-        if atr > 0 and abs(zh - zl) / atr > max_zone_atr:
-            continue
+        if atr > 0:
+            zone_atr = abs(zh - zl) / atr
+            if zone_atr > max_zone_atr or zone_atr < min_zone_atr:
+                continue
         mid = (zh + zl) / 2
         d = abs(price - mid) / price if price > 0 else 1
         if d > OB_PROXIMITY_PCT:
@@ -417,7 +422,7 @@ def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
     if bias in ("BULLISH", "BEARISH"):
         want_dir = bias
     else:
-        cand = [(d, _find_best_ob(mie_context, d, price, P["max_zone_atr"], atr))
+        cand = [(d, _find_best_ob(mie_context, d, price, P["max_zone_atr"], P["min_zone_atr"], atr))
                 for d in ("BULLISH", "BEARISH")]
         cand = [(d, o) for d, o in cand if o]
         if not cand:
@@ -425,7 +430,7 @@ def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
         want_dir = min(cand, key=lambda x: x[1].get("distance_from_price_pct", 1))[0]
     direction = "BUY" if want_dir == "BULLISH" else "SELL"
 
-    ob = _find_best_ob(mie_context, want_dir, price, P["max_zone_atr"], atr)
+    ob = _find_best_ob(mie_context, want_dir, price, P["max_zone_atr"], P["min_zone_atr"], atr)
     if ob is None:
         return _reject("NO_OB_NEARBY")
 
