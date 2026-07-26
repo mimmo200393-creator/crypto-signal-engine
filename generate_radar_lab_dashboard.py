@@ -2,20 +2,10 @@
 generate_radar_lab_dashboard.py
 Radar Lab (BETA) — validazione del Market Radar
 
-Legge da signals.db → radar_zones + radar_transitions e mostra, in SOLA
-OSSERVAZIONE (nessuna soglia di "successo" imposta), le metriche grezze che
-servono a capire se il radar ha un edge:
+V1.1: aggiunta sezione "WR Reale" basata su first_hit (chi tra TP e SL
+viene toccato per primo). TP alzato a 2 ATR (RR 1:2).
 
-  FUNNEL     quante zone emesse, quante chiuse, invalidate, ancora aperte
-  RIMBALZO   MFE medio/mediano (quanto rimbalza il prezzo dopo la Entry Zone)
-  SOFFERENZA MAE medio (quanto va contro prima di rimbalzare)
-  VELOCITA'  l'ipotesi centrale: le zone con impulso VELOCE rimbalzano di piu'
-             di quelle lente? (confronto MFE per fasce di velocity)
-
-NIENTE SOGLIE: non dichiara "successo/fallimento". Mostra la distribuzione
-grezza. La soglia di "buon rimbalzo" si decidera' DOPO, guardando i dati.
-
-Etichetta BETA: la pagina segnala che i dati sono in raccolta, non conclusioni.
+Legge da signals.db → radar_zones + radar_transitions.
 
 Genera docs/radar_lab_dashboard.html
 """
@@ -29,7 +19,7 @@ from datetime import datetime, timezone
 DB_PATH  = os.environ.get("DB_PATH", "data/signals.db")
 OUT_PATH = "docs/radar_lab_dashboard.html"
 
-MIN_SAMPLE = 30  # sotto questa soglia: "dati provvisori"
+MIN_SAMPLE = 30
 
 
 def q(conn, sql, params=()):
@@ -48,7 +38,7 @@ def load_zones(conn):
         SELECT zone_id, asset, direction, emit_ts, price, zone_ref,
                features_json, status, mae, mfe, bars_open, time_to_mfe, time_to_mae,
                stop_loss, stop_hit, time_to_stop, mfe_after_stop,
-               tp_hit, be_reached, mfe_beyond_tp
+               tp_hit, be_reached, mfe_beyond_tp, first_hit, first_hit_bar
         FROM radar_zones
     """)
     out = []
@@ -59,9 +49,12 @@ def load_zones(conn):
             "mae": r[8], "mfe": r[9], "bars_open": r[10],
             "time_to_mfe": r[11], "time_to_mae": r[12],
             "stop_loss": r[13], "stop_hit": r[14], "time_to_stop": r[15],
-            "mfe_after_stop": r[16], "tp_hit": r[17] if len(r) > 17 else None,
+            "mfe_after_stop": r[16],
+            "tp_hit": r[17] if len(r) > 17 else None,
             "be_reached": r[18] if len(r) > 18 else None,
             "mfe_beyond_tp": r[19] if len(r) > 19 else None,
+            "first_hit": r[20] if len(r) > 20 else None,
+            "first_hit_bar": r[21] if len(r) > 21 else None,
         }
         try:
             d["features"] = json.loads(r[6]) if r[6] else {}
@@ -80,7 +73,7 @@ def load_transition_funnel(conn):
 
 
 # ============================================================
-# Stats (grezze, nessuna soglia)
+# Stats
 # ============================================================
 
 def _num(vals):
@@ -94,9 +87,7 @@ def _median(vals):
     v = _num(vals)
     return round(statistics.median(v), 3) if v else None
 
-
 def mfe_in_atr(z):
-    """MFE normalizzato all'ATR della zona (confrontabile tra asset)."""
     atr = (z.get("features") or {}).get("atr")
     if atr and atr > 0 and z.get("mfe") is not None:
         return z["mfe"] / atr
@@ -112,9 +103,6 @@ def mae_in_atr(z):
 def summarize(zones):
     closed = [z for z in zones if z["status"] == "CLOSED"]
     stop_hits = [z for z in closed if z.get("stop_hit")]
-    # zone che toccano lo stop MA poi rimbalzano comunque (respiro recuperato)
-    recovered = [z for z in stop_hits
-                 if (z.get("mfe_after_stop") or 0) > (z.get("stop_loss_dist") or 0)]
     return {
         "total":     len(zones),
         "closed":    len(closed),
@@ -136,30 +124,15 @@ def by_asset(zones):
 
 
 def velocity_buckets(zones):
-    """
-    L'IPOTESI CENTRALE: le zone con impulso veloce rimbalzano di piu'?
-    Divide le zone chiuse in fasce di velocity e mostra l'MFE medio di ognuna.
-    Se il radar ha edge sulla velocita', le fasce alte hanno MFE piu' alto.
-    """
     closed = [z for z in zones if z["status"] == "CLOSED"]
-
     def vel(z):
-        # Legge la velocita' dell'IMPULSO, non quella misurata all'emissione.
-        # Le feature della zona sono calcolate durante l'esaurimento: la loro
-        # `velocity` e' bassa per costruzione (0.046-0.269 nei dati reali) e
-        # cadrebbe SEMPRE nella prima fascia, rendendo l'ipotesi non testabile.
-        # Il gate d'ingresso richiede >= 0.6, quindi le fasce partono da li'.
         f = z.get("features") or {}
         return f.get("impulse_velocity")
-
-    # Fasce ricalibrate sul gate reale (IMPULSE_VELOCITY_MIN = 0.6) e sulla
-    # distribuzione misurata su M15 (p90 ~0.6, max ~1.3). Sotto 0.6 non
-    # dovrebbero esistere zone: se ne compaiono, e' un bug, non un dato.
     buckets = [
-        ("sotto soglia (< 0.6) ⚠", lambda v: v is not None and v < 0.6),
-        ("normale (0.6–0.8)",      lambda v: v is not None and 0.6 <= v < 0.8),
-        ("veloce (0.8–1.0)",       lambda v: v is not None and 0.8 <= v < 1.0),
-        ("molto veloce (≥ 1.0)",   lambda v: v is not None and v >= 1.0),
+        ("sotto soglia (< 0.6) \u26a0", lambda v: v is not None and v < 0.6),
+        ("normale (0.6\u20130.8)",      lambda v: v is not None and 0.6 <= v < 0.8),
+        ("veloce (0.8\u20131.0)",       lambda v: v is not None and 0.8 <= v < 1.0),
+        ("molto veloce (\u2265 1.0)",   lambda v: v is not None and v >= 1.0),
     ]
     out = []
     for label, cond in buckets:
@@ -171,7 +144,35 @@ def velocity_buckets(zones):
 
 
 # ============================================================
-# CSS — mobile-first, stesso stile delle altre dashboard
+# First Hit stats (V1.1)
+# ============================================================
+
+def _first_hit_stats(zones):
+    """Calcola WR reale e expectancy basati su first_hit."""
+    closed = [z for z in zones if z["status"] == "CLOSED"]
+    with_hit = [z for z in closed if z.get("first_hit") in ("TP", "SL")]
+    if not with_hit:
+        return None
+    tp_first = sum(1 for z in with_hit if z["first_hit"] == "TP")
+    sl_first = sum(1 for z in with_hit if z["first_hit"] == "SL")
+    n = len(with_hit)
+    wr = round(tp_first / n * 100, 1)
+    # Expectancy a RR 1:2: win = +2R, loss = -1R
+    exp = round((tp_first * 2 - sl_first) / n, 3)
+    avg_bar = _avg([z.get("first_hit_bar") for z in with_hit])
+    return {
+        "n": n,
+        "tp_first": tp_first,
+        "sl_first": sl_first,
+        "no_hit": len(closed) - n,
+        "wr": wr,
+        "exp": exp,
+        "avg_bar": avg_bar,
+    }
+
+
+# ============================================================
+# CSS
 # ============================================================
 
 CSS = """
@@ -190,6 +191,7 @@ header a{color:var(--accent5);text-decoration:none;font-family:'IBM Plex Mono',m
 .intro strong{color:var(--text)}
 .summary-grid{display:grid;gap:1px;background:var(--border);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:20px}
 .summary-grid.c4{grid-template-columns:repeat(4,1fr)}
+.summary-grid.c5{grid-template-columns:repeat(5,1fr)}
 .summary-grid>div{background:var(--surface);padding:16px 8px;text-align:center}
 .big{font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600}
 .big.pos{color:var(--buy)}.big.neg{color:var(--sell)}.big.warn{color:var(--accent3)}
@@ -209,7 +211,8 @@ tr:last-child td{border-bottom:none}tr:hover td{background:rgba(255,255,255,.02)
 @media(max-width:640px){
   header{padding:14px 16px}.container{padding:12px}
   .intro{font-size:12px}
-  .summary-grid.c4{grid-template-columns:repeat(2,1fr)}  /* 2x2 su telefono */
+  .summary-grid.c4{grid-template-columns:repeat(2,1fr)}
+  .summary-grid.c5{grid-template-columns:repeat(2,1fr)}
   .big{font-size:18px}
   .ch{font-size:10px;padding:10px 12px}
   th,td{padding:9px 12px;font-size:12px}
@@ -223,7 +226,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:rgba(255,255,255,.02)
 
 def metric(val, unit="", cls=""):
     if val is None:
-        return '<span class="big">—</span>'
+        return '<span class="big">\u2014</span>'
     sign = "+" if (isinstance(val, (int, float)) and val > 0 and unit == "R") else ""
     return f'<span class="big {cls}">{sign}{val}{unit}</span>'
 
@@ -245,12 +248,12 @@ def asset_table(rows):
     for a, s in rows.items():
         prov = ' <span class="prov">(provv.)</span>' if s["closed"] < MIN_SAMPLE else ""
         mfe = s["mfe_avg_atr"]; mae = s["mae_avg_atr"]
-        mfe_s = f'<span class="pos">+{mfe}</span>' if mfe is not None else "—"
-        mae_s = f'<span class="neg">{mae}</span>' if mae is not None else "—"
+        mfe_s = f'<span class="pos">+{mfe}</span>' if mfe is not None else "\u2014"
+        mae_s = f'<span class="neg">{mae}</span>' if mae is not None else "\u2014"
         body += f"""<tr><td><strong>{a}</strong>{prov}</td>
   <td class="mono">{s['total']}</td><td class="mono">{s['closed']}</td>
   <td class="mono">{mfe_s}</td><td class="mono">{mae_s}</td>
-  <td class="mono">{s['bars_to_mfe_avg'] if s['bars_to_mfe_avg'] is not None else '—'}</td></tr>"""
+  <td class="mono">{s['bars_to_mfe_avg'] if s['bars_to_mfe_avg'] is not None else '\u2014'}</td></tr>"""
     return f"""<div class="card"><div class="ch">Per Asset</div>
   <div class="table-scroll"><table><thead><tr>
     <th>Asset</th><th>Emesse</th><th>Chiuse</th><th>MFE atr</th><th>MAE atr</th><th>Candele al MFE</th>
@@ -264,15 +267,65 @@ def velocity_table(buckets):
             body += f'<tr><td>{label}</td><td class="mono">0</td><td class="empty" colspan="2" style="text-align:left">nessun dato</td></tr>'
             continue
         prov = ' <span class="prov">(provv.)</span>' if n < MIN_SAMPLE else ""
-        mfe_s = f'<span class="pos">+{mfe}</span>' if mfe is not None else "—"
-        mae_s = f'<span class="neg">{mae}</span>' if mae is not None else "—"
+        mfe_s = f'<span class="pos">+{mfe}</span>' if mfe is not None else "\u2014"
+        mae_s = f'<span class="neg">{mae}</span>' if mae is not None else "\u2014"
         body += f'<tr><td>{label}{prov}</td><td class="mono">{n}</td><td class="mono">{mfe_s}</td><td class="mono">{mae_s}</td></tr>'
-    return f"""<div class="card"><div class="ch">Ipotesi velocità — rimbalzo per fascia di impulso</div>
+    return f"""<div class="card"><div class="ch">Ipotesi velocit\u00e0 \u2014 rimbalzo per fascia di impulso</div>
   <div class="table-scroll"><table><thead><tr>
-    <th>Velocità impulso</th><th>N</th><th>MFE atr</th><th>MAE atr</th>
+    <th>Velocit\u00e0 impulso</th><th>N</th><th>MFE atr</th><th>MAE atr</th>
   </tr></thead><tbody>{body}</tbody></table></div>
-  <div class="note">Se il radar ha edge sulla velocità, le fasce più veloci mostrano un MFE medio più alto.
+  <div class="note">Se il radar ha edge sulla velocit\u00e0, le fasce pi\u00f9 veloci mostrano un MFE medio pi\u00f9 alto.
   Numeri sotto {MIN_SAMPLE} campioni sono provvisori: rumore, non conclusioni.</div></div>"""
+
+
+def first_hit_card(zones):
+    """V1.1: WR reale — chi tra TP (2 ATR) e SL (1 ATR) viene toccato per primo."""
+    closed = [z for z in zones if z["status"] == "CLOSED"]
+    if not closed:
+        return ""
+
+    # Globale
+    g = _first_hit_stats(zones)
+    if g is None or g["n"] == 0:
+        return f"""<div class="card"><div class="ch">WR Reale \u2014 SL 1 ATR vs TP 2 ATR (chi arriva primo)</div>
+  <div class="empty">Dati first_hit non ancora disponibili.<br>
+  Le zone esistenti usavano TP 1 ATR. I dati si popoleranno con le nuove zone a TP 2 ATR,
+  oppure dopo il backfill delle zone storiche (confronto time_to_tp vs time_to_stop).</div></div>"""
+
+    prov = ' <span class="prov">(provv.)</span>' if g["n"] < MIN_SAMPLE else ""
+    wr_cls = "pos" if g["wr"] >= 40 else ("neg" if g["wr"] < 25 else "warn")
+    exp_cls = "pos" if g["exp"] > 0 else "neg"
+
+    # Per asset
+    asset_body = ""
+    for a in sorted({z["asset"] for z in zones}):
+        a_stats = _first_hit_stats([z for z in zones if z["asset"] == a])
+        if a_stats is None or a_stats["n"] == 0:
+            continue
+        a_prov = ' <span class="prov">(provv.)</span>' if a_stats["n"] < MIN_SAMPLE else ""
+        a_wr_cls = "pos" if a_stats["wr"] >= 40 else ("neg" if a_stats["wr"] < 25 else "warn")
+        a_exp_cls = "pos" if a_stats["exp"] > 0 else "neg"
+        asset_body += f"""<tr>
+  <td><strong>{a}</strong>{a_prov}</td>
+  <td class="mono">{a_stats['n']}</td>
+  <td class="mono pos">{a_stats['tp_first']}</td>
+  <td class="mono neg">{a_stats['sl_first']}</td>
+  <td class="mono {a_wr_cls}">{a_stats['wr']}%</td>
+  <td class="mono {a_exp_cls}">{a_stats['exp']:+.3f}R</td>
+</tr>"""
+
+    return f"""<div class="card"><div class="ch">WR Reale \u2014 SL 1 ATR vs TP 2 ATR (chi arriva primo)</div>
+  <div class="summary-grid c5" style="border:none;margin:0">
+    <div>{metric(g['n'])}<span class="lbl">Zone con esito{prov}</span></div>
+    <div>{metric(g['tp_first'],'','pos')}<span class="lbl">TP primo</span></div>
+    <div>{metric(g['sl_first'],'','neg')}<span class="lbl">SL primo</span></div>
+    <div>{metric(g['wr'],'%',wr_cls)}<span class="lbl">Win Rate reale</span></div>
+    <div>{metric(g['exp'],'R',exp_cls)}<span class="lbl">Expectancy (1:2)</span></div>
+  </div>
+  {f'<div class="table-scroll"><table><thead><tr><th>Asset</th><th>N</th><th>TP primo</th><th>SL primo</th><th>WR</th><th>Exp (1:2)</th></tr></thead><tbody>{asset_body}</tbody></table></div>' if asset_body else ''}
+  <div class="note">Il numero che conta: se il TP (2 ATR) viene toccato prima dello SL (1 ATR)
+  il trade sarebbe vincente a +2R; se lo SL arriva prima, perdente a -1R.
+  Breakeven a 33.3% WR. Zone senza tocco di nessuno dei due non sono conteggiate.</div></div>"""
 
 
 def gestione_card(zones):
@@ -281,7 +334,6 @@ def gestione_card(zones):
         return ""
     tp_hit = [z for z in closed if z.get("tp_hit")]
     be = [z for z in closed if z.get("be_reached")]
-    # dei TP colpiti, quanto in media il respiro è continuato OLTRE (in ATR)
     beyond_atr = []
     for z in tp_hit:
         atr = (z.get("features") or {}).get("atr")
@@ -290,16 +342,16 @@ def gestione_card(zones):
             beyond_atr.append(mb / atr)
     tp_pct = round(len(tp_hit) / len(closed) * 100, 1) if closed else 0
     beyond_avg = _avg(beyond_atr)
-    return f"""<div class="card"><div class="ch">Gestione — TP scalp / BE / lascia-correre</div>
+    return f"""<div class="card"><div class="ch">Gestione \u2014 TP target / BE / lascia-correre</div>
   <div class="summary-grid c4" style="border:none;margin:0">
-    <div>{metric(tp_pct,'%','pos')}<span class="lbl">zone che colpiscono il TP scalp (1 ATR)</span></div>
+    <div>{metric(tp_pct,'%','pos')}<span class="lbl">zone che colpiscono il TP (2 ATR)</span></div>
     <div>{metric(len(tp_hit))}<span class="lbl">TP colpiti su {len(closed)}</span></div>
     <div>{metric(round(len(be)/len(closed)*100,1) if closed else 0,'%')}<span class="lbl">che raggiungono il BE</span></div>
     <div>{metric(beyond_avg,'', 'pos' if (beyond_avg or 0)>0 else '')}<span class="lbl">respiro OLTRE il TP (ATR)</span></div>
   </div>
-  <div class="note">Il numero chiave e' l'ultimo: quanto il respiro continua <strong>oltre</strong> il TP scalp.
-  Se e' alto, il trailing (lascia correre) batteva lo scalp secco. Se e' ~0, chiudere a 1 ATR bastava.
-  Tutti i livelli sono suggeriti e registrati: nulla viene chiuso, si misura solo cosa fa il prezzo.</div></div>"""
+  <div class="note">Il numero chiave e' l'ultimo: quanto il respiro continua <strong>oltre</strong> il TP target (2 ATR).
+  Se e' alto, il trailing batteva il target secco. Se e' ~0, chiudere a 2 ATR bastava.
+  Tutti i livelli sono registrati: nulla viene chiuso, si misura solo cosa fa il prezzo.</div></div>"""
 
 
 def stop_card(zones):
@@ -315,11 +367,11 @@ def stop_card(zones):
             rebounded += 1
     pct = round(len(hits) / len(closed) * 100, 1) if closed else 0
     reb_pct = round(rebounded / len(hits) * 100, 1) if hits else 0
-    return f"""<div class="card"><div class="ch">Stop Loss — equilibrio respiro/stop</div>
+    return f"""<div class="card"><div class="ch">Stop Loss \u2014 equilibrio respiro/stop</div>
   <div class="summary-grid c4" style="border:none;margin:0">
     <div>{metric(pct,'%','warn')}<span class="lbl">zone che toccano lo stop</span></div>
     <div>{metric(len(hits))}<span class="lbl">tocchi su {len(closed)}</span></div>
-    <div>{metric(reb_pct,'%','pos')}<span class="lbl">di cui rimbalza dopo (&ge;1 ATR)</span></div>
+    <div>{metric(reb_pct,'%','pos')}<span class="lbl">di cui rimbalza dopo (\u22651 ATR)</span></div>
     <div>{metric(rebounded)}<span class="lbl">respiro recuperato</span></div>
   </div>
   <div class="note">Se molte zone toccano lo stop <strong>ma poi rimbalzano</strong>, lo stop e'
@@ -333,8 +385,8 @@ def funnel_card(funnel, zones):
     emitted     = len(zones)
     rows = [
         ("Ingressi in Osservazione", to_observe),
-        ("→ diventate Entry Zone", emitted),
-        ("→ invalidate (tornate a Riposo)", invalidated),
+        ("\u2192 diventate Entry Zone", emitted),
+        ("\u2192 invalidate (tornate a Riposo)", invalidated),
     ]
     body = "".join(f'<tr><td>{l}</td><td class="mono">{n}</td></tr>' for l, n in rows)
     return f"""<div class="card"><div class="ch">Funnel della macchina a stati</div>
@@ -342,6 +394,10 @@ def funnel_card(funnel, zones):
   <div class="note">Quante osservazioni si trasformano davvero in Entry Zone, e quante
   vengono invalidate. Un funnel sano non emette su ogni osservazione.</div></div>"""
 
+
+# ============================================================
+# Generate
+# ============================================================
 
 def generate():
     os.makedirs("docs", exist_ok=True)
@@ -354,13 +410,13 @@ def generate():
         conn.close()
     except Exception as e:
         zones, funnel = [], {}
-        print(f"Radar Lab: errore lettura DB — {e}")
+        print(f"Radar Lab: errore lettura DB \u2014 {e}")
 
     if not zones:
         body = """<div class="card"><div class="empty">
         Il Market Radar non ha ancora emesso Entry Zone.<br>
-        La pagina si popolerà quando il radar inizierà a registrare configurazioni.<br>
-        <span class="prov">Modalità sola-osservazione · in attesa dei primi dati</span>
+        La pagina si popoleranno quando il radar iniziera' a registrare configurazioni.<br>
+        <span class="prov">Modalita' sola-osservazione \u00b7 in attesa dei primi dati</span>
         </div></div>"""
         counts = "0 zone"
     else:
@@ -368,6 +424,7 @@ def generate():
         body = (summary_block(s)
                 + asset_table(by_asset(zones))
                 + velocity_table(velocity_buckets(zones))
+                + first_hit_card(zones)
                 + gestione_card(zones)
                 + stop_card(zones)
                 + funnel_card(funnel, zones))
@@ -385,10 +442,10 @@ def generate():
 <div class="container">
   <p class="intro">
     Validazione del <strong>Market Radar</strong> in sola osservazione. Il radar non compra
-    e non vende: segnala «zone da osservare» dopo un impulso esteso che perde forza.
-    Qui misuriamo <strong>cosa fa il prezzo dopo</strong> ogni zona — quanto rimbalza (MFE) e
-    quanto soffre prima (MAE), in unità di ATR. <strong>Nessuna soglia di successo è imposta:</strong>
-    i dati grezzi mostrano se e quanto esiste un edge. Le conclusioni arrivano dopo 300–500 zone.
+    e non vende: segnala \u00abzone da osservare\u00bb dopo un impulso esteso che perde forza.
+    Qui misuriamo <strong>cosa fa il prezzo dopo</strong> ogni zona \u2014 quanto rimbalza (MFE) e
+    quanto soffre prima (MAE), in unita' di ATR. <strong>Nessuna soglia di successo e' imposta:</strong>
+    i dati grezzi mostrano se e quanto esiste un edge. Le conclusioni arrivano dopo 300\u2013500 zone.
   </p>
   {body}
 </div>
