@@ -142,7 +142,8 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         if be_threshold > 0:
             open_rows = conn.execute(
                 "SELECT signal_id, direction, entry, stop_loss, mfe "
-                "FROM lh_signals WHERE final_outcome='OPEN' AND asset=?",
+                "FROM lh_signals WHERE final_outcome='OPEN' AND asset=? "
+                "AND COALESCE(order_status, 'FILLED') = 'FILLED'",
                 (asset,)
             ).fetchall()
             for sid, d, entry_p, sl_p, mfe_p in open_rows:
