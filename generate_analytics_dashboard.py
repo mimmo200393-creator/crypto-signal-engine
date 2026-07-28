@@ -386,7 +386,7 @@ def section_edge_lab(rows, recent):
     bd_sess  = breakdown(rows, lambda r: r["session"],       sess_keys,  stats_el)
     bd_ql    = breakdown(rows, lambda r: r["quality_label"], ql_keys,    stats_el)
 
-    # Recent table
+# Recent table
     if not recent:
         rec_html = '<div class="card"><div class="empty">Nessun segnale ancora.</div></div>'
     else:
@@ -407,10 +407,12 @@ def section_edge_lab(rows, recent):
   <td><span class="badge {oc}">{outcome}</span></td>
 </tr>"""
         rec_html = f"""<div class="card"><div class="ch">Segnali Recenti OTE-SC</div>
+  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
   <table><thead><tr>
     <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP</th>
     <th>R/R</th><th>Quality</th><th>Target</th><th>Esito</th>
-  </tr></thead><tbody>{body}</tbody></table></div>"""
+  </tr></thead><tbody>{body}</tbody></table>
+  </div></div>"""
 
     return f"""
 <div class="card" style="border-top:2px solid var(--accent)">
@@ -490,10 +492,12 @@ def section_trb(rows, recent):
   <td><span class="badge {oc}">{outcome}</span></td>
 </tr>"""
         rec_html = f"""<div class="card"><div class="ch">Segnali Recenti TRB</div>
+  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
   <table><thead><tr>
     <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP1</th>
     <th>ADX</th><th>H1</th><th>Target</th><th>Esito</th>
-  </tr></thead><tbody>{body}</tbody></table></div>"""
+  </tr></thead><tbody>{body}</tbody></table>
+  </div></div>"""
 
     return f"""
 <div class="card" style="border-top:2px solid var(--accent4)">
@@ -542,8 +546,8 @@ def section_lh(rows, recent):
 
     asset_keys = asset_keys_from(rows)
     dir_keys     = ["BUY","SELL"]
-    trigger_keys = ["BOS","CHOCH"]
-    priority_keys = ["CRITICAL","HIGH","MEDIUM"]
+    trigger_keys = ["OB_TOUCH", "OB_PENDING"]
+    priority_keys = ["FRESH", "TESTED", "MITIGATED", "BREAKER"]
 
     bd_asset    = breakdown(rows, lambda r: r["asset"],          asset_keys,    stats_lh)
     bd_dir      = breakdown(rows, lambda r: r["direction"],      dir_keys,      stats_lh)
@@ -561,6 +565,7 @@ def section_lh(rows, recent):
   <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(ts)}</td>
   <td><strong>{asset.replace('_USDT','')}</strong></td>
   <td>{direction_badge(direction)}</td>
+  <td><span class="badge {oc}">{outcome}</span></td>
   <td class="mono">{fmt_p(entry)}</td>
   <td class="mono">{fmt_p(sl)}</td>
   <td class="mono">{fmt_p(tp)}</td>
@@ -568,18 +573,19 @@ def section_lh(rows, recent):
   <td style="font-size:12px;color:var(--dim)">{level or '—'}</td>
   <td style="font-size:12px;color:var(--dim)">{sweep or '—'}</td>
   <td style="font-size:12px;color:var(--dim)">{trigger or '—'}</td>
-  <td><span class="badge {oc}">{outcome}</span></td>
 </tr>"""
         rec_html = f"""<div class="card"><div class="ch">Segnali Recenti Liquidity Hunter</div>
+  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
   <table><thead><tr>
-    <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP</th>
-    <th>R/R</th><th>Livello</th><th>Sweep</th><th>Trigger</th><th>Esito</th>
-  </tr></thead><tbody>{body}</tbody></table></div>"""
+    <th>Data</th><th>Asset</th><th>Dir</th><th>Esito</th><th>Entry</th><th>SL</th><th>TP</th>
+    <th>R/R</th><th>Livello</th><th>Sweep</th><th>Trigger</th>
+  </tr></thead><tbody>{body}</tbody></table>
+  </div></div>"""
 
     return f"""
 <div class="card" style="border-top:2px solid var(--accent5)">
   <div class="fw-header" style="color:var(--accent5)">
-    🎯 Liquidity Hunter v1.0
+    🎯 Liquidity Hunter v3.2
     <span class="fw-tag tag-active-blue">ATTIVO</span>
     <span style="color:var(--dim);font-size:11px;margin-left:auto">BTC · PAXG · Proximity 0.30% · Sweep 4 candele</span>
   </div>
