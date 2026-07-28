@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS lh_signals (
     strategy_name           TEXT NOT NULL DEFAULT 'LH',
     strategy_version        TEXT NOT NULL DEFAULT 'v1.0',
     asset                   TEXT NOT NULL,
-    direction               TEXT NOT NULL CHECK(direction IN ('BUY','SELL')),
+    direction                TEXT NOT NULL CHECK(direction IN ('BUY','SELL')),
     timestamp_setup         DATETIME NOT NULL,
     timestamp_closed        DATETIME,
 
@@ -52,17 +52,17 @@ CREATE TABLE IF NOT EXISTS lh_signals (
     trigger_ref_level       REAL,
 
     tp_label                TEXT,
-    tp_priority             TEXT,
+    tp_priority              TEXT,
 
-    quality_score           INTEGER,
-    quality_label           TEXT CHECK(quality_label IN ('LOW','MEDIUM','HIGH')),
+    quality_score            INTEGER,
+    quality_label            TEXT CHECK(quality_label IN ('LOW','MEDIUM','HIGH')),
 
-    final_outcome           TEXT DEFAULT 'OPEN'
+    final_outcome            TEXT DEFAULT 'OPEN'
         CHECK(final_outcome IN ('OPEN','TP','SL','EXPIRED')),
-    mae                     REAL DEFAULT 0,
-    mfe                     REAL DEFAULT 0,
-    bars_open               INTEGER DEFAULT 0,
-    expiry_bars             INTEGER DEFAULT 96
+    mae                      REAL DEFAULT 0,
+    mfe                      REAL DEFAULT 0,
+    bars_open                INTEGER DEFAULT 0,
+    expiry_bars              INTEGER DEFAULT 96
 );
 
 CREATE INDEX IF NOT EXISTS idx_lh_asset_outcome
@@ -103,7 +103,19 @@ def _migrate_lh_flags(conn: sqlite3.Connection):
                      # permette di modificare senza ricostruire la tabella.
                      ("order_status", "TEXT DEFAULT 'FILLED'"),
                      ("ob_match_type", "TEXT"),
-                     ("session", "TEXT")]:
+                     ("session", "TEXT"),
+                     # --- LH v3.2 fix ---
+                     # sl_original: SL del segnale COSI' COM'E' NATO, scritto
+                     # una sola volta all'insert e MAI PIU' aggiornato.
+                     # stop_loss invece continua a essere spostato dal
+                     # breakeven per la gestione reale del trade (il monitor
+                     # lo usa per decidere quando chiudere) — ma questo
+                     # significa che dopo un breakeven stop_loss non riflette
+                     # piu' il rischio originale del segnale che l'utente ha
+                     # ricevuto su Telegram. sl_original resta la fonte di
+                     # verita' per dashboard/analisi storica: "qual era lo
+                     # stop del segnale quando e' stato emesso".
+                     ("sl_original", "REAL")]:
         if col not in cols:
             conn.execute(f"ALTER TABLE lh_signals ADD COLUMN {col} {typ}")
     conn.commit()
@@ -134,10 +146,12 @@ def insert_lh_signal(conn: sqlite3.Connection, signal: dict) -> str:
             final_outcome, expiry_bars,
             setup_state, order_type, distance_atr,
             tp1, tp1_label, tp2, tp2_label, tp3, tp3_label,
-            confluence_factors, order_status, ob_match_type, session
+            confluence_factors, order_status, ob_match_type, session,
+            sl_original
         ) VALUES (
             ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-            ?,?,?,?,?,?,?,?,?,?,?,?,?
+            ?,?,?,?,?,?,?,?,?,?,?,?,?,
+            ?
         )
         """,
         (
@@ -191,6 +205,9 @@ def insert_lh_signal(conn: sqlite3.Connection, signal: dict) -> str:
             "PENDING" if signal.get("setup_state") == "WATCHING" else "FILLED",
             signal.get("ob_match_type"),
             signal.get("session"),
+            # sl_original = stop_loss al momento della creazione, sempre.
+            # Da qui in poi nessuna funzione in questo file lo tocca piu'.
+            signal["stop_loss"],
         ),
     )
     conn.commit()
