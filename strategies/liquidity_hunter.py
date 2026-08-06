@@ -1,6 +1,6 @@
 """
 strategies/liquidity_hunter.py
-Liquidity Hunter v3.1 — Confluence Engine
+Liquidity Hunter v3.2 — Confluence Engine
 
 FILOSOFIA: gli engine non bloccano il trade, contribuiscono a determinarne
 probabilita' e qualita'. La decisione nasce dalla combinazione.
@@ -75,7 +75,7 @@ OB_PROXIMITY_PCT = 0.010     # distanza max dell'OB dal prezzo
 # Il punteggio massimo teorico e' 9, ma nella pratica diversi fattori
 # contribuiscono di rado (candlestick ~0, reaction_map basso su XAU), quindi
 # la scala utile si ferma intorno a 6.3. Le soglie seguono quella scala.
-MIN_SCORE        = 3.5       # su 9 — sotto, il setup e' debole
+MIN_SCORE        = 3.5       # su 9 — sotto, il setup e' debole (solo per il TRADE)
 QUALITY_HIGH_MIN = 5.0
 QUALITY_MED_MIN  = 4.2
 
@@ -382,6 +382,168 @@ def _build_tp_ladder(direction: str, entry: float, risk: float, atr: float,
     )
 
     return {"structural": structural, "liquidity": liq_levels}
+
+
+# ============================================================
+# ZONE SCANNER (v3.3) — informativo, separato dal segnale di trading
+#
+# v3.3: riscritto per usare direttamente Reaction Map invece di cercare
+# solo Order Block. Motivo: Reaction Map fonde GIA' OB + FVG + Liquidity +
+# Structure in un'unica lista di zone (fino a 20), ognuna con confini reali
+# (zone_high/zone_low) e un punteggio di confluenza continuo. Cercare solo
+# OB significava perdere zone importanti sostenute da FVG/Liquidity/Structure
+# senza un OB nelle vicinanze -- esattamente il caso delle zone di reazione
+# "storiche" (es. fasce dove il prezzo ha fatto ping-pong) che potevano non
+# avere un OB fresco ma restano rilevanti.
+#
+# ONESTA' SUI LIMITI:
+#   - confluence_score misura QUANTI MODULI si sovrappongono ORA in quella
+#     zona (OB+FVG+Liquidity+Structure), non quante volte il prezzo ci e'
+#     gia' tornato in passato. E' una buona proxy di "zona importante", ma
+#     NON e' un contatore storico di tocchi/reazioni -- quello richiederebbe
+#     un nuovo tracciamento, non ancora presente.
+#   - ZONE_SCAN_MAX_ATR e' una scelta pratica (avviso con piu' anticipo,
+#     su richiesta esplicita), NON un numero calibrato su dati storici come
+#     watch_max_atr. Va verificato/aggiustato quando ci sara' campione.
+# ============================================================
+
+# Distanza massima per l'alert di zona: deliberatamente PIU' AMPIA di
+# watch_max_atr (1.5, usato dal segnale di trading). Il trading vuole
+# essere vicino per rischio/precisione; l'alert informativo vuole avvisare
+# prima, quando la zona e' ancora lontana. Nessun dato storico dietro
+# questi numeri -- punto di partenza da tarare.
+#
+# Per ASSET, non un valore globale: con ATR M15 XAU ~3.5-4 punti, una
+# finestra di 3.0 ATR sarebbe solo ~11-12 punti -- piu' STRETTA della
+# soglia "vicinissima" (15 punti, vedi ZONE_SCAN_NEAR_POINTS). I due
+# livelli di avviso collasserebbero in uno solo su XAU (si riceverebbe
+# quasi sempre l'urgente, mai il "sorvegliala" prima). Finestra allargata
+# specificamente per XAU perche' l'escalation a due livelli abbia spazio
+# per funzionare davvero.
+ZONE_SCAN_MAX_ATR = {
+    "BTC_USDT": 3.0,   # invariato: 3 ATR (~171pt) >> soglia vicino (75pt), va bene
+    "XAU_USD":  6.0,   # ~22-24pt: ora piu' largo della soglia vicino (15pt)
+}
+ZONE_SCAN_MAX_ATR_DEFAULT = 3.0
+
+# Sotto questa soglia la zona e' sostenuta da un solo modulo debole:
+# troppo rumore per notificare. STRONG/MODERATE sono le due fasce alte
+# gia' definite dentro reaction_map.py stesso (score>=70 / score>=40),
+# quindi non e' un numero nuovo inventato qui -- e' la soglia che
+# l'engine Reaction Map usa gia' per il proprio "reaction_strength".
+ZONE_SCAN_MIN_STRENGTH = {"STRONG", "MODERATE"}
+
+# Secondo avviso, piu' urgente: quando il prezzo e' a pochi punti dalla
+# zona (non ATR -- punti assoluti, perche' qui conta la precisione di
+# entrata, non la volatilita' relativa). Valori diversi per asset: scala
+# di prezzo molto diversa tra BTC (~64.000) e XAU (~4.000).
+ZONE_SCAN_NEAR_POINTS = {
+    "BTC_USDT": 75,   # punto medio del range 50-100 indicato
+    "XAU_USD":  15,   # punto medio del range 10-20 indicato
+}
+
+
+def _zone_ref_from_price(asset: str, midpoint: float) -> str:
+    """
+    zone_id di Reaction Map e' un uuid rigenerato a ogni snapshot -- non
+    stabile tra un ciclo e l'altro per "la stessa" zona reale. Per la
+    dedup serve un riferimento stabile: bucket di prezzo (stessa logica
+    gia' usata altrove nel sistema per deduplicare livelli vicini).
+    """
+    bucket = round(midpoint / max(midpoint * 0.001, 0.01))
+    return f"rm:{asset}:{bucket}"
+
+
+def scan_reaction_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
+                        mie_context: dict = None,
+                        df_m5: pd.DataFrame = None) -> list:
+    """
+    Identifica zone di reazione (BULLISH e/o BEARISH) vicine al prezzo,
+    lette direttamente dalla lista completa di Reaction Map -- non solo
+    zone con un Order Block, qualunque zona sostenuta da abbastanza
+    confluenza (OB, FVG, Liquidity, Structure, in qualunque combinazione).
+
+    Ritorna una lista di zone (puo' averne piu' di una per direzione,
+    a differenza della v3.2 che ne cercava al massimo una per lato):
+        [{
+            "direction": "BUY" | "SELL",
+            "zone_kind": "BULLISH" | "BEARISH",
+            "zone_ref": str,                       # stabile, per la dedup
+            "zone_high": float, "zone_low": float,
+            "distance_atr": float,
+            "confluence_score": float,             # 0-100, da Reaction Map
+            "reaction_strength": str,               # STRONG/MODERATE
+            "sources": list,                        # es. ["ORDER_BLOCK","FVG"]
+            "has_order_block": bool,
+        }, ...]
+    """
+    if not mie_context:
+        return []
+
+    rm_zones = mie_context.get("mie_reaction_map_zones") or []
+    if not rm_zones:
+        return []
+
+    src = df_m5 if (df_m5 is not None and len(df_m5) > 0) else df_m15
+    if src is None or len(src) == 0:
+        return []
+    price = float(src.iloc[-1]["close"])
+
+    atr = mie_context.get("mie_volatility_atr_m15", 0) or 0
+    if atr <= 0 and df_m15 is not None and len(df_m15) >= 15:
+        h = df_m15["high"].astype(float).values
+        l = df_m15["low"].astype(float).values
+        c = df_m15["close"].astype(float).values
+        atr = sum(max(h[i]-l[i], abs(h[i]-c[i-1]), abs(l[i]-c[i-1]))
+                  for i in range(-14, 0)) / 14
+    if atr <= 0:
+        return []
+
+    zones = []
+    for z in rm_zones:
+        strength = z.get("reaction_strength")
+        if strength not in ZONE_SCAN_MIN_STRENGTH:
+            continue
+
+        expected = z.get("expected_reaction")
+        if expected == "BOUNCE_UP":
+            direction, zone_kind = "BUY", "BULLISH"
+        elif expected == "BOUNCE_DOWN":
+            direction, zone_kind = "SELL", "BEARISH"
+        else:
+            continue  # UNKNOWN: nessuna direzione chiara, non notificabile
+
+        mid = z.get("zone_midpoint")
+        if mid is None:
+            continue
+        mid = float(mid)
+        distance_atr = abs(price - mid) / atr
+        max_atr = ZONE_SCAN_MAX_ATR.get(asset, ZONE_SCAN_MAX_ATR_DEFAULT)
+        if distance_atr > max_atr:
+            continue
+
+        distance_points = abs(price - mid)
+        near_threshold = ZONE_SCAN_NEAR_POINTS.get(asset)
+        is_near = near_threshold is not None and distance_points <= near_threshold
+
+        zones.append({
+            "direction": direction,
+            "zone_kind": zone_kind,
+            "zone_ref": _zone_ref_from_price(asset, mid),
+            "zone_high": z.get("zone_high"),
+            "zone_low": z.get("zone_low"),
+            "distance_atr": round(distance_atr, 2),
+            "distance_points": round(distance_points, 2),
+            "is_near": is_near,
+            "confluence_score": z.get("confluence_score", 0),
+            "reaction_strength": strength,
+            "sources": z.get("sources", []),
+            "has_order_block": bool(z.get("has_order_block")),
+        })
+
+    # Zone piu' vicine prima -- le piu' rilevanti ORA in cima alla lista
+    zones.sort(key=lambda z: z["distance_atr"])
+    return zones
 
 
 # ============================================================
