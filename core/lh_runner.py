@@ -24,7 +24,7 @@ from storage import db as core_db
 from core import v3_db
 from core import lh_db
 from core.decision_ledger import lh_integration as ledger_link
-from strategies.liquidity_hunter import generate_lh_signal
+from strategies.liquidity_hunter import generate_lh_signal, scan_reaction_zones
 
 logger = logging.getLogger("lh.runner")
 
@@ -130,6 +130,36 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
             df_m5 = None
 
     mie_context = _read_mie_context(conn, asset)
+
+    # ── Zone Scanner (v3.2) — informativo, indipendente dal segnale ──
+    # Gira SEMPRE, anche se poi il segnale di trading viene rifiutato o
+    # e' un duplicato: e' un canale separato, non deve dipendere dalla
+    # logica di trading qui sotto.
+    try:
+        zones = scan_reaction_zones(asset, df_m15, now, mie_context=mie_context, df_m5=df_m5)
+        for zone in zones:
+            zref = zone.get("zone_ref")
+            tier = "NEAR" if zone.get("is_near") else "WATCH"
+            if zref and lh_db.has_recent_zone_alert(conn, asset, zone["direction"], zref, tier=tier):
+                logger.debug("LH ZoneScan [%s %s %s]: zona %s gia' notificata, skip.",
+                            asset, zone["direction"], tier, zref)
+                continue
+            try:
+                lh_db.insert_zone_alert(conn, asset, zone, tier=tier)
+            except Exception as e:
+                logger.warning("LH ZoneScan [%s]: insert fallito: %s", asset, e)
+                continue
+            logger.info(
+                "LH ZoneScan [%s]: zona %s [%s] dist=%.2fATR/%.1fpt score=%.2f (zone=%s)",
+                asset, zone["zone_kind"], tier, zone["distance_atr"],
+                zone.get("distance_points", 0), zone["confluence_score"], zref,
+            )
+            if tier == "NEAR":
+                _notify_zone_near(asset, zone, config)
+            else:
+                _notify_zone(asset, zone, config)
+    except Exception as e:
+        logger.error("LH ZoneScan [%s]: errore (non-blocking): %s", asset, e)
 
     try:
         last_candle = df_m5.iloc[-1] if df_m5 is not None and len(df_m5) > 0 else df_m15.iloc[-1]
@@ -302,6 +332,103 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     )
 
     _notify(signal, config)
+
+
+def _notify_zone_near(asset: str, zone: dict, config: dict):
+    """
+    Secondo livello, piu' urgente del primo avviso "sorvegliala": il
+    prezzo e' a pochi punti dalla zona (soglia per asset, non ATR --
+    qui conta la precisione assoluta di prezzo). Stessa filosofia del
+    Metodo Gold Edge (Fase 5, M5): "il mercato entra nella tua area.
+    Non comprare. Non vendere. Guarda." — promemoria di conferma incluso.
+    """
+    try:
+        from notifications import telegram_bot, ntfy_bot
+
+        kind = zone["zone_kind"]
+        emoji = "\U0001f7e2" if kind == "BULLISH" else "\U0001f534"
+        kind_it = "rialzista" if kind == "BULLISH" else "ribassista"
+
+        def fp(v):
+            if v is None: return "N/A"
+            return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
+
+        text = (
+            f"{emoji} \U0001f6a8 *Zona {kind_it} VICINISSIMA*\n"
+            f"{asset.replace('_',' ')} — siamo dentro l'area, a {zone.get('distance_points',0):.1f} punti.\n\n"
+            f"Zona: `{fp(zone.get('zone_low'))}` - `{fp(zone.get('zone_high'))}`\n"
+            f"Forza: {zone.get('reaction_strength','?')}\n\n"
+            f"_Prima di agire, verifica tu:_\n"
+            f"_- Ha preso liquidita'?_\n"
+            f"_- Ha rotto la microstruttura?_\n"
+            f"_- Il movimento e' deciso o debole?_\n\n"
+            f"_Informativo \u2014 non e' un segnale di trading._"
+        )
+
+        bot_token  = config.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id    = config.get("TELEGRAM_CHAT_ID", "")
+        ntfy_topic = config.get("NTFY_TOPIC", "")
+
+        if bot_token and chat_id:
+            telegram_bot.send_message(bot_token, chat_id, text)
+        if ntfy_topic:
+            title = f"VICINISSIMA: zona {kind_it} {asset.replace('_',' ')}"
+            ntfy_bot.send_message(ntfy_topic, title, text.replace("*","").replace("`","").replace("_",""))
+
+    except Exception as e:
+        logger.warning("LH _notify_zone_near: %s", e)
+
+
+def _notify_zone(asset: str, zone: dict, config: dict):
+    """
+    Notifica INFORMATIVA di zona interessante — non un trade. Nessun
+    entry/SL/TP operativo: solo "guarda qui", il resto lo decide il trader.
+
+    Il messaggio guida con la frase in chiaro (zona interessante, da
+    sorvegliare, ci si sta avvicinando) — i numeri tecnici (distanza ATR,
+    confluence score) restano come dettaglio di supporto sotto, non in testa.
+    """
+    try:
+        from notifications import telegram_bot, ntfy_bot
+
+        kind = zone["zone_kind"]  # BULLISH / BEARISH
+        emoji = "\U0001f7e2" if kind == "BULLISH" else "\U0001f534"
+        kind_it = "rialzista" if kind == "BULLISH" else "ribassista"
+
+        strength = zone.get("reaction_strength")
+        if strength == "STRONG":
+            headline = f"Zona {kind_it} molto interessante — sorvegliala."
+        else:
+            headline = f"Zona {kind_it} da tenere d'occhio."
+
+        sources = zone.get("sources") or []
+        sources_line = ", ".join(sources) if sources else "?"
+
+        def fp(v):
+            if v is None: return "N/A"
+            return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
+
+        text = (
+            f"{emoji} *{headline}*\n"
+            f"{asset.replace('_',' ')} — ci si sta avvicinando alla zona.\n\n"
+            f"Zona: `{fp(zone.get('zone_low'))}` - `{fp(zone.get('zone_high'))}`\n"
+            f"Distanza: {zone['distance_atr']} ATR \u2014 forza: {strength or '?'}\n"
+            f"Sostenuta da: {sources_line}\n\n"
+            f"_Informativo \u2014 non e' un segnale di trading._"
+        )
+
+        bot_token  = config.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id    = config.get("TELEGRAM_CHAT_ID", "")
+        ntfy_topic = config.get("NTFY_TOPIC", "")
+
+        if bot_token and chat_id:
+            telegram_bot.send_message(bot_token, chat_id, text)
+        if ntfy_topic:
+            title = f"{headline} {asset.replace('_',' ')}"
+            ntfy_bot.send_message(ntfy_topic, title, text.replace("*","").replace("`",""))
+
+    except Exception as e:
+        logger.warning("LH _notify_zone: %s", e)
 
 
 def _notify(signal: dict, config: dict):
