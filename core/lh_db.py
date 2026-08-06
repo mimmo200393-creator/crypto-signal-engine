@@ -7,6 +7,7 @@ Tabella: lh_signals
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -71,6 +72,31 @@ CREATE INDEX IF NOT EXISTS idx_lh_timestamp
     ON lh_signals(timestamp_setup);
 CREATE INDEX IF NOT EXISTS idx_lh_level
     ON lh_signals(swept_level_label, swept_level_priority);
+
+-- Zone Scanner (v3.2): alert INFORMATIVI di prossimita' a una zona
+-- interessante, separati dai trade veri e propri. Nessun entry/SL/TP
+-- operativo, nessun outcome da monitorare — solo dedup per non ripetere
+-- lo stesso alert sulla stessa zona a ogni ciclo di scan.
+CREATE TABLE IF NOT EXISTS lh_zone_alerts (
+    alert_id        TEXT PRIMARY KEY,
+    asset           TEXT NOT NULL,
+    direction       TEXT NOT NULL,
+    tier            TEXT NOT NULL DEFAULT 'WATCH',
+    zone_kind       TEXT,
+    zone_ref        TEXT,
+    zone_high       REAL,
+    zone_low        REAL,
+    distance_atr    REAL,
+    distance_points REAL,
+    confluence_score REAL,
+    reaction_strength TEXT,
+    sources         TEXT,
+    has_order_block BOOLEAN DEFAULT 0,
+    created_at      DATETIME NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_lh_zone_alerts_lookup
+    ON lh_zone_alerts(asset, direction, zone_ref, tier, created_at);
 """
 
 
@@ -396,3 +422,69 @@ def monitor_open_lh_signals(
 
     conn.commit()
     return updated
+
+
+# ============================================================
+# Zone Scanner (v3.2) — alert informativi, separati dai trade
+# ============================================================
+
+def has_recent_zone_alert(
+    conn: sqlite3.Connection,
+    asset: str,
+    direction: str,
+    zone_ref: str,
+    tier: str = "WATCH",
+    hours: int = 4,
+) -> bool:
+    """
+    Dedup per gli alert di zona: stessa zona (zone_ref) + direzione +
+    asset + LIVELLO (WATCH o NEAR), notificata nelle ultime N ore ->
+    non ripetere. Il tier e' incluso nella chiave: una zona puo' generare
+    prima un WATCH (lontana) e poi, quando il prezzo si avvicina, anche
+    un NEAR (urgente) senza che l'uno blocchi l'altro.
+
+    Stessa finestra di 4h gia' usata per i trade (has_recent_lh_signal):
+    coerenza con il resto del sistema, nessuna nuova costante inventata.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    row = conn.execute(
+        """
+        SELECT 1 FROM lh_zone_alerts
+        WHERE asset=? AND direction=? AND zone_ref=? AND tier=?
+        AND created_at >= ?
+        LIMIT 1
+        """,
+        (asset, direction, zone_ref, tier, cutoff),
+    ).fetchone()
+    return row is not None
+
+
+def insert_zone_alert(conn: sqlite3.Connection, asset: str, zone: dict,
+                       tier: str = "WATCH") -> str:
+    """
+    Salva un alert di zona (solo per dedup/storico — nessun outcome da
+    monitorare, non e' un trade).
+    """
+    alert_id = str(uuid.uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO lh_zone_alerts (
+            alert_id, asset, direction, tier, zone_kind, zone_ref,
+            zone_high, zone_low, distance_atr, distance_points,
+            confluence_score, reaction_strength, sources,
+            has_order_block, created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            alert_id, asset, zone["direction"], tier, zone.get("zone_kind"),
+            zone.get("zone_ref"), zone.get("zone_high"), zone.get("zone_low"),
+            zone.get("distance_atr"), zone.get("distance_points"),
+            zone.get("confluence_score"), zone.get("reaction_strength"),
+            json.dumps(zone.get("sources", [])),
+            bool(zone.get("has_order_block", False)),
+            now_iso,
+        ),
+    )
+    conn.commit()
+    return alert_id
