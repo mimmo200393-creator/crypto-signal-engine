@@ -100,6 +100,18 @@ ASSET_PARAMS = {
                                         # migliori N per punteggio) -- non
                                         # e' un filtro di qualita', solo
                                         # anti-inondazione
+        # v3.6: detection multi-timeframe -- H1/M30 trovano l'impulso
+        # (piu' significativo, meno rumore), M15+M5 raffinano la zona
+        # precisa. Nessuna soglia calibrata su dati storici.
+        "min_impulse_atr_h1": 1.0,
+        "impulse_lookback_bars_h1": 12,   # 12h
+        "min_impulse_atr_m30": 0.9,
+        "impulse_lookback_bars_m30": 16,  # 8h
+        # v3.7: ricorrenza -- quante volte da questa zona e' REALMENTE
+        # ripartito un impulso, non solo quante volte il prezzo l'ha
+        # toccata. Nessun valore calibrato su dati storici.
+        "recurrence_confirmation_bars": 6,          # ~1.5h su M15
+        "recurrence_invalidate_after_failures": 2,
     },
     "XAU_USD": {
         "sl_buffer_atr": 0.3, "min_rr": 1.2, "expiry_bars": 18,
@@ -112,9 +124,22 @@ ASSET_PARAMS = {
         "min_impulse_atr": 0.8,
         "impulse_lookback_bars": 16,
         "max_zones_per_scan": 5,
+        "min_impulse_atr_h1": 1.0,
+        "impulse_lookback_bars_h1": 12,
+        "min_impulse_atr_m30": 0.9,
+        "impulse_lookback_bars_m30": 16,
+        "recurrence_confirmation_bars": 6,
+        "recurrence_invalidate_after_failures": 2,
     },
 }
 DEFAULT_PARAMS = ASSET_PARAMS["BTC_USDT"]
+
+# Bonus/penalita' per la ricorrenza -- applicati DOPO lo scoring base.
+# Nessun valore calibrato su dati storici, punto di partenza da tarare.
+RECURRENCE_BONUS_PER_RESTART = 15
+RECURRENCE_BONUS_MAX = 45          # tetto: 3+ restart confermati
+RECURRENCE_PENALTY_PER_FAILURE = 10
+RECURRENCE_PENALTY_MAX = 30
 
 ALLOWED_SESSIONS = {
     "XAU_USD":  ("ASIA", "LONDON", "NEW_YORK", "OVERLAP"),
@@ -464,21 +489,31 @@ ZONE_SCAN_NEAR_POINTS = {
 }
 
 
-def _m5_window_for_m15_candle(df_m5: pd.DataFrame, formation_ts, lookback_extra_ms: int = 5*60*1000) -> pd.DataFrame:
+def _child_window(df_child: pd.DataFrame, parent_ts, parent_duration_ms: int,
+                  lookback_extra_ms: int) -> pd.DataFrame:
     """
-    Ritorna le candele M5 che compongono la candela M15 iniziata a
-    formation_ts, allargata di lookback_extra_ms PRIMA dell'inizio -- il
-    vero punto di svolta puo' cadere esattamente al bordo tra due
-    candele M15. df_m5 deve avere 'timestamp' in millisecondi.
+    Generalizzazione di "candele figlie dentro una candela madre": ritorna
+    le candele df_child che compongono la candela iniziata a parent_ts
+    con durata parent_duration_ms, allargata di lookback_extra_ms PRIMA
+    dell'inizio -- il vero punto di svolta puo' cadere al bordo.
+
+    Usata sia per M5 dentro M15 (parent_duration_ms=15min) sia per M15
+    dentro M30/H1 (parent_duration_ms=30min/60min) -- stessa funzione,
+    stessa regola, applicata a qualunque livello.
     """
     try:
-        ts0 = int(float(formation_ts))
+        ts0 = int(float(parent_ts))
     except (TypeError, ValueError):
-        return df_m5.iloc[0:0]
+        return df_child.iloc[0:0]
     ts_start = ts0 - lookback_extra_ms
-    ts_end = ts0 + 15 * 60 * 1000  # +15 minuti in ms
-    mask = (df_m5["timestamp"] >= ts_start) & (df_m5["timestamp"] < ts_end)
-    return df_m5[mask].sort_values("timestamp")
+    ts_end = ts0 + parent_duration_ms
+    mask = (df_child["timestamp"] >= ts_start) & (df_child["timestamp"] < ts_end)
+    return df_child[mask].sort_values("timestamp")
+
+
+def _m5_window_for_m15_candle(df_m5: pd.DataFrame, formation_ts, lookback_extra_ms: int = 5*60*1000) -> pd.DataFrame:
+    """Alias retrocompatibile: M5 dentro una candela M15 (15 min)."""
+    return _child_window(df_m5, formation_ts, 15*60*1000, lookback_extra_ms)
 
 
 def _is_accelerating_candle(row, direction: str, body_ratio_threshold: float) -> bool:
@@ -554,27 +589,33 @@ def _find_launch_candle(window, direction: str, body_ratio_threshold: float):
 # prerequisito per l'esistenza della zona.
 # ============================================================
 
-def _detect_m15_impulses(df_m15: pd.DataFrame, atr_m15: float,
-                         min_impulse_atr: float, lookback_bars: int) -> list:
+def _detect_impulses(df: pd.DataFrame, atr: float, min_impulse_atr: float,
+                     lookback_bars: int, duration_ms: int, timeframe_label: str) -> list:
     """
-    Rileva candele M15 di impulso reale nelle ultime lookback_bars barre.
-    UNICO filtro: |close-open| >= min_impulse_atr * ATR -- la forza del
-    movimento stesso, non un giudizio SMC.
+    Rileva candele di impulso reale nelle ultime lookback_bars barre, su
+    QUALUNQUE timeframe (M15, M30, H1 -- stessa regola, generalizzata da
+    _detect_m15_impulses). UNICO filtro: |close-open| >= min_impulse_atr
+    * ATR -- la forza del movimento stesso, non un giudizio SMC.
 
-    Ritorna lista di {"index", "timestamp", "direction", "displacement_atr"}.
+    duration_ms: durata di una barra di questo timeframe (15/30/60 min in
+    ms) -- serve al drill-down successivo per sapere quanto e' "larga"
+    la candela di impulso trovata.
+
+    Ritorna lista di {"index", "timestamp", "direction", "displacement_atr",
+    "duration_ms", "timeframe"}.
     """
-    if atr_m15 <= 0 or len(df_m15) == 0:
+    if atr <= 0 or len(df) == 0:
         return []
 
-    n = len(df_m15)
+    n = len(df)
     start = max(0, n - lookback_bars)
     impulses = []
 
     for i in range(start, n):
-        row = df_m15.iloc[i]
+        row = df.iloc[i]
         o, c = float(row["open"]), float(row["close"])
         body = abs(c - o)
-        disp_atr = body / atr_m15
+        disp_atr = body / atr
         if disp_atr < min_impulse_atr:
             continue
         impulses.append({
@@ -582,34 +623,68 @@ def _detect_m15_impulses(df_m15: pd.DataFrame, atr_m15: float,
             "timestamp": int(row["timestamp"]),
             "direction": "BULLISH" if c > o else "BEARISH",
             "displacement_atr": round(disp_atr, 3),
+            "duration_ms": duration_ms,
+            "timeframe": timeframe_label,
         })
 
     return impulses
 
 
+def _manual_atr(df: pd.DataFrame, period: int = 14) -> float:
+    """
+    ATR calcolato a mano sulle ultime `period` candele -- stesso fallback
+    gia' usato per M15 quando mie_context non ha l'ATR pronto. Usato per
+    H1/M30 dato che mie_context oggi espone solo l'ATR M15
+    (mie_volatility_atr_m15), non verificato se H1/M30 sono disponibili.
+    """
+    if df is None or len(df) < period + 1:
+        return 0.0
+    h = df["high"].astype(float).values
+    l = df["low"].astype(float).values
+    c = df["close"].astype(float).values
+    return sum(max(h[i]-l[i], abs(h[i]-c[i-1]), abs(l[i]-c[i-1]))
+              for i in range(-period, 0)) / period
+
+
 def _zone_from_impulse(impulse: dict, df_m15: pd.DataFrame, df_m5, body_ratio_threshold: float) -> tuple:
     """
-    Costruisce la Restart Zone per un impulso rilevato direttamente su
-    M15. Riusa _find_launch_candle (stessa regola oggettiva gia'
-    validata) su una finestra M5 che copre la candela di impulso stessa
-    E un margine prima -- non serve piu' passare da un OB gia' registrato.
+    Costruisce la Restart Zone per un impulso rilevato su H1/M30/M15.
 
-    FALLBACK quando M5 non e' disponibile (o la finestra e' vuota): usa
-    la candela M15 immediatamente PRIMA dell'impulso (il suo intero
-    range high/low) come zona grezza -- non raffinata, ma sempre
-    presente. Senza questo fallback, un guasto nel fetch M5 azzererebbe
-    OGNI notifica, esattamente il tipo di fragilita' silenziosa gia'
-    incontrata in produzione il 07/08.
+    DRILL-DOWN a piu' livelli (v3.6): se l'impulso viene da H1 o M30
+    (timeframe "medio/forte" per trovarlo), prima si RESTRINGE a M15
+    (si trova la candela M15 di lancio dentro la finestra H1/M30, stessa
+    regola oggettiva _find_launch_candle), poi si RAFFINA ulteriormente
+    su M5 dentro quella specifica candela M15. Stessa identica funzione
+    (_find_launch_candle) applicata fractalmente a due livelli.
 
-    Ritorna (zone_high, zone_low, refined: bool).
+    FALLBACK a catena: se M5 non c'e', resta la precisione M15 (la
+    candela M15 di lancio trovata, range intero). Se nemmeno M15 e'
+    disponibile per il drill-down, fallback sull'intera candela H1/M30
+    originale (raro, solo se anche i dati M15 mancano).
+
+    Ritorna (zone_high, zone_low, refined: bool). refined=True solo se
+    si e' arrivati fino a M5.
     """
     direction = impulse["direction"]
     ts = impulse["timestamp"]
+    duration_ms = impulse.get("duration_ms", 15*60*1000)
+    timeframe = impulse.get("timeframe", "M15")
 
+    # ── Livello 1: se l'impulso viene da H1/M30, restringo a M15 ──
+    m15_ts = ts
+    m15_row = None
+    if timeframe in ("H1", "M30") and df_m15 is not None and len(df_m15) > 0:
+        m15_window = _child_window(df_m15, ts, duration_ms, lookback_extra_ms=15*60*1000)
+        if len(m15_window) > 0:
+            m15_core = _find_launch_candle(m15_window, direction, body_ratio_threshold)
+            m15_ts = int(m15_core["timestamp"])
+            m15_row = m15_core
+
+    # ── Livello 2: raffino su M5 dentro la candela M15 individuata ──
     if df_m5 is not None and len(df_m5) > 0:
-        window = _m5_window_for_m15_candle(df_m5, ts, lookback_extra_ms=15*60*1000)
-        if len(window) > 0:
-            core = _find_launch_candle(window, direction, body_ratio_threshold)
+        m5_window = _child_window(df_m5, m15_ts, 15*60*1000, lookback_extra_ms=5*60*1000)
+        if len(m5_window) > 0:
+            core = _find_launch_candle(m5_window, direction, body_ratio_threshold)
             if direction == "BULLISH":
                 zone_low = float(core["low"])
                 zone_high = max(float(core["open"]), float(core["close"]))
@@ -622,12 +697,19 @@ def _zone_from_impulse(impulse: dict, df_m15: pd.DataFrame, df_m5, body_ratio_th
                     zone_low = zone_high - 0.01
             return round(zone_high, 4), round(zone_low, 4), True
 
-    # Fallback: candela M15 immediatamente prima dell'impulso, range intero
+    # ── Fallback 1: precisione M15 (se avevo gia' trovato la candela di lancio) ──
+    if m15_row is not None:
+        zh, zl = float(m15_row["high"]), float(m15_row["low"])
+        if zh > zl:
+            return round(zh, 4), round(zl, 4), False
+
+    # ── Fallback 2: candela immediatamente prima dell'impulso originale ──
     idx = impulse.get("index", 0)
     fallback_idx = idx - 1 if idx > 0 else idx
-    if fallback_idx < 0 or fallback_idx >= len(df_m15):
+    src_df = df_m15  # ultima risorsa: usa comunque M15 se disponibile
+    if src_df is None or fallback_idx < 0 or fallback_idx >= len(src_df):
         return None, None, False
-    fb = df_m15.iloc[fallback_idx]
+    fb = src_df.iloc[fallback_idx]
     zone_high = float(fb["high"])
     zone_low = float(fb["low"])
     if zone_high <= zone_low:
@@ -698,6 +780,224 @@ def _score_restart_zone(zone_high: float, zone_low: float, displacement_atr: flo
     return round(min(score, 100.0), 1), factors
 
 
+# ============================================================
+# RICORRENZA (v3.7) -- non "quante volte ha toccato", ma "quante volte
+# da qui e' REALMENTE ripartito un impulso".
+#
+# Macchina a stati per zona, persistita nel tempo (lo stato vive nel DB,
+# questa funzione e' PURA -- riceve lo stato precedente, ritorna quello
+# nuovo, nessun I/O qui dentro, cosi' resta testabile in isolamento come
+# tutto il resto del motore oggi).
+#
+#   1. Il prezzo ENTRA nella zona (prima non c'era) -> si apre una
+#      finestra di conferma (recurrence_confirmation_bars candele M15).
+#   2. Dentro la finestra, si cerca un impulso VERO (stessa regola gia'
+#      usata per rilevare gli impulsi originali) nella stessa direzione
+#      della zona.
+#   3. Se nasce -> confirmed_restarts += 1 (la zona "ha tenuto ed e'
+#      ripartita" -- bonus di punteggio).
+#   4. Se la finestra scade senza impulso (il prezzo attraversa senza
+#      reazione) -> failed_visits += 1 (penalita' di punteggio).
+#   5. Dopo troppi fallimenti consecutivi -> zona INVALIDATED, esclusa
+#      dalle notifiche future.
+# ============================================================
+
+def _new_recurrence_state(zone_ref: str, asset: str, direction: str, zone_kind: str,
+                          zone_high: float, zone_low: float, now_iso: str) -> dict:
+    """Stato iniziale per una zona mai vista prima."""
+    return {
+        "zone_ref": zone_ref, "asset": asset, "direction": direction,
+        "zone_kind": zone_kind, "zone_high": zone_high, "zone_low": zone_low,
+        "visits": 0, "confirmed_restarts": 0, "failed_visits": 0,
+        "price_inside": False, "awaiting_confirmation": False,
+        "confirmation_bars_remaining": 0, "entry_ts": None,
+        "status": "ACTIVE",
+        "first_seen_ts": now_iso, "last_updated_ts": now_iso,
+    }
+
+
+def _update_zone_recurrence(prev_state: dict, current_price: float,
+                            df_m15: pd.DataFrame, min_impulse_atr: float,
+                            confirmation_bars: int, invalidate_after_failures: int,
+                            now_iso: str) -> dict:
+    """
+    Avanza la macchina a stati di UNA zona di un ciclo. Funzione PURA:
+    nessun accesso al DB qui -- riceve lo stato precedente (dict) e i
+    dati di mercato correnti, ritorna il nuovo stato. Il chiamante
+    (lh_runner.py) si occupa di leggere/scrivere lo stato dal DB.
+    """
+    state = dict(prev_state)  # non muto l'originale
+    zone_high, zone_low = state["zone_high"], state["zone_low"]
+    zone_kind = state["zone_kind"]
+
+    if state["status"] == "INVALIDATED":
+        state["last_updated_ts"] = now_iso
+        return state
+
+    is_inside_now = zone_low <= current_price <= zone_high
+    was_inside = state["price_inside"]
+
+    # ── Nuovo ingresso: il prezzo NON era dentro, ora e' dentro ──
+    if is_inside_now and not was_inside:
+        state["visits"] += 1
+        state["awaiting_confirmation"] = True
+        state["confirmation_bars_remaining"] = confirmation_bars
+        state["entry_ts"] = now_iso
+
+    # ── Se sto aspettando conferma, controllo se e' nato un impulso vero ──
+    if state["awaiting_confirmation"]:
+        recent_impulses = _detect_impulses(
+            df_m15, _manual_atr(df_m15, period=14) or 1e-9,
+            min_impulse_atr, lookback_bars=confirmation_bars,
+            duration_ms=15*60*1000, timeframe_label="M15",
+        )
+        confirmed = any(imp["direction"] == zone_kind for imp in recent_impulses)
+
+        if confirmed:
+            state["confirmed_restarts"] += 1
+            state["awaiting_confirmation"] = False
+            state["confirmation_bars_remaining"] = 0
+        else:
+            state["confirmation_bars_remaining"] -= 1
+            if state["confirmation_bars_remaining"] <= 0:
+                state["failed_visits"] += 1
+                state["awaiting_confirmation"] = False
+                if state["failed_visits"] >= invalidate_after_failures:
+                    state["status"] = "INVALIDATED"
+
+    state["price_inside"] = is_inside_now
+    state["last_updated_ts"] = now_iso
+    return state
+
+
+def _apply_recurrence_to_score(base_score: float, confirmations: list,
+                               recurrence_state: dict) -> tuple:
+    """
+    Applica bonus/penalita' di ricorrenza al punteggio base. Ritorna
+    (nuovo_score, nuove_confirmations). Zone INVALIDATED tornano
+    score=0 esplicitamente (il chiamante decide se escluderle del tutto).
+    """
+    if recurrence_state is None:
+        return base_score, confirmations
+
+    confirmations = list(confirmations)
+
+    if recurrence_state["status"] == "INVALIDATED":
+        confirmations.append("INVALIDATED (attraversata senza reazione)")
+        return 0.0, confirmations
+
+    restarts = recurrence_state.get("confirmed_restarts", 0)
+    failures = recurrence_state.get("failed_visits", 0)
+
+    bonus = min(restarts * RECURRENCE_BONUS_PER_RESTART, RECURRENCE_BONUS_MAX)
+    penalty = min(failures * RECURRENCE_PENALTY_PER_FAILURE, RECURRENCE_PENALTY_MAX)
+
+    if restarts > 0:
+        confirmations.append(f"RICORRENTE(x{restarts})")
+    if failures > 0:
+        confirmations.append(f"attraversata_senza_reazione(x{failures})")
+
+    new_score = max(0.0, min(base_score + bonus - penalty, 100.0))
+    return round(new_score, 1), confirmations
+
+
+# ============================================================
+# RIEPILOGO DI FINE GIORNATA (v3.8) -- "Overnight Trading Plan"
+#
+# Funzioni PURE (nessun I/O, nessuna chiamata Telegram qui dentro):
+# ricevono le zone gia' lette dal DB, ritornano testo formattato.
+# L'I/O (query DB, invio messaggio) vive nel runner, come sempre oggi.
+# ============================================================
+
+def _score_to_stars(score: float) -> str:
+    """Converte il punteggio 0-100 in stelle (5 fasce, nessuna calibrata su dati)."""
+    if score >= 90:
+        n = 5
+    elif score >= 70:
+        n = 4
+    elif score >= 50:
+        n = 3
+    elif score >= 30:
+        n = 2
+    else:
+        n = 1
+    return "\u2605" * n + "\u2606" * (5 - n)
+
+
+# Mappa dalle conferme complete (quelle usate internamente per lo
+# scoring) alle etichette brevi mostrate nel riepilogo -- stesso
+# vocabolario del mockup (OB, FVG, LIQ, BOS). RICORRENTE e IMPULSO_*
+# non compaiono qui: sono gia' impliciti nel punteggio/stelle.
+_CONFIRMATION_SHORT_TAGS = {
+    "ORDER_BLOCK": "OB",
+    "FVG": "FVG",
+    "BOS": "BOS",
+    "SWEEP": "LIQ",
+    "REACTION_MAP": "RM",
+}
+
+
+def _short_confluence_tags(confirmations: list, max_tags: int = 2) -> str:
+    """
+    Le prime max_tags conferme "vere" (esclude IMPULSO_*/RICORRENTE/
+    attraversata_senza_reazione, che non sono confluenze SMC), unite
+    con " + " -- stile del mockup ("OB + FVG").
+    """
+    tags = []
+    for c in confirmations:
+        short = _CONFIRMATION_SHORT_TAGS.get(c)
+        if short and short not in tags:
+            tags.append(short)
+        if len(tags) >= max_tags:
+            break
+    return " + ".join(tags) if tags else "impulso puro"
+
+
+def format_zone_digest(asset: str, buy_zones: list, sell_zones: list) -> dict:
+    """
+    Formatta le zone ancora valide in un riepilogo BUY/SELL con stelle
+    e tag di confluenza brevi, piu' una riga di priorita' -- stile
+    "Overnight Trading Plan". Ogni zona in buy_zones/sell_zones e' un
+    dict con almeno: zone_high, zone_low, restart_score, confirmations.
+
+    Ritorna {"buy_lines": [...], "sell_lines": [...], "focus": str}
+    -- il chiamante compone il messaggio finale (Telegram/ntfy hanno
+    formattazioni diverse, meglio lasciare la formattazione fisica al
+    runner, qui solo il CONTENUTO).
+    """
+    def fp(v):
+        return f"{v:,.2f}" if float(v) > 1000 else f"{v:.2f}"
+
+    def fmt_group(zones):
+        lines = []
+        for z in sorted(zones, key=lambda z: z["restart_score"], reverse=True):
+            stars = _score_to_stars(z["restart_score"])
+            tags = _short_confluence_tags(z.get("confirmations", []))
+            lines.append({
+                "range": f"{fp(z['zone_low'])} \u2013 {fp(z['zone_high'])}",
+                "stars": stars,
+                "tags": tags,
+                "score": z["restart_score"],
+            })
+        return lines
+
+    buy_lines = fmt_group(buy_zones)
+    sell_lines = fmt_group(sell_zones)
+
+    best_buy = buy_lines[0]["score"] if buy_lines else 0
+    best_sell = sell_lines[0]["score"] if sell_lines else 0
+    if best_buy == 0 and best_sell == 0:
+        focus = "Nessuna zona di qualita' sufficiente oggi."
+    elif abs(best_buy - best_sell) < 5:
+        focus = "Nessuna priorita' netta -- entrambi i lati validi."
+    elif best_buy > best_sell:
+        focus = "Priorit\u00e0 BUY."
+    else:
+        focus = "Priorit\u00e0 SELL."
+
+    return {"buy_lines": buy_lines, "sell_lines": sell_lines, "focus": focus}
+
+
 def _merge_nearby_zones(zones: list, asset: str) -> list:
     """
     Raggruppa Restart Zone vicine (stessa direzione) ed evita notifiche
@@ -750,23 +1050,36 @@ def _merge_nearby_zones(zones: list, asset: str) -> list:
 
 def scan_restart_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
                        mie_context: dict = None,
-                       df_m5: pd.DataFrame = None) -> list:
+                       df_m5: pd.DataFrame = None,
+                       df_h1: pd.DataFrame = None,
+                       df_m30: pd.DataFrame = None) -> list:
     """
-    Identifica Bullish/Bearish Restart Zone rilevando GLI IMPULSI
-    direttamente dalle candele M15 -- non piu' dipendente dal registro
-    Order Block di un altro engine. L'UNICO filtro e' la forza
-    dell'impulso (min_impulse_atr, per asset). SMC (Order Block, FVG via
-    Reaction Map, BOS, sweep) arricchisce solo il punteggio, non decide
-    se la zona esiste.
+    Identifica Bullish/Bearish Restart Zone -- v3.6, ruoli distinti per
+    timeframe (non tutti fanno la stessa cosa):
+
+        H1  -> trova gli impulsi PIU' IMPORTANTI della giornata
+        M30 -> trova gli impulsi MEDI
+        M15 -> DEFINISCE e raffina la Restart Zone (drill-down dentro
+               la finestra H1/M30 individuata)
+        M5  -> raffina ULTERIORMENTE al punto preciso (dentro la M15)
+
+    L'UNICO filtro e' la forza dell'impulso (min_impulse_atr_h1/_m30, per
+    asset) -- non piu' dipendente dal registro Order Block di un altro
+    engine. SMC (Order Block, FVG via Reaction Map, BOS, sweep)
+    arricchisce solo il punteggio, non decide se la zona esiste.
+
+    Se ne' df_h1 ne' df_m30 sono disponibili, nessuna zona viene trovata
+    (non c'e' piu' fallback su M15 come sorgente primaria -- M15 e' solo
+    lo strumento di definizione, non di ricerca, per design esplicito).
 
     Ritorna lista di zone (max max_zones_per_scan per ciclo, le migliori
     per punteggio dopo il merge delle vicine): [{
         "direction": "BUY"|"SELL", "zone_kind": "BULLISH"|"BEARISH",
-        "zone_ref": str (stabile: asset+direzione+timestamp impulso),
+        "zone_ref": str (stabile: asset+direzione+timeframe+timestamp),
         "zone_high": float, "zone_low": float, "zone_width": float,
-        "m5_refined": bool, "distance_atr": float, "distance_points": float,
-        "is_near": bool, "restart_score": float,
-        "zone_strength": "STRONG"|"MODERATE"|"WEAK",
+        "m5_refined": bool, "source_timeframe": "H1"|"M30",
+        "distance_atr": float, "distance_points": float, "is_near": bool,
+        "restart_score": float, "zone_strength": "STRONG"|"MODERATE"|"WEAK",
         "confirmations": list[str], "merged_from": int,
     }, ...]
     """
@@ -778,25 +1091,40 @@ def scan_restart_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
         return []
     price = float(src.iloc[-1]["close"])
 
-    atr = mie_context.get("mie_volatility_atr_m15", 0) or 0
-    if atr <= 0 and df_m15 is not None and len(df_m15) >= 15:
+    atr_m15 = mie_context.get("mie_volatility_atr_m15", 0) or 0
+    if atr_m15 <= 0 and df_m15 is not None and len(df_m15) >= 15:
         h = df_m15["high"].astype(float).values
         l = df_m15["low"].astype(float).values
         c = df_m15["close"].astype(float).values
-        atr = sum(max(h[i]-l[i], abs(h[i]-c[i-1]), abs(l[i]-c[i-1]))
-                  for i in range(-14, 0)) / 14
-    if atr <= 0:
+        atr_m15 = sum(max(h[i]-l[i], abs(h[i]-c[i-1]), abs(l[i]-c[i-1]))
+                      for i in range(-14, 0)) / 14
+    if atr_m15 <= 0:
         return []
 
     P = _params(asset)
     max_atr = ZONE_SCAN_MAX_ATR.get(asset, ZONE_SCAN_MAX_ATR_DEFAULT)
     near_threshold = ZONE_SCAN_NEAR_POINTS.get(asset)
     body_ratio_threshold = P.get("launch_body_ratio", 0.5)
-    min_impulse_atr = P.get("min_impulse_atr", 0.8)
-    lookback_bars = P.get("impulse_lookback_bars", 16)
     max_zones = P.get("max_zones_per_scan", 5)
 
-    impulses = _detect_m15_impulses(df_m15, atr, min_impulse_atr, lookback_bars)
+    # ── Detection: SOLO H1 e M30, mai piu' M15 come sorgente primaria ──
+    impulses = []
+
+    atr_h1 = _manual_atr(df_h1, period=14)
+    if atr_h1 > 0 and df_h1 is not None:
+        impulses += _detect_impulses(
+            df_h1, atr_h1,
+            P.get("min_impulse_atr_h1", 1.0),
+            P.get("impulse_lookback_bars_h1", 12),
+            duration_ms=60*60*1000, timeframe_label="H1")
+
+    atr_m30 = _manual_atr(df_m30, period=14)
+    if atr_m30 > 0 and df_m30 is not None:
+        impulses += _detect_impulses(
+            df_m30, atr_m30,
+            P.get("min_impulse_atr_m30", 0.9),
+            P.get("impulse_lookback_bars_m30", 16),
+            duration_ms=30*60*1000, timeframe_label="M30")
 
     zones = []
     for impulse in impulses:
@@ -805,12 +1133,13 @@ def scan_restart_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
             continue
 
         mid = (zh + zl) / 2
-        distance_atr = abs(price - mid) / atr
+        distance_atr = abs(price - mid) / atr_m15
         if distance_atr > max_atr:
             continue
 
         score, confirmations = _score_restart_zone(
             zh, zl, impulse["displacement_atr"], mie_context, refined)
+        confirmations = [f"IMPULSO_{impulse['timeframe']}({impulse['displacement_atr']:.1f}ATR)"] + confirmations[1:]
 
         distance_points = abs(price - mid)
         is_near = near_threshold is not None and distance_points <= near_threshold
@@ -825,11 +1154,12 @@ def scan_restart_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
         zones.append({
             "direction": "BUY" if direction_raw == "BULLISH" else "SELL",
             "zone_kind": direction_raw,
-            "zone_ref": f"impulse:{asset}:{direction_raw}:{impulse['timestamp']}",
+            "zone_ref": f"impulse:{asset}:{direction_raw}:{impulse['timeframe']}:{impulse['timestamp']}",
             "zone_high": zh,
             "zone_low": zl,
             "zone_width": round(zh - zl, 4),
             "m5_refined": refined,
+            "source_timeframe": impulse["timeframe"],
             "distance_atr": round(distance_atr, 2),
             "distance_points": round(distance_points, 2),
             "is_near": is_near,
