@@ -93,6 +93,18 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python3 lh_scanner_runner.py
 
+      - name: LH Overnight Digest (19:00 UTC)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          HOUR=$(date -u +%H)
+          MINUTE=$(date -u +%M)
+          if [ "$HOUR" = "19" ] && [ "$MINUTE" -lt "5" ]; then
+            python3 lh_digest_runner.py
+          fi
+
       - name: Institutional Edge Lab — OTE-SC (BTC_USDT + PAXG_USDT)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
