@@ -24,7 +24,7 @@ from storage import db as core_db
 from core import v3_db
 from core import lh_db
 from core.decision_ledger import lh_integration as ledger_link
-from strategies.liquidity_hunter import generate_lh_signal, scan_reaction_zones
+from strategies.liquidity_hunter import generate_lh_signal, scan_restart_zones
 
 logger = logging.getLogger("lh.runner")
 
@@ -129,14 +129,26 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
             logger.info("LH [%s]: candele M5 insufficienti, uso M15.", asset)
             df_m5 = None
 
+    # M5 per il Restart Zone Engine — SEPARATO da df_m5 sopra, che resta
+    # XAU-only per non toccare la precisione di entry del segnale di
+    # trading (design invariato). Il Restart Zone Engine serve M5 su
+    # ENTRAMBI gli asset per raffinare le zone (deploy 19/07: v3_candles_cache
+    # ha gia' M5 anche per BTC).
+    df_m5_zones = df_m5 if asset == "XAU_USD" else None
+    if df_m5_zones is None:
+        df_m5_zones = v3_db.get_v3_candles_df(conn, asset, LH_TIMEFRAMES["M5"], limit=100)
+        if df_m5_zones is None or len(df_m5_zones) < 5:
+            logger.info("LH ZoneScan [%s]: candele M5 insufficienti, zone non raffinate.", asset)
+            df_m5_zones = None
+
     mie_context = _read_mie_context(conn, asset)
 
-    # ── Zone Scanner (v3.2) — informativo, indipendente dal segnale ──
+    # ── Restart Zone Engine (v3.4) — informativo, indipendente dal segnale ──
     # Gira SEMPRE, anche se poi il segnale di trading viene rifiutato o
     # e' un duplicato: e' un canale separato, non deve dipendere dalla
     # logica di trading qui sotto.
     try:
-        zones = scan_reaction_zones(asset, df_m15, now, mie_context=mie_context, df_m5=df_m5)
+        zones = scan_restart_zones(asset, df_m15, now, mie_context=mie_context, df_m5=df_m5_zones)
         for zone in zones:
             zref = zone.get("zone_ref")
             tier = "NEAR" if zone.get("is_near") else "WATCH"
@@ -150,9 +162,10 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                 logger.warning("LH ZoneScan [%s]: insert fallito: %s", asset, e)
                 continue
             logger.info(
-                "LH ZoneScan [%s]: zona %s [%s] dist=%.2fATR/%.1fpt score=%.2f (zone=%s)",
+                "LH ZoneScan [%s]: zona %s [%s] dist=%.2fATR/%.1fpt larghezza=%.2f refined=%s score=%.1f (zone=%s)",
                 asset, zone["zone_kind"], tier, zone["distance_atr"],
-                zone.get("distance_points", 0), zone["confluence_score"], zref,
+                zone.get("distance_points", 0), zone.get("zone_width", 0),
+                zone.get("m5_refined"), zone["restart_score"], zref,
             )
             if tier == "NEAR":
                 _notify_zone_near(asset, zone, config)
@@ -337,8 +350,8 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
 def _notify_zone_near(asset: str, zone: dict, config: dict):
     """
     Secondo livello, piu' urgente del primo avviso "sorvegliala": il
-    prezzo e' a pochi punti dalla zona (soglia per asset, non ATR --
-    qui conta la precisione assoluta di prezzo). Stessa filosofia del
+    prezzo e' a pochi punti dalla Restart Zone (soglia per asset, non ATR
+    -- qui conta la precisione assoluta di prezzo). Stessa filosofia del
     Metodo Gold Edge (Fase 5, M5): "il mercato entra nella tua area.
     Non comprare. Non vendere. Guarda." — promemoria di conferma incluso.
     """
@@ -348,16 +361,18 @@ def _notify_zone_near(asset: str, zone: dict, config: dict):
         kind = zone["zone_kind"]
         emoji = "\U0001f7e2" if kind == "BULLISH" else "\U0001f534"
         kind_it = "rialzista" if kind == "BULLISH" else "ribassista"
+        precision_note = "" if zone.get("m5_refined") else " (non raffinata, M5 assente)"
 
         def fp(v):
             if v is None: return "N/A"
             return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
 
         text = (
-            f"{emoji} \U0001f6a8 *Zona {kind_it} VICINISSIMA*\n"
+            f"{emoji} \U0001f6a8 *Restart Zone {kind_it} VICINISSIMA*\n"
             f"{asset.replace('_',' ')} — siamo dentro l'area, a {zone.get('distance_points',0):.1f} punti.\n\n"
-            f"Zona: `{fp(zone.get('zone_low'))}` - `{fp(zone.get('zone_high'))}`\n"
-            f"Forza: {zone.get('reaction_strength','?')}\n\n"
+            f"Zona: `{fp(zone.get('zone_low'))}` - `{fp(zone.get('zone_high'))}` "
+            f"({zone.get('zone_width',0):.2f} ampiezza{precision_note})\n"
+            f"Forza: {zone.get('zone_strength','?')} ({zone.get('restart_score',0):.0f}/100)\n\n"
             f"_Prima di agire, verifica tu:_\n"
             f"_- Ha preso liquidita'?_\n"
             f"_- Ha rotto la microstruttura?_\n"
@@ -372,7 +387,7 @@ def _notify_zone_near(asset: str, zone: dict, config: dict):
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
         if ntfy_topic:
-            title = f"VICINISSIMA: zona {kind_it} {asset.replace('_',' ')}"
+            title = f"VICINISSIMA: Restart Zone {kind_it} {asset.replace('_',' ')}"
             ntfy_bot.send_message(ntfy_topic, title, text.replace("*","").replace("`","").replace("_",""))
 
     except Exception as e:
@@ -381,12 +396,12 @@ def _notify_zone_near(asset: str, zone: dict, config: dict):
 
 def _notify_zone(asset: str, zone: dict, config: dict):
     """
-    Notifica INFORMATIVA di zona interessante — non un trade. Nessun
+    Notifica INFORMATIVA di Restart Zone — non un trade. Nessun
     entry/SL/TP operativo: solo "guarda qui", il resto lo decide il trader.
 
     Il messaggio guida con la frase in chiaro (zona interessante, da
-    sorvegliare, ci si sta avvicinando) — i numeri tecnici (distanza ATR,
-    confluence score) restano come dettaglio di supporto sotto, non in testa.
+    sorvegliare, ci si sta avvicinando) — i numeri tecnici restano come
+    dettaglio di supporto sotto, non in testa.
     """
     try:
         from notifications import telegram_bot, ntfy_bot
@@ -395,14 +410,15 @@ def _notify_zone(asset: str, zone: dict, config: dict):
         emoji = "\U0001f7e2" if kind == "BULLISH" else "\U0001f534"
         kind_it = "rialzista" if kind == "BULLISH" else "ribassista"
 
-        strength = zone.get("reaction_strength")
+        strength = zone.get("zone_strength")
         if strength == "STRONG":
-            headline = f"Zona {kind_it} molto interessante — sorvegliala."
+            headline = f"Restart Zone {kind_it} molto interessante — sorvegliala."
         else:
-            headline = f"Zona {kind_it} da tenere d'occhio."
+            headline = f"Restart Zone {kind_it} da tenere d'occhio."
 
-        sources = zone.get("sources") or []
-        sources_line = ", ".join(sources) if sources else "?"
+        confirmations = zone.get("confirmations") or []
+        conf_line = ", ".join(confirmations) if confirmations else "nessuna conferma SMC"
+        precision_note = "" if zone.get("m5_refined") else " \u26a0\ufe0f non raffinata (M5 assente)"
 
         def fp(v):
             if v is None: return "N/A"
@@ -411,9 +427,10 @@ def _notify_zone(asset: str, zone: dict, config: dict):
         text = (
             f"{emoji} *{headline}*\n"
             f"{asset.replace('_',' ')} — ci si sta avvicinando alla zona.\n\n"
-            f"Zona: `{fp(zone.get('zone_low'))}` - `{fp(zone.get('zone_high'))}`\n"
-            f"Distanza: {zone['distance_atr']} ATR \u2014 forza: {strength or '?'}\n"
-            f"Sostenuta da: {sources_line}\n\n"
+            f"Zona: `{fp(zone.get('zone_low'))}` - `{fp(zone.get('zone_high'))}` "
+            f"({zone.get('zone_width',0):.2f} ampiezza{precision_note})\n"
+            f"Distanza: {zone['distance_atr']} ATR \u2014 punteggio: {zone.get('restart_score',0):.0f}/100\n"
+            f"Confermata da: {conf_line}\n\n"
             f"_Informativo \u2014 non e' un segnale di trading._"
         )
 
