@@ -24,12 +24,16 @@ from storage import db as core_db
 from core import v3_db
 from core import lh_db
 from core.decision_ledger import lh_integration as ledger_link
-from strategies.liquidity_hunter import generate_lh_signal, scan_restart_zones
+from strategies.liquidity_hunter import (
+    generate_lh_signal, scan_restart_zones,
+    _new_recurrence_state, _update_zone_recurrence, _apply_recurrence_to_score,
+    _params as _lh_params, format_zone_digest,
+)
 
 logger = logging.getLogger("lh.runner")
 
 LH_ASSETS      = ["BTC_USDT", "XAU_USD"]
-LH_TIMEFRAMES  = {"H4": "4h", "M15": "15m", "M5": "5m", "D1": "1D"}
+LH_TIMEFRAMES  = {"H4": "4h", "H1": "1h", "M30": "30m", "M15": "15m", "M5": "5m", "D1": "1D"}
 
 
 # ============================================================
@@ -118,6 +122,13 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     df_h4  = core_db.get_candles_df(conn, asset, LH_TIMEFRAMES["H4"], limit=limit)
     df_m15 = v3_db.get_v3_candles_df(conn, asset, LH_TIMEFRAMES["M15"], limit=limit)
 
+    # M30/H1 -- SOLO per il Restart Zone Engine (detection impulso su
+    # timeframe piu' alti). Il segnale di trading non li usa, restano
+    # separati dal df_h4/df_m15 sopra per non toccare comportamento gia'
+    # validato.
+    df_h1_zones = core_db.get_candles_df(conn, asset, LH_TIMEFRAMES["H1"], limit=limit)
+    df_m30_zones = v3_db.get_v3_candles_df(conn, asset, LH_TIMEFRAMES["M30"], limit=limit)
+
     if len(df_m15) < 20 or len(df_h4) < 10:
         logger.warning("LH [%s]: dati insufficienti, skip.", asset)
         return
@@ -148,7 +159,79 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     # e' un duplicato: e' un canale separato, non deve dipendere dalla
     # logica di trading qui sotto.
     try:
-        zones = scan_restart_zones(asset, df_m15, now, mie_context=mie_context, df_m5=df_m5_zones)
+        n_obs = len(mie_context.get("mie_order_block_order_blocks") or [])
+        zones = scan_restart_zones(asset, df_m15, now, mie_context=mie_context,
+                                   df_m5=df_m5_zones, df_h1=df_h1_zones, df_m30=df_m30_zones)
+        logger.info(
+            "LH ZoneScan [%s]: %d OB attivi in mie_context, %d Restart Zone trovate "
+            "(m5_zones=%s, m5_len=%d)",
+            asset, n_obs, len(zones),
+            "disponibili" if df_m5_zones is not None else "ASSENTI",
+            len(df_m5_zones) if df_m5_zones is not None else 0,
+        )
+
+        # ── Ricorrenza (v3.7): aggiorno lo stato di ogni zona PRIMA di
+        # notificare -- "quante volte da qui e' REALMENTE ripartito un
+        # impulso", non solo quante volte il prezzo l'ha toccata. Zone
+        # INVALIDATED (attraversate senza reazione troppe volte) vengono
+        # escluse dalle notifiche da qui in poi.
+        rec_params = _lh_params(asset)
+        confirmation_bars = rec_params.get("recurrence_confirmation_bars", 6)
+        invalidate_after = rec_params.get("recurrence_invalidate_after_failures", 2)
+        min_impulse_atr_m15 = rec_params.get("min_impulse_atr", 0.8)
+        now_iso = now.isoformat()
+
+        enriched_zones = []
+        for zone in zones:
+            zref = zone.get("zone_ref")
+            if not zref:
+                enriched_zones.append(zone)
+                continue
+
+            prev_state = lh_db.get_zone_recurrence(conn, zref)
+            if prev_state is None:
+                prev_state = _new_recurrence_state(
+                    zref, asset, zone["direction"], zone["zone_kind"],
+                    zone["zone_high"], zone["zone_low"], now_iso,
+                )
+
+            if df_m5_zones is not None and len(df_m5_zones) > 0:
+                current_price = float(df_m5_zones.iloc[-1]["close"])
+            else:
+                current_price = float(df_m15.iloc[-1]["close"])
+
+            new_state = _update_zone_recurrence(
+                prev_state, current_price,
+                df_m15, min_impulse_atr_m15, confirmation_bars, invalidate_after, now_iso,
+            )
+            try:
+                lh_db.upsert_zone_recurrence(conn, new_state)
+            except Exception as e:
+                logger.warning("LH Recurrence [%s]: salvataggio fallito: %s", asset, e)
+
+            new_score, new_confirmations = _apply_recurrence_to_score(
+                zone["restart_score"], zone["confirmations"], new_state)
+
+            if new_state["status"] == "INVALIDATED":
+                logger.info("LH Recurrence [%s]: zona %s INVALIDATA (attraversata senza reazione x%d), esclusa.",
+                           asset, zref, new_state["failed_visits"])
+                continue  # esclusa dalle notifiche
+
+            zone = dict(zone)
+            zone["restart_score"] = new_score
+            zone["confirmations"] = new_confirmations
+            zone["recurrence_confirmed_restarts"] = new_state["confirmed_restarts"]
+            zone["recurrence_failed_visits"] = new_state["failed_visits"]
+            if new_score >= 70:
+                zone["zone_strength"] = "STRONG"
+            elif new_score >= 40:
+                zone["zone_strength"] = "MODERATE"
+            else:
+                zone["zone_strength"] = "WEAK"
+            enriched_zones.append(zone)
+
+        zones = enriched_zones
+
         for zone in zones:
             zref = zone.get("zone_ref")
             tier = "NEAR" if zone.get("is_near") else "WATCH"
@@ -172,7 +255,9 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
             else:
                 _notify_zone(asset, zone, config)
     except Exception as e:
-        logger.error("LH ZoneScan [%s]: errore (non-blocking): %s", asset, e)
+        # exc_info=True stampa il traceback completo -- prima si vedeva
+        # solo str(e), spesso vuoto o poco utile per capire DOVE falliva.
+        logger.error("LH ZoneScan [%s]: errore (non-blocking): %s", asset, e, exc_info=True)
 
     try:
         last_candle = df_m5.iloc[-1] if df_m5 is not None and len(df_m5) > 0 else df_m15.iloc[-1]
@@ -413,8 +498,10 @@ def _notify_zone(asset: str, zone: dict, config: dict):
         strength = zone.get("zone_strength")
         if strength == "STRONG":
             headline = f"Restart Zone {kind_it} molto interessante — sorvegliala."
-        else:
+        elif strength == "MODERATE":
             headline = f"Restart Zone {kind_it} da tenere d'occhio."
+        else:  # WEAK
+            headline = f"Restart Zone {kind_it} (impulso trovato, poche conferme)."
 
         confirmations = zone.get("confirmations") or []
         conf_line = ", ".join(confirmations) if confirmations else "nessuna conferma SMC"
@@ -549,3 +636,130 @@ def run_lh_scan(config: dict):
 
     conn.close()
     logger.info("=== LH Scanner: fine ciclo ===")
+
+
+# ============================================================
+# Riepilogo di fine giornata (v3.8) -- "Overnight Trading Plan"
+# ============================================================
+#
+# DEFAULT applicati in assenza di risposta esplicita -- facilmente
+# modificabili, segnalati chiaramente:
+#   - Focus BUY/SELL: punteggio migliore vince; se la differenza e'
+#     sotto 5 punti, "nessuna priorita' netta" (vedi format_zone_digest
+#     in liquidity_hunter.py). Se il criterio reale e' diverso (es. zona
+#     piu' vicina al prezzo, o conteggio zone), va cambiato li'.
+#   - Orario di invio: pensato per le 20:00 UTC (prima della chiusura
+#     europea/apertura Asia) -- il trigger orario va nello scan.yml,
+#     stesso pattern gia' usato per il Daily Brief (vedi sotto).
+
+def _format_digest_message(asset: str, digest: dict) -> str:
+    """Compone il testo del messaggio nello stile esatto del mockup fornito."""
+    lines = [f"*{asset.replace('_',' ')}*", ""]
+
+    if digest["buy_lines"]:
+        lines.append("\U0001f7e2 *BUY WATCH*")
+        lines.append("")
+        for l in digest["buy_lines"]:
+            lines.append(l["range"])
+            lines.append(l["stars"])
+            lines.append(l["tags"])
+            lines.append("")
+
+    if digest["sell_lines"]:
+        lines.append("\U0001f534 *SELL WATCH*")
+        lines.append("")
+        for l in digest["sell_lines"]:
+            lines.append(l["range"])
+            lines.append(l["stars"])
+            lines.append(l["tags"])
+            lines.append("")
+
+    if not digest["buy_lines"] and not digest["sell_lines"]:
+        lines.append("_Nessuna Restart Zone di qualita' sufficiente oggi._")
+        lines.append("")
+
+    lines.append("\U0001f3af *Focus di domani*")
+    lines.append(digest["focus"])
+
+    return "\n".join(lines)
+
+
+def send_zone_digest(config: dict):
+    """
+    Riepilogo serale delle Restart Zone ancora valide -- "Overnight
+    Trading Plan". Chiamato una volta al giorno (trigger orario nello
+    scan.yml, stesso pattern del Daily Brief).
+    """
+    conn = core_db.get_connection(config["DB_PATH"])
+    lh_db.init_lh_schema(conn)
+
+    now = datetime.now(timezone.utc)
+    assets = config.get("LH_SCANNER", {}).get("assets", LH_ASSETS)
+
+    parts = []
+    for asset in assets:
+        try:
+            zones = lh_db.get_zones_for_digest(conn, asset, hours=24)
+        except Exception as e:
+            logger.error("LH Digest [%s]: errore lettura zone: %s", asset, e)
+            continue
+
+        buy_zones  = [z for z in zones if z["zone_kind"] == "BULLISH"]
+        sell_zones = [z for z in zones if z["zone_kind"] == "BEARISH"]
+
+        if not buy_zones and not sell_zones:
+            logger.info("LH Digest [%s]: nessuna zona valida, skip.", asset)
+            continue
+
+        digest = format_zone_digest(asset, buy_zones, sell_zones)
+        parts.append(_format_digest_message(asset, digest))
+
+    conn.close()
+
+    if not parts:
+        logger.info("LH Digest: nessuna zona valida su nessun asset, nessun invio.")
+        return
+
+    header = "\U0001f319 *GOLD EDGE AI*\nOvernight Trading Plan\n\n"
+    body = "\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n".join(parts)
+    full_message = header + body
+
+    # ── Eventi macro -- riusa la stessa fonte gia' funzionante del
+    # Daily Brief (Forex Factory, nessuna API key). Non reinventata.
+    try:
+        from core.daily_brief import _get_macro_events
+        macro_events = _get_macro_events()
+        if macro_events:
+            macro_lines = ["", "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+                          "", "\U0001f4c5 *High Impact Events*"]
+            for ev in macro_events:
+                flag = {"US": "\U0001f1fa\U0001f1f8", "EU": "\U0001f1ea\U0001f1fa",
+                       "JP": "\U0001f1ef\U0001f1f5", "CN": "\U0001f1e8\U0001f1f3",
+                       "UK": "\U0001f1ec\U0001f1e7", "DE": "\U0001f1e9\U0001f1ea"}.get(ev["country"], "")
+                macro_lines.append(f"{flag} {ev['event']} \u2022 {ev['time']}")
+            full_message += "\n".join(macro_lines)
+    except Exception as e:
+        logger.warning("LH Digest: eventi macro non disponibili (non-blocking): %s", e)
+
+    bot_token  = config.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id    = config.get("TELEGRAM_CHAT_ID", "")
+    ntfy_topic = config.get("NTFY_TOPIC", "")
+
+    if bot_token and chat_id:
+        telegram_bot_sent = None
+        try:
+            from notifications import telegram_bot
+            telegram_bot_sent = telegram_bot.send_message(bot_token, chat_id, full_message)
+        except Exception as e:
+            logger.error("LH Digest: invio Telegram fallito: %s", e)
+        logger.info("LH Digest Telegram: %s", telegram_bot_sent)
+
+    if ntfy_topic:
+        try:
+            from notifications import ntfy_bot
+            title = f"Gold Edge AI — Overnight Plan {now.strftime('%d %b %Y')}"
+            plain = full_message.replace("*", "").replace("_", "")
+            ntfy_bot.send_message(ntfy_topic, title, plain)
+            logger.info("LH Digest ntfy inviato")
+        except Exception as e:
+            logger.error("LH Digest: invio ntfy fallito: %s", e)
