@@ -174,9 +174,50 @@ def _migrate_lh_flags(conn: sqlite3.Connection):
     conn.commit()
 
 
+def _migrate_zone_alerts(conn: sqlite3.Connection):
+    """
+    Migrazione per lh_zone_alerts -- MANCAVA, causa dell'errore
+    "no column named zone_width" in produzione (07/08). La tabella era
+    stata creata da un deploy precedente con lo schema piu' vecchio
+    (v3.4: confluence_score/reaction_strength/sources/has_order_block);
+    CREATE TABLE IF NOT EXISTS non aggiunge colonne a una tabella gia'
+    esistente -- serve un ALTER TABLE esplicito, stesso schema gia'
+    usato per lh_signals in _migrate_lh_flags qui sopra.
+
+    Copre TUTTE le colonne introdotte nelle evoluzioni di oggi, cosi'
+    funziona indipendentemente da quale versione storica del deploy ha
+    creato la tabella per prima.
+    """
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(lh_zone_alerts)")]
+    except sqlite3.OperationalError:
+        return  # tabella non ancora creata, ci pensa CREATE TABLE IF NOT EXISTS
+    for col, typ in [
+        ("tier", "TEXT NOT NULL DEFAULT 'WATCH'"),
+        # v3.4 originale
+        ("confluence_score", "REAL"),
+        ("reaction_strength", "TEXT"),
+        ("sources", "TEXT"),
+        ("has_order_block", "BOOLEAN DEFAULT 0"),
+        # v3.5/3.6/3.7 -- rinominato/esteso
+        ("zone_width", "REAL"),
+        ("m5_refined", "BOOLEAN DEFAULT 0"),
+        ("restart_score", "REAL"),
+        ("zone_strength", "TEXT"),
+        ("confirmations", "TEXT"),
+    ]:
+        if col not in cols:
+            try:
+                conn.execute(f"ALTER TABLE lh_zone_alerts ADD COLUMN {col} {typ}")
+            except sqlite3.OperationalError:
+                pass  # gia' presente o altra race, non bloccante
+    conn.commit()
+
+
 def init_lh_schema(conn: sqlite3.Connection):
     conn.executescript(SCHEMA_SQL)
     _migrate_lh_flags(conn)
+    _migrate_zone_alerts(conn)
     conn.commit()
 
 
