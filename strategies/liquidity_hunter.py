@@ -86,13 +86,20 @@ ASSET_PARAMS = {
         "watch_max_atr": 1.5,
         "liq_tight_atr": 3.0,
         "liq_ample_atr": 10.0,
-        # Restart Zone Engine (v3.4) -- configurabili, da ottimizzare
-        # quando ci sara' campione reale. Nessuno di questi due e' stato
+        # Restart Zone Engine (v3.5) -- configurabili, da ottimizzare
+        # quando ci sara' campione reale. Nessuno di questi e' stato
         # validato su dati storici, sono punti di partenza ragionevoli.
         "launch_body_ratio": 0.5,          # soglia "candela decisa" (M5)
         "zone_merge_tolerance_points": 50, # sotto questa distanza, due
                                             # Restart Zone della stessa
                                             # direzione vengono fuse
+        "min_impulse_atr": 0.8,        # UNICO vero filtro: forza minima
+                                        # dell'impulso M15 per considerarlo
+        "impulse_lookback_bars": 16,   # ~4h su M15: quanto indietro cercare
+        "max_zones_per_scan": 5,       # tetto per ciclo (post-merge, le
+                                        # migliori N per punteggio) -- non
+                                        # e' un filtro di qualita', solo
+                                        # anti-inondazione
     },
     "XAU_USD": {
         "sl_buffer_atr": 0.3, "min_rr": 1.2, "expiry_bars": 18,
@@ -102,6 +109,9 @@ ASSET_PARAMS = {
         "liq_ample_atr": 10.0,
         "launch_body_ratio": 0.5,
         "zone_merge_tolerance_points": 10,
+        "min_impulse_atr": 0.8,
+        "impulse_lookback_bars": 16,
+        "max_zones_per_scan": 5,
     },
 }
 DEFAULT_PARAMS = ASSET_PARAMS["BTC_USDT"]
@@ -427,39 +437,39 @@ def _build_tp_ladder(direction: str, entry: float, risk: float, atr: float,
 #     e' una scelta di design ragionevole, non validata su dati storici --
 #     va verificata quando ci sara' campione (le zone sono davvero piu'
 #     precise E utili, o troppo strette per essere raggiunte?).
+
+
 # ============================================================
-
-RESTART_ZONE_STATUSES = {"FRESH", "TESTED"}  # MITIGATED/BREAKER/INVALIDATED esclusi:
-                                              # non sono piu' un punto di "ripartenza" pulito
-
+# Distanza massima per l'alert di zona: deliberatamente PIU' AMPIA di
+# watch_max_atr (1.5, usato dal segnale di trading). Il trading vuole
+# essere vicino per rischio/precisione; l'alert informativo vuole avvisare
+# prima, quando la zona e' ancora lontana. Nessun dato storico dietro
+# questi numeri -- punto di partenza da tarare.
+#
+# Per ASSET, non un valore globale: con ATR M15 XAU ~3.5-4 punti, una
+# finestra di 3.0 ATR sarebbe solo ~11-12 punti -- piu' STRETTA della
+# soglia "vicinissima" (15 punti, vedi ZONE_SCAN_NEAR_POINTS). I due
+# livelli di avviso collasserebbero in uno solo su XAU.
 ZONE_SCAN_MAX_ATR = {
     "BTC_USDT": 3.0,
-    "XAU_USD":  6.0,   # vedi nota v3.3: finestra allargata perche' l'ATR
-                       # M15 di XAU (~3.5-4pt) renderebbe 3.0 ATR piu'
-                       # stretto della soglia NEAR (15pt), collassando i
-                       # due livelli di avviso in uno solo.
+    "XAU_USD":  6.0,
 }
 ZONE_SCAN_MAX_ATR_DEFAULT = 3.0
-
-# Punteggio minimo per notificare -- sotto, la zona ha al massimo una
-# conferma debole, troppo rumore. Vedi _score_restart_zone per la formula.
-RESTART_SCORE_MIN = 25
 
 # Secondo avviso, piu' urgente: quando il prezzo e' a pochi punti dalla
 # zona (punti assoluti, non ATR -- qui conta la precisione di entrata).
 ZONE_SCAN_NEAR_POINTS = {
-    "BTC_USDT": 75,   # punto medio del range 50-100 indicato dall'utente
-    "XAU_USD":  15,   # punto medio del range 10-20 indicato dall'utente
+    "BTC_USDT": 75,
+    "XAU_USD":  15,
 }
 
 
 def _m5_window_for_m15_candle(df_m5: pd.DataFrame, formation_ts, lookback_extra_ms: int = 5*60*1000) -> pd.DataFrame:
     """
     Ritorna le candele M5 che compongono la candela M15 iniziata a
-    formation_ts (tipicamente 3 candele M5), allargata di una M5 PRIMA
-    dell'inizio -- il vero punto di svolta puo' cadere esattamente al
-    bordo tra due candele M15. df_m5 deve avere 'timestamp' in
-    millisecondi, stessa convenzione usata altrove nel sistema.
+    formation_ts, allargata di lookback_extra_ms PRIMA dell'inizio -- il
+    vero punto di svolta puo' cadere esattamente al bordo tra due
+    candele M15. df_m5 deve avere 'timestamp' in millisecondi.
     """
     try:
         ts0 = int(float(formation_ts))
@@ -479,9 +489,7 @@ def _is_accelerating_candle(row, direction: str, body_ratio_threshold: float) ->
     Vera SOLO se ENTRAMBE le condizioni sono soddisfatte:
       1. Direzione: bullish per zona BULLISH, bearish per zona BEARISH.
       2. Corpo deciso: |close-open| / (high-low) >= body_ratio_threshold
-         (configurabile per asset in ASSET_PARAMS["launch_body_ratio"];
-         default 0.5, la stessa soglia che order_block_engine.py usa
-         gia' per definire una candela di impulso a livello M15).
+         (configurabile per asset in ASSET_PARAMS["launch_body_ratio"]).
 
     Un piccolo rimbalzo nella direzione giusta ma dominato da wick (corpo
     sotto la soglia) NON conta come accelerazione -- e' rumore, non
@@ -503,30 +511,22 @@ def _find_launch_candle(window, direction: str, body_ratio_threshold: float):
     """
     Trova la candela M5 da cui e' REALMENTE partita l'accelerazione --
     non necessariamente quella con l'estremo assoluto (che puo' essere
-    solo uno spike/stop-hunt: scende in wick e rimbalza subito dentro la
-    STESSA candela, senza che il movimento sostenuto sia partito li'),
-    e non necessariamente la prima candela di colore giusto incontrata
-    (che puo' essere solo un piccolo rimbalzo insignificante, dominato
-    da wick, prima della VERA accelerazione).
+    solo uno spike/stop-hunt rientrato nella stessa candela), e non
+    necessariamente la prima candela di colore giusto incontrata (che
+    puo' essere solo un piccolo rimbalzo insignificante).
 
-    REGOLA OGGETTIVA (sempre la stessa, nessuna interpretazione):
-    si cammina all'INDIETRO dalla fine della finestra M5 e si prende la
-    PRIMA candela incontrata che NON e' "in accelerazione" secondo
-    _is_accelerating_candle -- cioe' l'ultima, in ordine cronologico,
-    prima che il movimento diventi DECISO (non solo "nella direzione
-    giusta", ma con un corpo che domina sul wick).
+    REGOLA OGGETTIVA (sempre la stessa): si cammina all'INDIETRO dalla
+    fine della finestra M5 e si prende la PRIMA candela incontrata che
+    NON e' "in accelerazione" secondo _is_accelerating_candle.
 
-    Se OGNI candela nella finestra risulta "in accelerazione" (raro:
-    significa che gia' a M5 il movimento era deciso fin dall'inizio della
-    finestra), fallback sull'estremo assoluto -- meglio quello che
-    l'intera candela M15 originale.
+    Se OGNI candela nella finestra risulta "in accelerazione", fallback
+    sull'estremo assoluto.
     """
     rows = list(window.iterrows())
     for _, row in reversed(rows):
         if not _is_accelerating_candle(row, direction, body_ratio_threshold):
             return row
 
-    # Fallback: tutte le candele erano gia' "in accelerazione"
     if direction == "BULLISH":
         idx = window["low"].astype(float).idxmin()
     else:
@@ -534,88 +534,166 @@ def _find_launch_candle(window, direction: str, body_ratio_threshold: float):
     return window.loc[idx]
 
 
-def _refine_zone_with_m5(ob: dict, df_m5, body_ratio_threshold: float) -> tuple:
+# ============================================================
+# RILEVAMENTO DIRETTO DELL'IMPULSO (v3.5)
+#
+# CAMBIO RISPETTO A v3.4: prima le Restart Zone nascevano SOLO dagli
+# Order Block gia' registrati da order_block_engine.py -- che ha una sua
+# logica interna (lookback limitato, conteggio massimo, propri criteri
+# di scadenza). Se quell'engine non aveva gia' un OB attivo in quel
+# momento, la zona non esisteva per LH, indipendentemente da quanto
+# fosse forte l'impulso reale sul grafico. Causa diretta dello zero
+# notifiche del 07/08.
+#
+# ORA: LH rileva l'impulso DA SOLO, direttamente dalle candele M15,
+# senza dipendere dal registro OB di un altro engine. L'UNICO vero
+# filtro e' la forza dell'impulso stesso (min_impulse_atr) -- non SMC.
+# Order Block, FVG (via Reaction Map), BOS, sweep diventano bonus di
+# SOVRAPPOSIZIONE sulla zona gia' trovata: "questa zona coincide anche
+# con un OB/zona Reaction Map registrati? Punti in piu'." Mai un
+# prerequisito per l'esistenza della zona.
+# ============================================================
+
+def _detect_m15_impulses(df_m15: pd.DataFrame, atr_m15: float,
+                         min_impulse_atr: float, lookback_bars: int) -> list:
     """
-    Raffina zone_high/zone_low di un OB usando le candele M5 al suo
-    interno. Ritorna (zone_high, zone_low, refined: bool).
+    Rileva candele M15 di impulso reale nelle ultime lookback_bars barre.
+    UNICO filtro: |close-open| >= min_impulse_atr * ATR -- la forza del
+    movimento stesso, non un giudizio SMC.
 
-    Usa _find_launch_candle: l'ULTIMA candela M5 di colore opposto prima
-    del movimento deciso -- non la candela con l'estremo assoluto, che
-    puo' essere solo uno spike/stop-hunt rientrato nella stessa candela
-    e quindi NON il vero punto da cui e' partita l'accelerazione.
-
-    BULLISH: zone_low = low della candela di lancio, zone_high = il TOP
-        del suo corpo (esclude l'eventuale wick sopra: rumore, non parte
-        del lancio).
-    BEARISH: speculare.
+    Ritorna lista di {"index", "timestamp", "direction", "displacement_atr"}.
     """
-    zh_wide, zl_wide = float(ob["zone_high"]), float(ob["zone_low"])
+    if atr_m15 <= 0 or len(df_m15) == 0:
+        return []
 
-    if df_m5 is None or len(df_m5) == 0:
-        return zh_wide, zl_wide, False
+    n = len(df_m15)
+    start = max(0, n - lookback_bars)
+    impulses = []
 
-    window = _m5_window_for_m15_candle(df_m5, ob.get("formation_timestamp"))
-    if len(window) == 0:
-        return zh_wide, zl_wide, False
+    for i in range(start, n):
+        row = df_m15.iloc[i]
+        o, c = float(row["open"]), float(row["close"])
+        body = abs(c - o)
+        disp_atr = body / atr_m15
+        if disp_atr < min_impulse_atr:
+            continue
+        impulses.append({
+            "index": i,
+            "timestamp": int(row["timestamp"]),
+            "direction": "BULLISH" if c > o else "BEARISH",
+            "displacement_atr": round(disp_atr, 3),
+        })
 
-    direction = ob.get("direction")
-    if direction not in ("BULLISH", "BEARISH"):
-        return zh_wide, zl_wide, False
-
-    core = _find_launch_candle(window, direction, body_ratio_threshold)
-
-    if direction == "BULLISH":
-        zone_low = float(core["low"])
-        zone_high = max(float(core["open"]), float(core["close"]))
-        if zone_high <= zone_low:
-            zone_high = zone_low + (zh_wide - zl_wide) * 0.1  # fallback minimo
-    else:
-        zone_high = float(core["high"])
-        zone_low = min(float(core["open"]), float(core["close"]))
-        if zone_low >= zone_high:
-            zone_low = zone_high - (zh_wide - zl_wide) * 0.1
-
-    return round(zone_high, 4), round(zone_low, 4), True
+    return impulses
 
 
-def _score_restart_zone(ob: dict, mie_context: dict, refined: bool) -> tuple:
+def _zone_from_impulse(impulse: dict, df_m15: pd.DataFrame, df_m5, body_ratio_threshold: float) -> tuple:
     """
-    Punteggio di CONFERMA (0-100) sulla zona gia' individuata e raffinata.
-    Ogni fattore SMC aggiunge o non aggiunge -- nessuno di questi crea la
-    zona, la zona esiste gia' dall'impulso trovato dall'Order Block Engine.
+    Costruisce la Restart Zone per un impulso rilevato direttamente su
+    M15. Riusa _find_launch_candle (stessa regola oggettiva gia'
+    validata) su una finestra M5 che copre la candela di impulso stessa
+    E un margine prima -- non serve piu' passare da un OB gia' registrato.
+
+    FALLBACK quando M5 non e' disponibile (o la finestra e' vuota): usa
+    la candela M15 immediatamente PRIMA dell'impulso (il suo intero
+    range high/low) come zona grezza -- non raffinata, ma sempre
+    presente. Senza questo fallback, un guasto nel fetch M5 azzererebbe
+    OGNI notifica, esattamente il tipo di fragilita' silenziosa gia'
+    incontrata in produzione il 07/08.
+
+    Ritorna (zone_high, zone_low, refined: bool).
+    """
+    direction = impulse["direction"]
+    ts = impulse["timestamp"]
+
+    if df_m5 is not None and len(df_m5) > 0:
+        window = _m5_window_for_m15_candle(df_m5, ts, lookback_extra_ms=15*60*1000)
+        if len(window) > 0:
+            core = _find_launch_candle(window, direction, body_ratio_threshold)
+            if direction == "BULLISH":
+                zone_low = float(core["low"])
+                zone_high = max(float(core["open"]), float(core["close"]))
+                if zone_high <= zone_low:
+                    zone_high = zone_low + 0.01
+            else:
+                zone_high = float(core["high"])
+                zone_low = min(float(core["open"]), float(core["close"]))
+                if zone_low >= zone_high:
+                    zone_low = zone_high - 0.01
+            return round(zone_high, 4), round(zone_low, 4), True
+
+    # Fallback: candela M15 immediatamente prima dell'impulso, range intero
+    idx = impulse.get("index", 0)
+    fallback_idx = idx - 1 if idx > 0 else idx
+    if fallback_idx < 0 or fallback_idx >= len(df_m15):
+        return None, None, False
+    fb = df_m15.iloc[fallback_idx]
+    zone_high = float(fb["high"])
+    zone_low = float(fb["low"])
+    if zone_high <= zone_low:
+        return None, None, False
+    return round(zone_high, 4), round(zone_low, 4), False
+
+
+def _ranges_overlap(low1, high1, low2, high2) -> bool:
+    return low1 <= high2 and low2 <= high1
+
+
+def _score_restart_zone(zone_high: float, zone_low: float, displacement_atr: float,
+                        mie_context: dict, refined: bool) -> tuple:
+    """
+    Punteggio di ARRICCHIMENTO (0-100) sulla zona gia' individuata
+    dall'impulso. Nessuno di questi fattori puo' eliminare la zona --
+    solo alzarne il punteggio. La forza dell'impulso stesso e' la
+    componente principale (fino a 30 punti), il resto e' conferma
+    incrociata via SOVRAPPOSIZIONE con quanto altri engine hanno gia'
+    trovato (non tramite un legame diretto a un singolo OB).
     """
     factors = []
     score = 0.0
 
-    if ob.get("has_sweep_before"):
-        score += 25.0
-        factors.append("SWEEP")
-    if ob.get("has_bos"):
-        score += 25.0
-        factors.append("BOS")
-    if ob.get("has_fvg"):
-        score += 20.0
-        factors.append("FVG")
+    # Forza dell'impulso -- componente primaria, sempre presente
+    disp_score = min(displacement_atr / 2.5, 1.0) * 30.0
+    score += disp_score
+    factors.append(f"IMPULSO({displacement_atr:.1f}ATR)")
 
-    disp = float(ob.get("displacement_atr") or 0)
-    disp_score = min(disp / 2.0, 1.0) * 20.0  # 2+ ATR di impulso = punteggio pieno
-    if disp_score > 0:
-        score += disp_score
-        factors.append(f"IMPULSO({disp:.1f}ATR)")
+    # Sovrapposizione con un Order Block registrato (qualunque stato
+    # tranne INVALIDATED/EXPIRED -- anche un OB gia' testato conferma
+    # che li' e' successo qualcosa di strutturalmente rilevante)
+    for ob in (mie_context.get("mie_order_block_order_blocks") or []):
+        if ob.get("status") in ("INVALIDATED", "EXPIRED"):
+            continue
+        obh, obl = ob.get("zone_high"), ob.get("zone_low")
+        if obh is None or obl is None:
+            continue
+        if _ranges_overlap(zone_low, zone_high, float(obl), float(obh)):
+            score += 20.0
+            factors.append("ORDER_BLOCK")
+            if ob.get("has_bos"):
+                score += 15.0
+                factors.append("BOS")
+            if ob.get("has_sweep_before"):
+                score += 15.0
+                factors.append("SWEEP")
+            if ob.get("has_fvg"):
+                score += 10.0
+                factors.append("FVG")
+            break  # un solo match: evita di sommare piu' OB sovrapposti
 
-    # Reaction Map come conferma esterna (non come sorgente della zona)
-    mid = (float(ob["zone_high"]) + float(ob["zone_low"])) / 2
+    # Sovrapposizione con una zona Reaction Map (che fonde gia' FVG,
+    # Liquidity, Structure -- conferma incrociata indipendente dall'OB)
     for rz in (mie_context.get("mie_reaction_map_zones") or []):
         rzh, rzl = rz.get("zone_high"), rz.get("zone_low")
         if rzh is None or rzl is None:
             continue
-        if float(rzl) <= mid <= float(rzh) and rz.get("reaction_strength") in ("STRONG", "MODERATE"):
+        if _ranges_overlap(zone_low, zone_high, float(rzl), float(rzh)) \
+           and rz.get("reaction_strength") in ("STRONG", "MODERATE"):
             score += 10.0
             factors.append("REACTION_MAP")
             break
 
     if not refined:
-        score *= 0.7  # zona non raffinata (M5 assente): meno affidabile, penalizzata
+        score *= 0.9  # zona non raffinata (M5 assente): lieve penalita'
 
     return round(min(score, 100.0), 1), factors
 
@@ -630,12 +708,11 @@ def _merge_nearby_zones(zones: list, asset: str) -> list:
     Solo zone della STESSA direzione vengono fuse: una zona bullish e una
     bearish alla stessa altezza restano distinte (significano cose
     diverse). Il campo "merged_from" indica quante zone erano nel gruppo
-    (1 = nessun merge avvenuto), utile per capire quanta conferma
-    incrociata c'e' dietro la zona notificata.
+    (1 = nessun merge avvenuto).
 
-    Nessun dato storico dietro zone_merge_tolerance_points -- come
-    launch_body_ratio, e' configurabile per asset in ASSET_PARAMS,
-    punto di partenza da tarare quando ci sara' campione.
+    Nessun dato storico dietro zone_merge_tolerance_points -- come gli
+    altri parametri del Restart Zone Engine, configurabile per asset in
+    ASSET_PARAMS, punto di partenza da tarare quando ci sara' campione.
     """
     P = _params(asset)
     tolerance = P.get("zone_merge_tolerance_points", 20)
@@ -675,29 +752,25 @@ def scan_restart_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
                        mie_context: dict = None,
                        df_m5: pd.DataFrame = None) -> list:
     """
-    Identifica Bullish/Bearish Restart Zone: zone precise (idealmente
-    4-10$ su XAU, proporzionale su BTC) da cui il prezzo e' GIA' partito
-    con forza in passato -- non zone SMC generiche.
+    Identifica Bullish/Bearish Restart Zone rilevando GLI IMPULSI
+    direttamente dalle candele M15 -- non piu' dipendente dal registro
+    Order Block di un altro engine. L'UNICO filtro e' la forza
+    dell'impulso (min_impulse_atr, per asset). SMC (Order Block, FVG via
+    Reaction Map, BOS, sweep) arricchisce solo il punteggio, non decide
+    se la zona esiste.
 
-    Fonte della zona: gli Order Block gia' calcolati da order_block_engine
-    (che e' gia' impulso-first), raffinati con le candele M5 per tagliare
-    il rumore della candela M15 intera. SMC (BOS, sweep, FVG, Reaction Map)
-    contribuisce SOLO al punteggio di conferma, mai alla creazione.
-
-    Ritorna lista di zone: [{
+    Ritorna lista di zone (max max_zones_per_scan per ciclo, le migliori
+    per punteggio dopo il merge delle vicine): [{
         "direction": "BUY"|"SELL", "zone_kind": "BULLISH"|"BEARISH",
-        "zone_ref": str (ob_id, stabile), "zone_high": float, "zone_low": float,
-        "zone_width": float, "m5_refined": bool,
-        "distance_atr": float, "distance_points": float, "is_near": bool,
-        "restart_score": float, "zone_strength": "STRONG"|"MODERATE",
-        "confirmations": list[str],
+        "zone_ref": str (stabile: asset+direzione+timestamp impulso),
+        "zone_high": float, "zone_low": float, "zone_width": float,
+        "m5_refined": bool, "distance_atr": float, "distance_points": float,
+        "is_near": bool, "restart_score": float,
+        "zone_strength": "STRONG"|"MODERATE"|"WEAK",
+        "confirmations": list[str], "merged_from": int,
     }, ...]
     """
     if not mie_context:
-        return []
-
-    obs = mie_context.get("mie_order_block_order_blocks") or []
-    if not obs:
         return []
 
     src = df_m5 if (df_m5 is not None and len(df_m5) > 0) else df_m15
@@ -715,37 +788,44 @@ def scan_restart_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
     if atr <= 0:
         return []
 
+    P = _params(asset)
     max_atr = ZONE_SCAN_MAX_ATR.get(asset, ZONE_SCAN_MAX_ATR_DEFAULT)
     near_threshold = ZONE_SCAN_NEAR_POINTS.get(asset)
-    P = _params(asset)
     body_ratio_threshold = P.get("launch_body_ratio", 0.5)
+    min_impulse_atr = P.get("min_impulse_atr", 0.8)
+    lookback_bars = P.get("impulse_lookback_bars", 16)
+    max_zones = P.get("max_zones_per_scan", 5)
+
+    impulses = _detect_m15_impulses(df_m15, atr, min_impulse_atr, lookback_bars)
 
     zones = []
-    for ob in obs:
-        if ob.get("status") not in RESTART_ZONE_STATUSES:
-            continue
-        direction_raw = ob.get("direction")
-        if direction_raw not in ("BULLISH", "BEARISH"):
+    for impulse in impulses:
+        zh, zl, refined = _zone_from_impulse(impulse, df_m15, df_m5, body_ratio_threshold)
+        if zh is None:
             continue
 
-        zh, zl, refined = _refine_zone_with_m5(ob, df_m5, body_ratio_threshold)
         mid = (zh + zl) / 2
         distance_atr = abs(price - mid) / atr
         if distance_atr > max_atr:
             continue
 
-        score, confirmations = _score_restart_zone(ob, mie_context, refined)
-        if score < RESTART_SCORE_MIN:
-            continue
+        score, confirmations = _score_restart_zone(
+            zh, zl, impulse["displacement_atr"], mie_context, refined)
 
         distance_points = abs(price - mid)
         is_near = near_threshold is not None and distance_points <= near_threshold
-        strength = "STRONG" if score >= 70 else "MODERATE"
+        if score >= 70:
+            strength = "STRONG"
+        elif score >= 40:
+            strength = "MODERATE"
+        else:
+            strength = "WEAK"
 
+        direction_raw = impulse["direction"]
         zones.append({
             "direction": "BUY" if direction_raw == "BULLISH" else "SELL",
             "zone_kind": direction_raw,
-            "zone_ref": str(ob.get("id", "?")),
+            "zone_ref": f"impulse:{asset}:{direction_raw}:{impulse['timestamp']}",
             "zone_high": zh,
             "zone_low": zl,
             "zone_width": round(zh - zl, 4),
@@ -759,17 +839,12 @@ def scan_restart_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
         })
 
     zones = _merge_nearby_zones(zones, asset)
-    zones.sort(key=lambda z: z["distance_atr"])
+    zones.sort(key=lambda z: z["restart_score"], reverse=True)
+    zones = zones[:max_zones]           # tetto anti-inondazione, non di qualita'
+    zones.sort(key=lambda z: z["distance_atr"])  # per la notifica: piu' vicine prima
     return zones
 
 
-# ============================================================
-# Entry Point
-# ============================================================
-
-
-# ============================================================
-# Entry Point
 # ============================================================
 
 def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
