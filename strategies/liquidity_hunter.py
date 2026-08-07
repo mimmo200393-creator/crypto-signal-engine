@@ -86,6 +86,13 @@ ASSET_PARAMS = {
         "watch_max_atr": 1.5,
         "liq_tight_atr": 3.0,
         "liq_ample_atr": 10.0,
+        # Restart Zone Engine (v3.4) -- configurabili, da ottimizzare
+        # quando ci sara' campione reale. Nessuno di questi due e' stato
+        # validato su dati storici, sono punti di partenza ragionevoli.
+        "launch_body_ratio": 0.5,          # soglia "candela decisa" (M5)
+        "zone_merge_tolerance_points": 50, # sotto questa distanza, due
+                                            # Restart Zone della stessa
+                                            # direzione vengono fuse
     },
     "XAU_USD": {
         "sl_buffer_atr": 0.3, "min_rr": 1.2, "expiry_bars": 18,
@@ -93,6 +100,8 @@ ASSET_PARAMS = {
         "watch_max_atr": 1.5,
         "liq_tight_atr": 3.0,
         "liq_ample_atr": 10.0,
+        "launch_body_ratio": 0.5,
+        "zone_merge_tolerance_points": 10,
     },
 }
 DEFAULT_PARAMS = ASSET_PARAMS["BTC_USDT"]
@@ -385,103 +394,310 @@ def _build_tp_ladder(direction: str, entry: float, risk: float, atr: float,
 
 
 # ============================================================
-# ZONE SCANNER (v3.3) — informativo, separato dal segnale di trading
+# RESTART ZONE ENGINE (v3.4) — informativo, separato dal segnale di trading
 #
-# v3.3: riscritto per usare direttamente Reaction Map invece di cercare
-# solo Order Block. Motivo: Reaction Map fonde GIA' OB + FVG + Liquidity +
-# Structure in un'unica lista di zone (fino a 20), ognuna con confini reali
-# (zone_high/zone_low) e un punteggio di confluenza continuo. Cercare solo
-# OB significava perdere zone importanti sostenute da FVG/Liquidity/Structure
-# senza un OB nelle vicinanze -- esattamente il caso delle zone di reazione
-# "storiche" (es. fasce dove il prezzo ha fatto ping-pong) che potevano non
-# avere un OB fresco ma restano rilevanti.
+# CAMBIO DI APPROCCIO rispetto a v3.3 (che leggeva Reaction Map):
+# l'utente ha chiesto di ragionare "impulso-first" invece che "SMC-first".
+#
+# Verificato leggendo order_block_engine.py: l'Order Block Engine e' GIA'
+# impulso-first (trova prima la candela di impulso >= 1 ATR, POI cammina
+# indietro fino a 5 candele per trovare l'ultima candela opposta -- quella
+# diventa l'OB). Non serve reinventare questa parte: la riusiamo leggendo
+# gli OB gia' calcolati da mie_context, invece di duplicare la detection.
+#
+# Il problema reale non era "SMC crea la zona invece dell'impulso" -- era
+# che la zona finale usa l'INTERO range wick-to-wick della candela M15
+# opposta (order_block_engine.py righe ~361-362): su un asset volatile
+# una singola candela M15 puo' essere larga 40-60$, esattamente il caso
+# segnalato (zona 4224-4282 su XAU).
+#
+# FIX: per ogni OB attivo, raffiniamo zone_high/zone_low scendendo alle
+# candele M5 che compongono quella candela M15 -- troviamo il preciso
+# punto di lancio (l'estremo reale + il corpo della candela M5 che lo
+# contiene), invece dell'intera candela M15. SMC (has_bos, has_sweep_before,
+# has_fvg, Reaction Map) entra SOLO come punteggio di conferma sulla zona
+# gia' raffinata -- mai per crearla, come richiesto.
 #
 # ONESTA' SUI LIMITI:
-#   - confluence_score misura QUANTI MODULI si sovrappongono ORA in quella
-#     zona (OB+FVG+Liquidity+Structure), non quante volte il prezzo ci e'
-#     gia' tornato in passato. E' una buona proxy di "zona importante", ma
-#     NON e' un contatore storico di tocchi/reazioni -- quello richiederebbe
-#     un nuovo tracciamento, non ancora presente.
-#   - ZONE_SCAN_MAX_ATR e' una scelta pratica (avviso con piu' anticipo,
-#     su richiesta esplicita), NON un numero calibrato su dati storici come
-#     watch_max_atr. Va verificato/aggiustato quando ci sara' campione.
+#   - Se le candele M5 per quella finestra non sono disponibili (gap dati),
+#     si ricade sulla zona M15 intera (non raffinata) e lo si segnala
+#     esplicitamente (campo "m5_refined": False) invece di fingere
+#     precisione che non c'e'.
+#   - La regola di raffinamento (candela M5 con l'estremo + il suo corpo)
+#     e' una scelta di design ragionevole, non validata su dati storici --
+#     va verificata quando ci sara' campione (le zone sono davvero piu'
+#     precise E utili, o troppo strette per essere raggiunte?).
 # ============================================================
 
-# Distanza massima per l'alert di zona: deliberatamente PIU' AMPIA di
-# watch_max_atr (1.5, usato dal segnale di trading). Il trading vuole
-# essere vicino per rischio/precisione; l'alert informativo vuole avvisare
-# prima, quando la zona e' ancora lontana. Nessun dato storico dietro
-# questi numeri -- punto di partenza da tarare.
-#
-# Per ASSET, non un valore globale: con ATR M15 XAU ~3.5-4 punti, una
-# finestra di 3.0 ATR sarebbe solo ~11-12 punti -- piu' STRETTA della
-# soglia "vicinissima" (15 punti, vedi ZONE_SCAN_NEAR_POINTS). I due
-# livelli di avviso collasserebbero in uno solo su XAU (si riceverebbe
-# quasi sempre l'urgente, mai il "sorvegliala" prima). Finestra allargata
-# specificamente per XAU perche' l'escalation a due livelli abbia spazio
-# per funzionare davvero.
+RESTART_ZONE_STATUSES = {"FRESH", "TESTED"}  # MITIGATED/BREAKER/INVALIDATED esclusi:
+                                              # non sono piu' un punto di "ripartenza" pulito
+
 ZONE_SCAN_MAX_ATR = {
-    "BTC_USDT": 3.0,   # invariato: 3 ATR (~171pt) >> soglia vicino (75pt), va bene
-    "XAU_USD":  6.0,   # ~22-24pt: ora piu' largo della soglia vicino (15pt)
+    "BTC_USDT": 3.0,
+    "XAU_USD":  6.0,   # vedi nota v3.3: finestra allargata perche' l'ATR
+                       # M15 di XAU (~3.5-4pt) renderebbe 3.0 ATR piu'
+                       # stretto della soglia NEAR (15pt), collassando i
+                       # due livelli di avviso in uno solo.
 }
 ZONE_SCAN_MAX_ATR_DEFAULT = 3.0
 
-# Sotto questa soglia la zona e' sostenuta da un solo modulo debole:
-# troppo rumore per notificare. STRONG/MODERATE sono le due fasce alte
-# gia' definite dentro reaction_map.py stesso (score>=70 / score>=40),
-# quindi non e' un numero nuovo inventato qui -- e' la soglia che
-# l'engine Reaction Map usa gia' per il proprio "reaction_strength".
-ZONE_SCAN_MIN_STRENGTH = {"STRONG", "MODERATE"}
+# Punteggio minimo per notificare -- sotto, la zona ha al massimo una
+# conferma debole, troppo rumore. Vedi _score_restart_zone per la formula.
+RESTART_SCORE_MIN = 25
 
 # Secondo avviso, piu' urgente: quando il prezzo e' a pochi punti dalla
-# zona (non ATR -- punti assoluti, perche' qui conta la precisione di
-# entrata, non la volatilita' relativa). Valori diversi per asset: scala
-# di prezzo molto diversa tra BTC (~64.000) e XAU (~4.000).
+# zona (punti assoluti, non ATR -- qui conta la precisione di entrata).
 ZONE_SCAN_NEAR_POINTS = {
-    "BTC_USDT": 75,   # punto medio del range 50-100 indicato
-    "XAU_USD":  15,   # punto medio del range 10-20 indicato
+    "BTC_USDT": 75,   # punto medio del range 50-100 indicato dall'utente
+    "XAU_USD":  15,   # punto medio del range 10-20 indicato dall'utente
 }
 
 
-def _zone_ref_from_price(asset: str, midpoint: float) -> str:
+def _m5_window_for_m15_candle(df_m5: pd.DataFrame, formation_ts, lookback_extra_ms: int = 5*60*1000) -> pd.DataFrame:
     """
-    zone_id di Reaction Map e' un uuid rigenerato a ogni snapshot -- non
-    stabile tra un ciclo e l'altro per "la stessa" zona reale. Per la
-    dedup serve un riferimento stabile: bucket di prezzo (stessa logica
-    gia' usata altrove nel sistema per deduplicare livelli vicini).
+    Ritorna le candele M5 che compongono la candela M15 iniziata a
+    formation_ts (tipicamente 3 candele M5), allargata di una M5 PRIMA
+    dell'inizio -- il vero punto di svolta puo' cadere esattamente al
+    bordo tra due candele M15. df_m5 deve avere 'timestamp' in
+    millisecondi, stessa convenzione usata altrove nel sistema.
     """
-    bucket = round(midpoint / max(midpoint * 0.001, 0.01))
-    return f"rm:{asset}:{bucket}"
+    try:
+        ts0 = int(float(formation_ts))
+    except (TypeError, ValueError):
+        return df_m5.iloc[0:0]
+    ts_start = ts0 - lookback_extra_ms
+    ts_end = ts0 + 15 * 60 * 1000  # +15 minuti in ms
+    mask = (df_m5["timestamp"] >= ts_start) & (df_m5["timestamp"] < ts_end)
+    return df_m5[mask].sort_values("timestamp")
 
 
-def scan_reaction_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
-                        mie_context: dict = None,
-                        df_m5: pd.DataFrame = None) -> list:
+def _is_accelerating_candle(row, direction: str, body_ratio_threshold: float) -> bool:
     """
-    Identifica zone di reazione (BULLISH e/o BEARISH) vicine al prezzo,
-    lette direttamente dalla lista completa di Reaction Map -- non solo
-    zone con un Order Block, qualunque zona sostenuta da abbastanza
-    confluenza (OB, FVG, Liquidity, Structure, in qualunque combinazione).
+    Definizione OGGETTIVA di "candela in accelerazione": deterministica,
+    stessa regola applicata sempre, nessuna interpretazione caso per caso.
 
-    Ritorna una lista di zone (puo' averne piu' di una per direzione,
-    a differenza della v3.2 che ne cercava al massimo una per lato):
-        [{
-            "direction": "BUY" | "SELL",
-            "zone_kind": "BULLISH" | "BEARISH",
-            "zone_ref": str,                       # stabile, per la dedup
-            "zone_high": float, "zone_low": float,
-            "distance_atr": float,
-            "confluence_score": float,             # 0-100, da Reaction Map
-            "reaction_strength": str,               # STRONG/MODERATE
-            "sources": list,                        # es. ["ORDER_BLOCK","FVG"]
-            "has_order_block": bool,
-        }, ...]
+    Vera SOLO se ENTRAMBE le condizioni sono soddisfatte:
+      1. Direzione: bullish per zona BULLISH, bearish per zona BEARISH.
+      2. Corpo deciso: |close-open| / (high-low) >= body_ratio_threshold
+         (configurabile per asset in ASSET_PARAMS["launch_body_ratio"];
+         default 0.5, la stessa soglia che order_block_engine.py usa
+         gia' per definire una candela di impulso a livello M15).
+
+    Un piccolo rimbalzo nella direzione giusta ma dominato da wick (corpo
+    sotto la soglia) NON conta come accelerazione -- e' rumore, non
+    convinzione.
+    """
+    o, h, l, c = float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"])
+    rng = h - l
+    if rng <= 0:
+        return False
+    body_ratio = abs(c - o) / rng
+
+    if direction == "BULLISH":
+        return c > o and body_ratio >= body_ratio_threshold
+    else:
+        return c < o and body_ratio >= body_ratio_threshold
+
+
+def _find_launch_candle(window, direction: str, body_ratio_threshold: float):
+    """
+    Trova la candela M5 da cui e' REALMENTE partita l'accelerazione --
+    non necessariamente quella con l'estremo assoluto (che puo' essere
+    solo uno spike/stop-hunt: scende in wick e rimbalza subito dentro la
+    STESSA candela, senza che il movimento sostenuto sia partito li'),
+    e non necessariamente la prima candela di colore giusto incontrata
+    (che puo' essere solo un piccolo rimbalzo insignificante, dominato
+    da wick, prima della VERA accelerazione).
+
+    REGOLA OGGETTIVA (sempre la stessa, nessuna interpretazione):
+    si cammina all'INDIETRO dalla fine della finestra M5 e si prende la
+    PRIMA candela incontrata che NON e' "in accelerazione" secondo
+    _is_accelerating_candle -- cioe' l'ultima, in ordine cronologico,
+    prima che il movimento diventi DECISO (non solo "nella direzione
+    giusta", ma con un corpo che domina sul wick).
+
+    Se OGNI candela nella finestra risulta "in accelerazione" (raro:
+    significa che gia' a M5 il movimento era deciso fin dall'inizio della
+    finestra), fallback sull'estremo assoluto -- meglio quello che
+    l'intera candela M15 originale.
+    """
+    rows = list(window.iterrows())
+    for _, row in reversed(rows):
+        if not _is_accelerating_candle(row, direction, body_ratio_threshold):
+            return row
+
+    # Fallback: tutte le candele erano gia' "in accelerazione"
+    if direction == "BULLISH":
+        idx = window["low"].astype(float).idxmin()
+    else:
+        idx = window["high"].astype(float).idxmax()
+    return window.loc[idx]
+
+
+def _refine_zone_with_m5(ob: dict, df_m5, body_ratio_threshold: float) -> tuple:
+    """
+    Raffina zone_high/zone_low di un OB usando le candele M5 al suo
+    interno. Ritorna (zone_high, zone_low, refined: bool).
+
+    Usa _find_launch_candle: l'ULTIMA candela M5 di colore opposto prima
+    del movimento deciso -- non la candela con l'estremo assoluto, che
+    puo' essere solo uno spike/stop-hunt rientrato nella stessa candela
+    e quindi NON il vero punto da cui e' partita l'accelerazione.
+
+    BULLISH: zone_low = low della candela di lancio, zone_high = il TOP
+        del suo corpo (esclude l'eventuale wick sopra: rumore, non parte
+        del lancio).
+    BEARISH: speculare.
+    """
+    zh_wide, zl_wide = float(ob["zone_high"]), float(ob["zone_low"])
+
+    if df_m5 is None or len(df_m5) == 0:
+        return zh_wide, zl_wide, False
+
+    window = _m5_window_for_m15_candle(df_m5, ob.get("formation_timestamp"))
+    if len(window) == 0:
+        return zh_wide, zl_wide, False
+
+    direction = ob.get("direction")
+    if direction not in ("BULLISH", "BEARISH"):
+        return zh_wide, zl_wide, False
+
+    core = _find_launch_candle(window, direction, body_ratio_threshold)
+
+    if direction == "BULLISH":
+        zone_low = float(core["low"])
+        zone_high = max(float(core["open"]), float(core["close"]))
+        if zone_high <= zone_low:
+            zone_high = zone_low + (zh_wide - zl_wide) * 0.1  # fallback minimo
+    else:
+        zone_high = float(core["high"])
+        zone_low = min(float(core["open"]), float(core["close"]))
+        if zone_low >= zone_high:
+            zone_low = zone_high - (zh_wide - zl_wide) * 0.1
+
+    return round(zone_high, 4), round(zone_low, 4), True
+
+
+def _score_restart_zone(ob: dict, mie_context: dict, refined: bool) -> tuple:
+    """
+    Punteggio di CONFERMA (0-100) sulla zona gia' individuata e raffinata.
+    Ogni fattore SMC aggiunge o non aggiunge -- nessuno di questi crea la
+    zona, la zona esiste gia' dall'impulso trovato dall'Order Block Engine.
+    """
+    factors = []
+    score = 0.0
+
+    if ob.get("has_sweep_before"):
+        score += 25.0
+        factors.append("SWEEP")
+    if ob.get("has_bos"):
+        score += 25.0
+        factors.append("BOS")
+    if ob.get("has_fvg"):
+        score += 20.0
+        factors.append("FVG")
+
+    disp = float(ob.get("displacement_atr") or 0)
+    disp_score = min(disp / 2.0, 1.0) * 20.0  # 2+ ATR di impulso = punteggio pieno
+    if disp_score > 0:
+        score += disp_score
+        factors.append(f"IMPULSO({disp:.1f}ATR)")
+
+    # Reaction Map come conferma esterna (non come sorgente della zona)
+    mid = (float(ob["zone_high"]) + float(ob["zone_low"])) / 2
+    for rz in (mie_context.get("mie_reaction_map_zones") or []):
+        rzh, rzl = rz.get("zone_high"), rz.get("zone_low")
+        if rzh is None or rzl is None:
+            continue
+        if float(rzl) <= mid <= float(rzh) and rz.get("reaction_strength") in ("STRONG", "MODERATE"):
+            score += 10.0
+            factors.append("REACTION_MAP")
+            break
+
+    if not refined:
+        score *= 0.7  # zona non raffinata (M5 assente): meno affidabile, penalizzata
+
+    return round(min(score, 100.0), 1), factors
+
+
+def _merge_nearby_zones(zones: list, asset: str) -> list:
+    """
+    Raggruppa Restart Zone vicine (stessa direzione) ed evita notifiche
+    ridondanti: se piu' impulsi vicini producono zone che si sovrappongono
+    o distano meno di zone_merge_tolerance_points, si tiene SOLO quella
+    col punteggio migliore del gruppo -- le altre vengono scartate.
+
+    Solo zone della STESSA direzione vengono fuse: una zona bullish e una
+    bearish alla stessa altezza restano distinte (significano cose
+    diverse). Il campo "merged_from" indica quante zone erano nel gruppo
+    (1 = nessun merge avvenuto), utile per capire quanta conferma
+    incrociata c'e' dietro la zona notificata.
+
+    Nessun dato storico dietro zone_merge_tolerance_points -- come
+    launch_body_ratio, e' configurabile per asset in ASSET_PARAMS,
+    punto di partenza da tarare quando ci sara' campione.
+    """
+    P = _params(asset)
+    tolerance = P.get("zone_merge_tolerance_points", 20)
+
+    result = []
+    for kind in ("BULLISH", "BEARISH"):
+        subset = sorted(
+            (z for z in zones if z["zone_kind"] == kind),
+            key=lambda z: z["zone_low"],
+        )
+        clusters = []
+        current = []
+        for z in subset:
+            if not current:
+                current = [z]
+                continue
+            last = current[-1]
+            gap = z["zone_low"] - last["zone_high"]  # negativo se sovrapposte
+            if gap <= tolerance:
+                current.append(z)
+            else:
+                clusters.append(current)
+                current = [z]
+        if current:
+            clusters.append(current)
+
+        for cluster in clusters:
+            best = max(cluster, key=lambda z: z["restart_score"])
+            best = dict(best)
+            best["merged_from"] = len(cluster)
+            result.append(best)
+
+    return result
+
+
+def scan_restart_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
+                       mie_context: dict = None,
+                       df_m5: pd.DataFrame = None) -> list:
+    """
+    Identifica Bullish/Bearish Restart Zone: zone precise (idealmente
+    4-10$ su XAU, proporzionale su BTC) da cui il prezzo e' GIA' partito
+    con forza in passato -- non zone SMC generiche.
+
+    Fonte della zona: gli Order Block gia' calcolati da order_block_engine
+    (che e' gia' impulso-first), raffinati con le candele M5 per tagliare
+    il rumore della candela M15 intera. SMC (BOS, sweep, FVG, Reaction Map)
+    contribuisce SOLO al punteggio di conferma, mai alla creazione.
+
+    Ritorna lista di zone: [{
+        "direction": "BUY"|"SELL", "zone_kind": "BULLISH"|"BEARISH",
+        "zone_ref": str (ob_id, stabile), "zone_high": float, "zone_low": float,
+        "zone_width": float, "m5_refined": bool,
+        "distance_atr": float, "distance_points": float, "is_near": bool,
+        "restart_score": float, "zone_strength": "STRONG"|"MODERATE",
+        "confirmations": list[str],
+    }, ...]
     """
     if not mie_context:
         return []
 
-    rm_zones = mie_context.get("mie_reaction_map_zones") or []
-    if not rm_zones:
+    obs = mie_context.get("mie_order_block_order_blocks") or []
+    if not obs:
         return []
 
     src = df_m5 if (df_m5 is not None and len(df_m5) > 0) else df_m15
@@ -499,51 +715,57 @@ def scan_reaction_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
     if atr <= 0:
         return []
 
+    max_atr = ZONE_SCAN_MAX_ATR.get(asset, ZONE_SCAN_MAX_ATR_DEFAULT)
+    near_threshold = ZONE_SCAN_NEAR_POINTS.get(asset)
+    P = _params(asset)
+    body_ratio_threshold = P.get("launch_body_ratio", 0.5)
+
     zones = []
-    for z in rm_zones:
-        strength = z.get("reaction_strength")
-        if strength not in ZONE_SCAN_MIN_STRENGTH:
+    for ob in obs:
+        if ob.get("status") not in RESTART_ZONE_STATUSES:
+            continue
+        direction_raw = ob.get("direction")
+        if direction_raw not in ("BULLISH", "BEARISH"):
             continue
 
-        expected = z.get("expected_reaction")
-        if expected == "BOUNCE_UP":
-            direction, zone_kind = "BUY", "BULLISH"
-        elif expected == "BOUNCE_DOWN":
-            direction, zone_kind = "SELL", "BEARISH"
-        else:
-            continue  # UNKNOWN: nessuna direzione chiara, non notificabile
-
-        mid = z.get("zone_midpoint")
-        if mid is None:
-            continue
-        mid = float(mid)
+        zh, zl, refined = _refine_zone_with_m5(ob, df_m5, body_ratio_threshold)
+        mid = (zh + zl) / 2
         distance_atr = abs(price - mid) / atr
-        max_atr = ZONE_SCAN_MAX_ATR.get(asset, ZONE_SCAN_MAX_ATR_DEFAULT)
         if distance_atr > max_atr:
             continue
 
+        score, confirmations = _score_restart_zone(ob, mie_context, refined)
+        if score < RESTART_SCORE_MIN:
+            continue
+
         distance_points = abs(price - mid)
-        near_threshold = ZONE_SCAN_NEAR_POINTS.get(asset)
         is_near = near_threshold is not None and distance_points <= near_threshold
+        strength = "STRONG" if score >= 70 else "MODERATE"
 
         zones.append({
-            "direction": direction,
-            "zone_kind": zone_kind,
-            "zone_ref": _zone_ref_from_price(asset, mid),
-            "zone_high": z.get("zone_high"),
-            "zone_low": z.get("zone_low"),
+            "direction": "BUY" if direction_raw == "BULLISH" else "SELL",
+            "zone_kind": direction_raw,
+            "zone_ref": str(ob.get("id", "?")),
+            "zone_high": zh,
+            "zone_low": zl,
+            "zone_width": round(zh - zl, 4),
+            "m5_refined": refined,
             "distance_atr": round(distance_atr, 2),
             "distance_points": round(distance_points, 2),
             "is_near": is_near,
-            "confluence_score": z.get("confluence_score", 0),
-            "reaction_strength": strength,
-            "sources": z.get("sources", []),
-            "has_order_block": bool(z.get("has_order_block")),
+            "restart_score": score,
+            "zone_strength": strength,
+            "confirmations": confirmations,
         })
 
-    # Zone piu' vicine prima -- le piu' rilevanti ORA in cima alla lista
+    zones = _merge_nearby_zones(zones, asset)
     zones.sort(key=lambda z: z["distance_atr"])
     return zones
+
+
+# ============================================================
+# Entry Point
+# ============================================================
 
 
 # ============================================================
