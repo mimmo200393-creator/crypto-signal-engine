@@ -88,10 +88,11 @@ CREATE TABLE IF NOT EXISTS lh_zone_alerts (
     zone_low        REAL,
     distance_atr    REAL,
     distance_points REAL,
-    confluence_score REAL,
-    reaction_strength TEXT,
-    sources         TEXT,
-    has_order_block BOOLEAN DEFAULT 0,
+    zone_width      REAL,
+    m5_refined      BOOLEAN DEFAULT 0,
+    restart_score   REAL,
+    zone_strength   TEXT,
+    confirmations   TEXT,
     created_at      DATETIME NOT NULL
 );
 
@@ -472,17 +473,17 @@ def insert_zone_alert(conn: sqlite3.Connection, asset: str, zone: dict,
         INSERT INTO lh_zone_alerts (
             alert_id, asset, direction, tier, zone_kind, zone_ref,
             zone_high, zone_low, distance_atr, distance_points,
-            confluence_score, reaction_strength, sources,
-            has_order_block, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            zone_width, m5_refined, restart_score, zone_strength,
+            confirmations, created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             alert_id, asset, zone["direction"], tier, zone.get("zone_kind"),
             zone.get("zone_ref"), zone.get("zone_high"), zone.get("zone_low"),
             zone.get("distance_atr"), zone.get("distance_points"),
-            zone.get("confluence_score"), zone.get("reaction_strength"),
-            json.dumps(zone.get("sources", [])),
-            bool(zone.get("has_order_block", False)),
+            zone.get("zone_width"), bool(zone.get("m5_refined", False)),
+            zone.get("restart_score"), zone.get("zone_strength"),
+            json.dumps(zone.get("confirmations", [])),
             now_iso,
         ),
     )
