@@ -98,6 +98,32 @@ CREATE TABLE IF NOT EXISTS lh_zone_alerts (
 
 CREATE INDEX IF NOT EXISTS idx_lh_zone_alerts_lookup
     ON lh_zone_alerts(asset, direction, zone_ref, tier, created_at);
+
+-- Ricorrenza (v3.7): stato persistente per zona -- non "quante volte
+-- toccata" ma "quante volte da qui e' REALMENTE ripartito un impulso".
+-- Una riga per zone_ref, aggiornata ogni ciclo (macchina a stati pura
+-- in liquidity_hunter.py, qui solo la persistenza).
+CREATE TABLE IF NOT EXISTS lh_zone_recurrence (
+    zone_ref        TEXT PRIMARY KEY,
+    asset           TEXT NOT NULL,
+    direction       TEXT NOT NULL,
+    zone_kind       TEXT NOT NULL,
+    zone_high       REAL,
+    zone_low        REAL,
+    visits          INTEGER DEFAULT 0,
+    confirmed_restarts INTEGER DEFAULT 0,
+    failed_visits   INTEGER DEFAULT 0,
+    price_inside    BOOLEAN DEFAULT 0,
+    awaiting_confirmation BOOLEAN DEFAULT 0,
+    confirmation_bars_remaining INTEGER DEFAULT 0,
+    entry_ts        TEXT,
+    status          TEXT DEFAULT 'ACTIVE',
+    first_seen_ts   TEXT NOT NULL,
+    last_updated_ts TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_lh_zone_recurrence_asset
+    ON lh_zone_recurrence(asset, status);
 """
 
 
@@ -489,3 +515,102 @@ def insert_zone_alert(conn: sqlite3.Connection, asset: str, zone: dict,
     )
     conn.commit()
     return alert_id
+
+
+# ============================================================
+# Ricorrenza (v3.7) -- persistenza dello stato per zona
+# ============================================================
+
+def get_zone_recurrence(conn: sqlite3.Connection, zone_ref: str):
+    """Ritorna lo stato di ricorrenza per una zona, o None se mai vista prima."""
+    row = conn.execute(
+        "SELECT * FROM lh_zone_recurrence WHERE zone_ref=?", (zone_ref,)
+    ).fetchone()
+    if row is None:
+        return None
+    cols = [d[0] for d in conn.execute(
+        "SELECT * FROM lh_zone_recurrence WHERE zone_ref=?", (zone_ref,)
+    ).description]
+    state = dict(zip(cols, row))
+    # SQLite salva i booleani come 0/1 -- riconverto per la macchina a stati
+    state["price_inside"] = bool(state["price_inside"])
+    state["awaiting_confirmation"] = bool(state["awaiting_confirmation"])
+    return state
+
+
+def upsert_zone_recurrence(conn: sqlite3.Connection, state: dict):
+    """Salva (crea o aggiorna) lo stato di ricorrenza per una zona."""
+    conn.execute(
+        """
+        INSERT INTO lh_zone_recurrence (
+            zone_ref, asset, direction, zone_kind, zone_high, zone_low,
+            visits, confirmed_restarts, failed_visits, price_inside,
+            awaiting_confirmation, confirmation_bars_remaining, entry_ts,
+            status, first_seen_ts, last_updated_ts
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(zone_ref) DO UPDATE SET
+            zone_high=excluded.zone_high, zone_low=excluded.zone_low,
+            visits=excluded.visits, confirmed_restarts=excluded.confirmed_restarts,
+            failed_visits=excluded.failed_visits, price_inside=excluded.price_inside,
+            awaiting_confirmation=excluded.awaiting_confirmation,
+            confirmation_bars_remaining=excluded.confirmation_bars_remaining,
+            entry_ts=excluded.entry_ts, status=excluded.status,
+            last_updated_ts=excluded.last_updated_ts
+        """,
+        (
+            state["zone_ref"], state["asset"], state["direction"], state["zone_kind"],
+            state["zone_high"], state["zone_low"], state["visits"],
+            state["confirmed_restarts"], state["failed_visits"],
+            bool(state["price_inside"]), bool(state["awaiting_confirmation"]),
+            state["confirmation_bars_remaining"], state.get("entry_ts"),
+            state["status"], state["first_seen_ts"], state["last_updated_ts"],
+        ),
+    )
+    conn.commit()
+
+
+# ============================================================
+# Riepilogo di fine giornata (v3.8) -- selezione zone valide
+# ============================================================
+
+def get_zones_for_digest(conn: sqlite3.Connection, asset: str, hours: int = 24) -> list:
+    """
+    Zone da mostrare nel riepilogo serale: ACTIVE (non invalidate) in
+    lh_zone_recurrence, con l'ultimo alert (score/confirmations) entro
+    le ultime `hours` ore -- esclude zone vecchie mai piu' toccate.
+
+    Ritorna lista di dict: {zone_kind, zone_high, zone_low, restart_score,
+    confirmations, confirmed_restarts, failed_visits}.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    rows = conn.execute(
+        """
+        SELECT r.zone_ref, r.zone_kind, r.zone_high, r.zone_low,
+               r.confirmed_restarts, r.failed_visits,
+               a.restart_score, a.confirmations
+        FROM lh_zone_recurrence r
+        JOIN lh_zone_alerts a ON a.zone_ref = r.zone_ref
+        WHERE r.asset = ? AND r.status = 'ACTIVE'
+          AND a.created_at = (
+              SELECT MAX(a2.created_at) FROM lh_zone_alerts a2
+              WHERE a2.zone_ref = r.zone_ref
+          )
+          AND a.created_at >= ?
+        ORDER BY a.restart_score DESC
+        """,
+        (asset, cutoff),
+    ).fetchall()
+
+    zones = []
+    for zone_ref, zone_kind, zh, zl, restarts, failures, score, confs_json in rows:
+        try:
+            confirmations = json.loads(confs_json) if confs_json else []
+        except Exception:
+            confirmations = []
+        zones.append({
+            "zone_ref": zone_ref, "zone_kind": zone_kind,
+            "zone_high": zh, "zone_low": zl,
+            "restart_score": score or 0, "confirmations": confirmations,
+            "confirmed_restarts": restarts, "failed_visits": failures,
+        })
+    return zones
