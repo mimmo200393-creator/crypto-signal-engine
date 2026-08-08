@@ -90,6 +90,13 @@ ASSET_PARAMS = {
         # quando ci sara' campione reale. Nessuno di questi e' stato
         # validato su dati storici, sono punti di partenza ragionevoli.
         "launch_body_ratio": 0.5,          # soglia "candela decisa" (M5)
+        "min_zone_width_points": 20,        # v3.9: sotto questa ampiezza
+                                            # la zona e' allargata a questo
+                                            # minimo -- una candela M5 col
+                                            # corpo minuscolo puo' produrre
+                                            # una zona quasi puntiforme,
+                                            # inutilizzabile. Non calibrato
+                                            # su dati storici.
         "zone_merge_tolerance_points": 50, # sotto questa distanza, due
                                             # Restart Zone della stessa
                                             # direzione vengono fuse
@@ -120,6 +127,8 @@ ASSET_PARAMS = {
         "liq_tight_atr": 3.0,
         "liq_ample_atr": 10.0,
         "launch_body_ratio": 0.5,
+        "min_zone_width_points": 4,   # v3.9: sotto 4$ la zona viene
+                                       # allargata a questo minimo
         "zone_merge_tolerance_points": 10,
         "min_impulse_atr": 0.8,
         "impulse_lookback_bars": 16,
@@ -721,8 +730,27 @@ def _ranges_overlap(low1, high1, low2, high2) -> bool:
     return low1 <= high2 and low2 <= high1
 
 
+def _is_decelerating(df_m15: pd.DataFrame, lookback: int = 3) -> bool:
+    """
+    Le ultime `lookback` candele M15 mostrano corpi piu' piccoli delle
+    `lookback` precedenti? Stesso principio gia' usato dal Market Radar
+    (contrazione = perdita di forza dell'impulso) -- riusato qui, non
+    reinventato. Un impulso che rallenta avvicinandosi alla zona ha piu'
+    probabilita' di rispettarla che di sfondarla.
+    """
+    if df_m15 is None or len(df_m15) < lookback * 2:
+        return False
+    bodies = (df_m15["close"].astype(float) - df_m15["open"].astype(float)).abs()
+    recent_avg = bodies.iloc[-lookback:].mean()
+    prior_avg = bodies.iloc[-lookback*2:-lookback].mean()
+    if prior_avg <= 0:
+        return False
+    return recent_avg < prior_avg * 0.7  # almeno 30% di contrazione
+
+
 def _score_restart_zone(zone_high: float, zone_low: float, displacement_atr: float,
-                        mie_context: dict, refined: bool) -> tuple:
+                        mie_context: dict, refined: bool,
+                        zone_kind: str = None, df_m15: pd.DataFrame = None) -> tuple:
     """
     Punteggio di ARRICCHIMENTO (0-100) sulla zona gia' individuata
     dall'impulso. Nessuno di questi fattori puo' eliminare la zona --
@@ -730,6 +758,15 @@ def _score_restart_zone(zone_high: float, zone_low: float, displacement_atr: flo
     componente principale (fino a 30 punti), il resto e' conferma
     incrociata via SOVRAPPOSIZIONE con quanto altri engine hanno gia'
     trovato (non tramite un legame diretto a un singolo OB).
+
+    v3.10 (ragionamento da trader): due fattori aggiuntivi, entrambi
+    riusano dati/concetti gia' verificati nel sistema, nessuno inventato:
+      - TREND_ALIGNED: la zona e' coerente col bias di timeframe
+        superiore (mie_market_state_bias, gia' usato dal segnale di
+        trading) -- un trader pro tratta diversamente una zona bullish
+        in un mercato H4 in forte downtrend.
+      - DECELERAZIONE: le candele che si avvicinano alla zona rallentano
+        (corpi piu' piccoli) -- stesso principio del Market Radar.
     """
     factors = []
     score = 0.0
@@ -774,6 +811,21 @@ def _score_restart_zone(zone_high: float, zone_low: float, displacement_atr: flo
             factors.append("REACTION_MAP")
             break
 
+    # Allineamento col bias di timeframe superiore -- SOLO bonus, mai
+    # penalita' (coerente con "arricchisce, non blocca"): se il bias e'
+    # NEUTRAL o non disponibile, nessun effetto; se e' controtrend,
+    # nessuna penalita' esplicita (tensione irrisolta, vedi nota sopra
+    # sulla ricorrenza -- non decido io se il controtrend sia da punire).
+    mie_bias = mie_context.get("mie_market_state_bias")
+    if zone_kind and mie_bias == zone_kind:
+        score += 10.0
+        factors.append("TREND_ALLINEATO")
+
+    # Decelerazione in avvicinamento
+    if df_m15 is not None and _is_decelerating(df_m15):
+        score += 10.0
+        factors.append("DECELERAZIONE")
+
     if not refined:
         score *= 0.9  # zona non raffinata (M5 assente): lieve penalita'
 
@@ -812,6 +864,12 @@ def _new_recurrence_state(zone_ref: str, asset: str, direction: str, zone_kind: 
         "price_inside": False, "awaiting_confirmation": False,
         "confirmation_bars_remaining": 0, "entry_ts": None,
         "status": "ACTIVE",
+        # v3.10: tracciamento per la domanda "vergine batte ricorrente?"
+        # -- SOLO osservazione, non influenza ancora lo score (la
+        # decisione si prende quando ci sara' campione, non ora).
+        "is_virgin": True,               # visits==0: mai toccata
+        "restart_displacements": [],     # ampiezza (ATR) di OGNI impulso
+                                          # di ritorno confermato, in ordine
         "first_seen_ts": now_iso, "last_updated_ts": now_iso,
     }
 
@@ -840,6 +898,7 @@ def _update_zone_recurrence(prev_state: dict, current_price: float,
     # ── Nuovo ingresso: il prezzo NON era dentro, ora e' dentro ──
     if is_inside_now and not was_inside:
         state["visits"] += 1
+        state["is_virgin"] = False  # da qui in poi, non e' piu' vergine
         state["awaiting_confirmation"] = True
         state["confirmation_bars_remaining"] = confirmation_bars
         state["entry_ts"] = now_iso
@@ -851,10 +910,16 @@ def _update_zone_recurrence(prev_state: dict, current_price: float,
             min_impulse_atr, lookback_bars=confirmation_bars,
             duration_ms=15*60*1000, timeframe_label="M15",
         )
-        confirmed = any(imp["direction"] == zone_kind for imp in recent_impulses)
+        matching = [imp for imp in recent_impulses if imp["direction"] == zone_kind]
+        confirmed = len(matching) > 0
 
         if confirmed:
             state["confirmed_restarts"] += 1
+            # Registro l'ampiezza del PIU' FORTE tra gli impulsi trovati
+            # in questa finestra -- per confrontare poi se le zone vergini
+            # producono restart piu' forti di quelle gia' ricorrenti.
+            strongest = float(max(imp["displacement_atr"] for imp in matching))
+            state["restart_displacements"] = list(state.get("restart_displacements", [])) + [strongest]
             state["awaiting_confirmation"] = False
             state["confirmation_bars_remaining"] = 0
         else:
@@ -895,7 +960,7 @@ def _apply_recurrence_to_score(base_score: float, confirmations: list,
     if restarts > 0:
         confirmations.append(f"RICORRENTE(x{restarts})")
     if failures > 0:
-        confirmations.append(f"attraversata_senza_reazione(x{failures})")
+        confirmations.append(f"attraversata senza reazione (x{failures})")
 
     new_score = max(0.0, min(base_score + bonus - penalty, 100.0))
     return round(new_score, 1), confirmations
@@ -926,7 +991,7 @@ def _score_to_stars(score: float) -> str:
 
 # Mappa dalle conferme complete (quelle usate internamente per lo
 # scoring) alle etichette brevi mostrate nel riepilogo -- stesso
-# vocabolario del mockup (OB, FVG, LIQ, BOS). RICORRENTE e IMPULSO_*
+# vocabolario del mockup (OB, FVG, LIQ, BOS). RICORRENTE e IMPULSO-*
 # non compaiono qui: sono gia' impliciti nel punteggio/stelle.
 _CONFIRMATION_SHORT_TAGS = {
     "ORDER_BLOCK": "OB",
@@ -934,13 +999,15 @@ _CONFIRMATION_SHORT_TAGS = {
     "BOS": "BOS",
     "SWEEP": "LIQ",
     "REACTION_MAP": "RM",
+    "TREND_ALLINEATO": "TREND",
+    "DECELERAZIONE": "DECEL",
 }
 
 
-def _short_confluence_tags(confirmations: list, max_tags: int = 2) -> str:
+def _short_confluence_tags(confirmations: list, max_tags: int = 3) -> str:
     """
-    Le prime max_tags conferme "vere" (esclude IMPULSO_*/RICORRENTE/
-    attraversata_senza_reazione, che non sono confluenze SMC), unite
+    Le prime max_tags conferme "vere" (esclude IMPULSO-*/RICORRENTE/
+    attraversata senza reazione, che non sono confluenze SMC), unite
     con " + " -- stile del mockup ("OB + FVG").
     """
     tags = []
@@ -1127,10 +1194,21 @@ def scan_restart_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
             duration_ms=30*60*1000, timeframe_label="M30")
 
     zones = []
+    min_zone_width = P.get("min_zone_width_points", 0)
     for impulse in impulses:
         zh, zl, refined = _zone_from_impulse(impulse, df_m15, df_m5, body_ratio_threshold)
         if zh is None:
             continue
+
+        # v3.9: se il raffinamento ha prodotto una zona quasi puntiforme
+        # (candela di lancio con corpo minuscolo), la allarghiamo al
+        # minimo utilizzabile -- simmetrica attorno al centro, cosi' il
+        # punto di lancio individuato resta al centro della zona finale.
+        width = zh - zl
+        if min_zone_width > 0 and width < min_zone_width:
+            pad = (min_zone_width - width) / 2
+            zh += pad
+            zl -= pad
 
         mid = (zh + zl) / 2
         distance_atr = abs(price - mid) / atr_m15
@@ -1138,8 +1216,9 @@ def scan_restart_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
             continue
 
         score, confirmations = _score_restart_zone(
-            zh, zl, impulse["displacement_atr"], mie_context, refined)
-        confirmations = [f"IMPULSO_{impulse['timeframe']}({impulse['displacement_atr']:.1f}ATR)"] + confirmations[1:]
+            zh, zl, impulse["displacement_atr"], mie_context, refined,
+            zone_kind=impulse["direction"], df_m15=df_m15)
+        confirmations = [f"IMPULSO-{impulse['timeframe']}({impulse['displacement_atr']:.1f}ATR)"] + confirmations[1:]
 
         distance_points = abs(price - mid)
         is_near = near_threshold is not None and distance_points <= near_threshold
