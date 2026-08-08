@@ -118,6 +118,8 @@ CREATE TABLE IF NOT EXISTS lh_zone_recurrence (
     confirmation_bars_remaining INTEGER DEFAULT 0,
     entry_ts        TEXT,
     status          TEXT DEFAULT 'ACTIVE',
+    is_virgin       BOOLEAN DEFAULT 1,
+    restart_displacements TEXT DEFAULT '[]',
     first_seen_ts   TEXT NOT NULL,
     last_updated_ts TEXT NOT NULL
 );
@@ -214,10 +216,34 @@ def _migrate_zone_alerts(conn: sqlite3.Connection):
     conn.commit()
 
 
+def _migrate_zone_recurrence(conn: sqlite3.Connection):
+    """
+    Migrazione per lh_zone_recurrence (v3.10: is_virgin, restart_displacements).
+    Stessa lezione di lh_zone_alerts -- se non migro esplicitamente,
+    un deploy su un DB con la tabella gia' esistente lascia le colonne
+    nuove mancanti e fallisce al primo insert.
+    """
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(lh_zone_recurrence)")]
+    except sqlite3.OperationalError:
+        return
+    for col, typ in [
+        ("is_virgin", "BOOLEAN DEFAULT 1"),
+        ("restart_displacements", "TEXT DEFAULT '[]'"),
+    ]:
+        if col not in cols:
+            try:
+                conn.execute(f"ALTER TABLE lh_zone_recurrence ADD COLUMN {col} {typ}")
+            except sqlite3.OperationalError:
+                pass
+    conn.commit()
+
+
 def init_lh_schema(conn: sqlite3.Connection):
     conn.executescript(SCHEMA_SQL)
     _migrate_lh_flags(conn)
     _migrate_zone_alerts(conn)
+    _migrate_zone_recurrence(conn)
     conn.commit()
 
 
@@ -576,6 +602,11 @@ def get_zone_recurrence(conn: sqlite3.Connection, zone_ref: str):
     # SQLite salva i booleani come 0/1 -- riconverto per la macchina a stati
     state["price_inside"] = bool(state["price_inside"])
     state["awaiting_confirmation"] = bool(state["awaiting_confirmation"])
+    state["is_virgin"] = bool(state.get("is_virgin", True))
+    try:
+        state["restart_displacements"] = json.loads(state.get("restart_displacements") or "[]")
+    except Exception:
+        state["restart_displacements"] = []
     return state
 
 
@@ -587,8 +618,9 @@ def upsert_zone_recurrence(conn: sqlite3.Connection, state: dict):
             zone_ref, asset, direction, zone_kind, zone_high, zone_low,
             visits, confirmed_restarts, failed_visits, price_inside,
             awaiting_confirmation, confirmation_bars_remaining, entry_ts,
-            status, first_seen_ts, last_updated_ts
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            status, is_virgin, restart_displacements,
+            first_seen_ts, last_updated_ts
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(zone_ref) DO UPDATE SET
             zone_high=excluded.zone_high, zone_low=excluded.zone_low,
             visits=excluded.visits, confirmed_restarts=excluded.confirmed_restarts,
@@ -596,6 +628,8 @@ def upsert_zone_recurrence(conn: sqlite3.Connection, state: dict):
             awaiting_confirmation=excluded.awaiting_confirmation,
             confirmation_bars_remaining=excluded.confirmation_bars_remaining,
             entry_ts=excluded.entry_ts, status=excluded.status,
+            is_virgin=excluded.is_virgin,
+            restart_displacements=excluded.restart_displacements,
             last_updated_ts=excluded.last_updated_ts
         """,
         (
@@ -604,7 +638,9 @@ def upsert_zone_recurrence(conn: sqlite3.Connection, state: dict):
             state["confirmed_restarts"], state["failed_visits"],
             bool(state["price_inside"]), bool(state["awaiting_confirmation"]),
             state["confirmation_bars_remaining"], state.get("entry_ts"),
-            state["status"], state["first_seen_ts"], state["last_updated_ts"],
+            state["status"], bool(state.get("is_virgin", True)),
+            json.dumps(state.get("restart_displacements", [])),
+            state["first_seen_ts"], state["last_updated_ts"],
         ),
     )
     conn.commit()
