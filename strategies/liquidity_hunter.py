@@ -727,7 +727,24 @@ def _zone_from_impulse(impulse: dict, df_m15: pd.DataFrame, df_m5, body_ratio_th
 
 
 def _ranges_overlap(low1, high1, low2, high2) -> bool:
-    return low1 <= high2 and low2 <= high1
+    """
+    ATTENZIONE (trovato 08/08, verificato con test): questo era un
+    controllo di CONTATTO tecnico (anche un solo punto in comune conta
+    come sovrapposizione). Con una Restart Zone piccola (4-10$) e un OB
+    largo (spesso 40-60$, l'intera candela M15), bastava toccare il
+    bordo ESTREMO dell'OB -- dalla parte opposta a dove probabilmente
+    era nato il vero impulso -- per ottenere comunque il bonus pieno.
+    Verificato concretamente: zona [4278,4282] contro OB [4224,4282]
+    otteneva "sovrapposizione" e bonus OB-FRESH+FVG, pur toccando l'OB
+    solo per un pelo, a 58$ dal suo vero punto di lancio.
+
+    Ora richiede sovrapposizione SOSTANZIALE, non solo contatto: il
+    CENTRO della Restart Zone deve cadere dentro l'altra zona. Garantisce
+    che il punto di lancio individuato sia davvero dentro la zona di
+    confronto, non solo al suo margine estremo.
+    """
+    mid1 = (low1 + high1) / 2
+    return low2 <= mid1 <= high2
 
 
 def _is_decelerating(df_m15: pd.DataFrame, lookback: int = 3) -> bool:
@@ -797,6 +814,20 @@ def _score_restart_zone(zone_high: float, zone_low: float, displacement_atr: flo
             if ob.get("has_fvg"):
                 score += 10.0
                 factors.append("FVG")
+            # v3.11: OB FRESH (mai testato) + FVG insieme -- il setup che
+            # storicamente ha piu' letteratura dietro (zona vergine + gap
+            # ancora aperto = alta probabilita' di reazione al tocco).
+            # Bonus forte ma additivo: non e' un requisito, solo il
+            # riconoscimento che QUESTA combinazione specifica e' rara e
+            # di qualita' superiore alla media. Consolida ORDER_BLOCK+FVG
+            # in un'unica etichetta -- gia' impliciti, non ripetuti.
+            if ob.get("status") == "FRESH" and ob.get("has_fvg"):
+                score += 55.0
+                if "ORDER_BLOCK" in factors:
+                    factors.remove("ORDER_BLOCK")
+                if "FVG" in factors:
+                    factors.remove("FVG")
+                factors.append("OB-FRESH+FVG")
             break  # un solo match: evita di sommare piu' OB sovrapposti
 
     # Sovrapposizione con una zona Reaction Map (che fonde gia' FVG,
@@ -1001,6 +1032,7 @@ _CONFIRMATION_SHORT_TAGS = {
     "REACTION_MAP": "RM",
     "TREND_ALLINEATO": "TREND",
     "DECELERAZIONE": "DECEL",
+    "OB-FRESH+FVG": "OB FRESH",
 }
 
 
@@ -1113,6 +1145,37 @@ def _merge_nearby_zones(zones: list, asset: str) -> list:
             result.append(best)
 
     return result
+
+
+def _suggest_trade(direction: str, zone_high: float, zone_low: float,
+                   atr: float, sl_buffer_atr: float) -> dict:
+    """
+    Idea di trade INFORMATIVA per zone di altissima qualita' -- stessa
+    convenzione gia' usata dal segnale di trading vero (entry al bordo
+    della zona piu' vicino a dove il prezzo arriverebbe, SL oltre la
+    zona con buffer ATR). NON e' un segnale eseguibile dal sistema, non
+    passa dal Decision Ledger, non ha dedup -- solo un suggerimento
+    allegato alla notifica quando la zona e' eccezionale.
+
+    TP a un multiplo fisso di rischio (2R) -- scelta semplice e
+    trasparente, non tenta di indovinare un livello di liquidita'
+    specifico (che richiederebbe dati non verificati qui).
+    """
+    buf = sl_buffer_atr * atr
+    if direction == "BUY":
+        entry = zone_high      # bordo piu' vicino a un prezzo che scende nella zona
+        sl = zone_low - buf
+    else:
+        entry = zone_low
+        sl = zone_high + buf
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return None
+    tp = entry + 2 * risk if direction == "BUY" else entry - 2 * risk
+    return {
+        "entry": round(entry, 4), "stop_loss": round(sl, 4),
+        "take_profit": round(tp, 4), "rr": 2.0,
+    }
 
 
 def scan_restart_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
@@ -1230,8 +1293,18 @@ def scan_restart_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
             strength = "WEAK"
 
         direction_raw = impulse["direction"]
+        direction = "BUY" if direction_raw == "BULLISH" else "SELL"
+
+        # Trade suggerito -- solo per zone eccezionali (score>=90, tipico
+        # del bonus OB fresco+FVG appena aggiunto). Informativo, non
+        # eseguibile dal sistema.
+        suggested_trade = None
+        if score >= 90:
+            suggested_trade = _suggest_trade(
+                direction, zh, zl, atr_m15, P.get("sl_buffer_atr", 0.5))
+
         zones.append({
-            "direction": "BUY" if direction_raw == "BULLISH" else "SELL",
+            "direction": direction,
             "zone_kind": direction_raw,
             "zone_ref": f"impulse:{asset}:{direction_raw}:{impulse['timeframe']}:{impulse['timestamp']}",
             "zone_high": zh,
@@ -1245,6 +1318,7 @@ def scan_restart_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
             "restart_score": score,
             "zone_strength": strength,
             "confirmations": confirmations,
+            "suggested_trade": suggested_trade,
         })
 
     zones = _merge_nearby_zones(zones, asset)
