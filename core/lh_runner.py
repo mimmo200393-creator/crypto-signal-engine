@@ -159,13 +159,22 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     # e' un duplicato: e' un canale separato, non deve dipendere dalla
     # logica di trading qui sotto.
     try:
-        n_obs = len(mie_context.get("mie_order_block_order_blocks") or [])
         zones = scan_restart_zones(asset, df_m15, now, mie_context=mie_context,
                                    df_m5=df_m5_zones, df_h1=df_h1_zones, df_m30=df_m30_zones)
+        # v3.11: log corretto -- prima mostrava "OB attivi in mie_context",
+        # fuorviante dal v3.5 (la detection non dipende piu' dagli OB).
+        # E soprattutto: NON mostrava se H1/M30 fossero disponibili, che
+        # sono le uniche due fonti reali dell'impulso da v3.6. Senza
+        # questo, "0 Restart Zone trovate" era ambiguo -- impossibile
+        # distinguere "nessun impulso oggi" da "dati H1/M30 mancanti".
         logger.info(
-            "LH ZoneScan [%s]: %d OB attivi in mie_context, %d Restart Zone trovate "
-            "(m5_zones=%s, m5_len=%d)",
-            asset, n_obs, len(zones),
+            "LH ZoneScan [%s]: %d Restart Zone trovate "
+            "(h1=%s/%d barre, m30=%s/%d barre, m5=%s/%d barre)",
+            asset, len(zones),
+            "disponibili" if df_h1_zones is not None else "ASSENTI",
+            len(df_h1_zones) if df_h1_zones is not None else 0,
+            "disponibili" if df_m30_zones is not None else "ASSENTI",
+            len(df_m30_zones) if df_m30_zones is not None else 0,
             "disponibili" if df_m5_zones is not None else "ASSENTI",
             len(df_m5_zones) if df_m5_zones is not None else 0,
         )
