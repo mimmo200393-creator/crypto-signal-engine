@@ -452,13 +452,23 @@ def _notify_zone_near(asset: str, zone: dict, config: dict):
             if v is None: return "N/A"
             return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
 
+        trade = zone.get("suggested_trade")
+        trade_line = ""
+        if trade:
+            trade_line = (
+                f"\n\U0001f4a1 *Possibile trade* ({trade['rr']:.0f}R)\n"
+                f"Entry: `{fp(trade['entry'])}`  SL: `{fp(trade['stop_loss'])}`  "
+                f"TP: `{fp(trade['take_profit'])}`\n"
+            )
+
         text = (
             f"{emoji} \U0001f6a8 *Restart Zone {kind_it} VICINISSIMA*\n"
             f"{asset.replace('_',' ')} — siamo dentro l'area, a {zone.get('distance_points',0):.1f} punti.\n\n"
             f"Zona: `{fp(zone.get('zone_low'))}` - `{fp(zone.get('zone_high'))}` "
             f"({zone.get('zone_width',0):.2f} ampiezza{precision_note})\n"
-            f"Forza: {zone.get('zone_strength','?')} ({zone.get('restart_score',0):.0f}/100)\n\n"
-            f"_Prima di agire, verifica tu:_\n"
+            f"Forza: {zone.get('zone_strength','?')} ({zone.get('restart_score',0):.0f}/100)\n"
+            + trade_line +
+            f"\n_Prima di agire, verifica tu:_\n"
             f"_- Ha preso liquidita'?_\n"
             f"_- Ha rotto la microstruttura?_\n"
             f"_- Il movimento e' deciso o debole?_\n\n"
@@ -511,14 +521,24 @@ def _notify_zone(asset: str, zone: dict, config: dict):
             if v is None: return "N/A"
             return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
 
+        trade = zone.get("suggested_trade")
+        trade_line = ""
+        if trade:
+            trade_line = (
+                f"\n\U0001f4a1 *Possibile trade* ({trade['rr']:.0f}R)\n"
+                f"Entry: `{fp(trade['entry'])}`  SL: `{fp(trade['stop_loss'])}`  "
+                f"TP: `{fp(trade['take_profit'])}`\n"
+            )
+
         text = (
             f"{emoji} *{headline}*\n"
             f"{asset.replace('_',' ')} — ci si sta avvicinando alla zona.\n\n"
             f"Zona: `{fp(zone.get('zone_low'))}` - `{fp(zone.get('zone_high'))}` "
             f"({zone.get('zone_width',0):.2f} ampiezza{precision_note})\n"
             f"Distanza: {zone['distance_atr']} ATR \u2014 punteggio: {zone.get('restart_score',0):.0f}/100\n"
-            f"Confermata da: {conf_line}\n\n"
-            f"_Informativo \u2014 non e' un segnale di trading._"
+            f"Confermata da: {conf_line}\n"
+            + trade_line +
+            f"\n_Informativo \u2014 non e' un segnale di trading._"
         )
 
         bot_token  = config.get("TELEGRAM_BOT_TOKEN", "")
