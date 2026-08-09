@@ -908,14 +908,29 @@ def _new_recurrence_state(zone_ref: str, asset: str, direction: str, zone_kind: 
 def _update_zone_recurrence(prev_state: dict, current_price: float,
                             df_m15: pd.DataFrame, min_impulse_atr: float,
                             confirmation_bars: int, invalidate_after_failures: int,
-                            now_iso: str) -> dict:
+                            now_iso: str, zone_high: float = None, zone_low: float = None) -> dict:
     """
     Avanza la macchina a stati di UNA zona di un ciclo. Funzione PURA:
     nessun accesso al DB qui -- riceve lo stato precedente (dict) e i
     dati di mercato correnti, ritorna il nuovo stato. Il chiamante
     (lh_runner.py) si occupa di leggere/scrivere lo stato dal DB.
+
+    BUG CORRETTO (09/08, trovato da segnalazione utente su riepilogo
+    serale con zona 0.39$ ancora visibile dopo il fix del floor minimo
+    di ieri): zone_high/zone_low venivano presi SOLO da prev_state e
+    MAI aggiornati -- una zona veniva "congelata" ai confini della prima
+    rilevazione per sempre, anche quando scan_restart_zones ricalcolava
+    confini piu' corretti (es. dopo il fix del floor minimo) nei cicli
+    successivi. Il riepilogo serale legge questi confini dalla tabella
+    di ricorrenza, non dall'ultima notifica -- ecco perche' mostrava
+    ancora la vecchia zona quasi puntiforme.
+
+    Ora, se zone_high/zone_low vengono passati (il chiamante ha appena
+    ricalcolato la zona in questo ciclo), sostituiscono quelli congelati.
     """
     state = dict(prev_state)  # non muto l'originale
+    if zone_high is not None and zone_low is not None:
+        state["zone_high"], state["zone_low"] = zone_high, zone_low
     zone_high, zone_low = state["zone_high"], state["zone_low"]
     zone_kind = state["zone_kind"]
 
