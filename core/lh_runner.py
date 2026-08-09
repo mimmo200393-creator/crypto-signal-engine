@@ -212,6 +212,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
             new_state = _update_zone_recurrence(
                 prev_state, current_price,
                 df_m15, min_impulse_atr_m15, confirmation_bars, invalidate_after, now_iso,
+                zone_high=zone["zone_high"], zone_low=zone["zone_low"],
             )
             try:
                 lh_db.upsert_zone_recurrence(conn, new_state)
