@@ -384,54 +384,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                 return
         else:
             if abs(entry - sl) / entry < 0.0002:
-                logger.info(
-                    "LH [%s %s]: REJECT RISK_TOO_TIGHT (%.5f, no ATR)",
-                    asset, direction, abs(entry - sl) / entry,
-                )
-                return
-
-    ob_ref = signal.get("swept_level_label", "")
-zone = dict(zone)
-            zone["restart_score"] = new_score
-            zone["confirmations"] = new_confirmations
-            zone["recurrence_confirmed_restarts"] = new_state["confirmed_restarts"]
-            zone["recurrence_failed_visits"] = new_state["failed_visits"]
-            if new_score >= 70:
-                zone["zone_strength"] = "STRONG"
-            elif new_score >= 40:
-                zone["zone_strength"] = "MODERATE"
-            else:
-                zone["zone_strength"] = "WEAK"
-            enriched_zones.append(zone)
-
-        zones = enriched_zones
-
-        for zone in zones:
-            zref = zone.get("zone_ref")
-            tier = "NEAR" if zone.get("is_near") else "WATCH"
-            if zref and lh_db.has_recent_zone_alert(conn, asset, zone["direction"], zref, tier=tier):
-                logger.debug("LH ZoneScan [%s %s %s]: zona %s gia' notificata, skip.",
-                            asset, zone["direction"], tier, zref)
-                continue
-            try:
-                lh_db.insert_zone_alert(conn, asset, zone, tier=tier)
-            except Exception as e:
-                logger.warning("LH ZoneScan [%s]: insert fallito: %s", asset, e)
-                continue
-            logger.info(
-                "LH ZoneScan [%s]: zona %s [%s] dist=%.2fATR/%.1fpt larghezza=%.2f refined=%s score=%.1f (zone=%s)",
-                asset, zone["zone_kind"], tier, zone["distance_atr"],
-                zone.get("distance_points", 0), zone.get("zone_width", 0),
-                zone.get("m5_refined"), zone["restart_score"], zref,
-            )
-            if tier == "NEAR":
-                _notify_zone_near(asset, zone, config)
-            else:
-                _notify_zone(asset, zone, config)
-    except Exception as e:
-        # exc_info=True stampa il traceback completo -- prima si vedeva
-        # solo str(e), spesso vuoto o poco utile per capire DOVE falliva.
-        logger.error("LH ZoneScan [%s]: errore (non-blocking): %s", asset, e, exc_info=True)
+logger.error("LH ZoneScan [%s]: errore (non-blocking): %s", asset, e, exc_info=True)
 
     try:
         last_candle = df_m5.iloc[-1] if df_m5 is not None and len(df_m5) > 0 else df_m15.iloc[-1]
@@ -1028,4 +981,4 @@ def send_zone_digest(config: dict):
             ntfy_bot.send_message(ntfy_topic, title, plain)
             logger.info("LH Digest ntfy inviato")
         except Exception as e:
-            logger.error("LH Digest: invio ntfy fallito: %s", e) 
+            logger.error("LH Digest: invio ntfy fallito: %s", e)
