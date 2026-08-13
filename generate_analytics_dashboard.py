@@ -138,7 +138,8 @@ def load_lh_recent(conn, limit=20):
                    quality_score, quality_label,
                    swept_level_label, swept_level_priority,
                    sweep_direction, trigger_type, tp_label,
-                   final_outcome, mae, mfe, bars_open, timestamp_setup
+                   final_outcome, mae, mfe, bars_open, timestamp_setup,
+                   sl_original
             FROM lh_signals ORDER BY timestamp_setup DESC LIMIT {limit}
         """)
     except sqlite3.OperationalError:
@@ -559,7 +560,15 @@ def section_lh(rows, recent):
     else:
         body = ""
         for r in recent:
-            sid,asset,direction,entry,sl,tp,rr,qs,ql,level,lvl_pri,sweep,trigger,tp_label,outcome,mae,mfe,bars,ts = r
+            sid,asset,direction,entry,sl,tp,rr,qs,ql,level,lvl_pri,sweep,trigger,tp_label,outcome,mae,mfe,bars,ts,sl_orig = r
+            # FIX (13/08): la colonna SL mostrava stop_loss, che il
+            # breakeven sposta a entry quando il trade va in profitto --
+            # per questo SL appariva identico a Entry (falso allarme,
+            # non un errore della strategia). sl_original e' il vero SL
+            # del segnale come nato, mai piu' modificato. Fallback a sl
+            # (stop_loss) solo per righe storiche precedenti al fix,
+            # dove sl_original non era ancora tracciato (NULL).
+            sl_display = sl_orig if sl_orig is not None else sl
             oc = {"TP":"b-tp","SL":"b-sl","EXPIRED":"b-exp","OPEN":"b-open"}.get(outcome,"b-exp")
             body += f"""<tr>
   <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(ts)}</td>
@@ -567,7 +576,7 @@ def section_lh(rows, recent):
   <td>{direction_badge(direction)}</td>
   <td><span class="badge {oc}">{outcome}</span></td>
   <td class="mono">{fmt_p(entry)}</td>
-  <td class="mono">{fmt_p(sl)}</td>
+  <td class="mono">{fmt_p(sl_display)}</td>
   <td class="mono">{fmt_p(tp)}</td>
   <td class="mono">{float(rr or 0):.2f}</td>
   <td style="font-size:12px;color:var(--dim)">{level or '—'}</td>
