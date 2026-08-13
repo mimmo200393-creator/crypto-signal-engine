@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from storage import db as core_db
 from core import v3_db
@@ -228,6 +228,170 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                 continue  # esclusa dalle notifiche
 
             zone = dict(zone)
+            zone["restart_score"] = new_score
+            zone["confirmations"] = new_confirmations
+            zone["recurrence_confirmed_restarts"] = new_state["confirmed_restarts"]
+            zone["recurrence_failed_visits"] = new_state["failed_visits"]
+            if new_score >= 70:
+                zone["zone_strength"] = "STRONG"
+            elif new_score >= 40:
+                zone["zone_strength"] = "MODERATE"
+            else:
+                zone["zone_strength"] = "WEAK"
+            enriched_zones.append(zone)
+
+        zones = enriched_zones
+
+        for zone in zones:
+            zref = zone.get("zone_ref")
+            tier = "NEAR" if zone.get("is_near") else "WATCH"
+            if zref and lh_db.has_recent_zone_alert(conn, asset, zone["direction"], zref, tier=tier):
+                logger.debug("LH ZoneScan [%s %s %s]: zona %s gia' notificata, skip.",
+                            asset, zone["direction"], tier, zref)
+                continue
+            try:
+                lh_db.insert_zone_alert(conn, asset, zone, tier=tier)
+            except Exception as e:
+                logger.warning("LH ZoneScan [%s]: insert fallito: %s", asset, e)
+                continue
+            logger.info(
+                "LH ZoneScan [%s]: zona %s [%s] dist=%.2fATR/%.1fpt larghezza=%.2f refined=%s score=%.1f (zone=%s)",
+                asset, zone["zone_kind"], tier, zone["distance_atr"],
+                zone.get("distance_points", 0), zone.get("zone_width", 0),
+                zone.get("m5_refined"), zone["restart_score"], zref,
+            )
+            if tier == "NEAR":
+                _notify_zone_near(asset, zone, config)
+            else:
+                _notify_zone(asset, zone, config)
+    except Exception as e:
+        # exc_info=True stampa il traceback completo -- prima si vedeva
+        # solo str(e), spesso vuoto o poco utile per capire DOVE falliva.
+        logger.error("LH ZoneScan [%s]: errore (non-blocking): %s", asset, e, exc_info=True)
+
+    try:
+        last_candle = df_m5.iloc[-1] if df_m5 is not None and len(df_m5) > 0 else df_m15.iloc[-1]
+        current_high_m = float(last_candle["high"])
+        current_low_m  = float(last_candle["low"])
+
+        atr_m15 = mie_context.get("mie_volatility_atr_m15", 0) or 0
+        be_threshold = 0.3 * atr_m15 if atr_m15 > 0 else 0
+
+        if be_threshold > 0:
+            open_rows = conn.execute(
+                "SELECT signal_id, direction, entry, stop_loss, mfe "
+                "FROM lh_signals WHERE final_outcome='OPEN' AND asset=? "
+                "AND COALESCE(order_status, 'FILLED') = 'FILLED'",
+                (asset,)
+            ).fetchall()
+            for sid, d, entry_p, sl_p, mfe_p in open_rows:
+                if entry_p is None or sl_p is None:
+                    continue
+                fav = max(current_high_m - entry_p, 0) if d == "BUY" else max(entry_p - current_low_m, 0)
+                cur_mfe = max(float(mfe_p or 0), fav)
+                if cur_mfe >= be_threshold:
+                    if (d == "BUY" and float(sl_p) < float(entry_p)) or \
+                       (d == "SELL" and float(sl_p) > float(entry_p)):
+                        conn.execute(
+                            "UPDATE lh_signals SET stop_loss=? WHERE signal_id=?",
+                            (entry_p, sid)
+                        )
+                        conn.commit()
+                        logger.info(
+                            "LH BE [%s]: %s SL spostato a breakeven (entry=%.4f, mfe=%.2f)",
+                            asset, sid[:8], entry_p, cur_mfe
+                        )
+
+        try:
+            filled = lh_db.monitor_pending_lh_signals(
+                conn, asset,
+                current_high=current_high_m,
+                current_low=current_low_m,
+                now_iso=now.isoformat(),
+            )
+            for ev in filled:
+                logger.info(
+                    "LH Pending [%s]: %s -> %s (dopo %d barre)",
+                    asset, ev["signal_id"][:8], ev["event"], ev["pending_bars"],
+                )
+        except AttributeError:
+            pass
+
+        updated  = lh_db.monitor_open_lh_signals(
+            conn, asset,
+            current_high=current_high_m,
+            current_low=current_low_m,
+            now_iso=now.isoformat(),
+        )
+        for upd in updated:
+            logger.info(
+                "LH Monitor [%s]: %s → outcome=%s bars=%d",
+                asset, upd["signal_id"][:8], upd["outcome"], upd["bars_open"],
+            )
+            try:
+                row = conn.execute(
+                    "SELECT entry, stop_loss, rr FROM lh_signals WHERE signal_id=?",
+                    (upd["signal_id"],)
+                ).fetchone()
+                if row:
+                    ledger_link.link_outcome(
+                        decision_id=upd["signal_id"],
+                        outcome=upd["outcome"],
+                        entry=row[0], stop_loss=row[1],
+                        mae=upd.get("mae"), mfe=upd.get("mfe"),
+                        duration_bars=upd.get("bars_open"),
+                        rr_planned=row[2],
+                    )
+            except Exception as e:
+                logger.warning("LH ledger link_outcome fallito (non-blocking): %s", e)
+    except Exception as e:
+        logger.error("LH Monitor [%s]: errore: %s", asset, e)
+
+    try:
+        result = generate_lh_signal(asset, df_m15, now,
+                                    mie_context=mie_context, df_m5=df_m5)
+    except Exception as e:
+        logger.error("LH [%s]: errore generazione: %s", asset, e)
+        return
+
+    signal = result["signal"]
+    diag   = result["diagnostics"]
+
+    if signal is None:
+        logger.info("LH [%s]: no signal — %s", asset, diag.get("rejection", "UNKNOWN"))
+        return
+
+    direction = signal["direction"]
+
+    if lh_db.has_open_lh_signal(conn, asset, direction):
+        logger.info(
+            "LH [%s %s]: segnale OPEN già presente, skip.",
+            asset, direction,
+        )
+        return
+
+    entry = signal.get("entry", 0)
+    sl = signal.get("stop_loss", 0)
+    if entry and sl:
+        risk_abs = abs(entry - sl)
+        atr_m15 = mie_context.get("mie_volatility_atr_m15", 0) or 0
+        if atr_m15 > 0:
+            if risk_abs < 0.25 * atr_m15:
+                logger.info(
+                    "LH [%s %s]: REJECT RISK_TOO_TIGHT (%.4f = %.2f ATR < 0.25)",
+                    asset, direction, risk_abs, risk_abs / atr_m15,
+                )
+                return
+        else:
+            if abs(entry - sl) / entry < 0.0002:
+                logger.info(
+                    "LH [%s %s]: REJECT RISK_TOO_TIGHT (%.5f, no ATR)",
+                    asset, direction, abs(entry - sl) / entry,
+                )
+                return
+
+    ob_ref = signal.get("swept_level_label", "")
+zone = dict(zone)
             zone["restart_score"] = new_score
             zone["confirmations"] = new_confirmations
             zone["recurrence_confirmed_restarts"] = new_state["confirmed_restarts"]
@@ -714,6 +878,71 @@ def _format_digest_message(asset: str, digest: dict) -> str:
     return "\n".join(lines)
 
 
+def _get_macro_events_for_tomorrow() -> list:
+    """
+    Variante di _get_macro_events() (core/daily_brief.py) per il digest
+    SERALE: filtra per DOMANI invece che per oggi. Il digest gira alle
+    19:00 UTC per pianificare la notte/il giorno successivo -- mostrare
+    "gli eventi di oggi" a quell'ora significa mostrare eventi delle
+    14:30 gia' passati da 4h e mezza, inutili per chi deve decidere se
+    lasciare ordini pendenti overnight.
+
+    Stessa fonte dati (Forex Factory, nessuna API key), stessa mappa
+    valute/paesi e stesso filtro "solo impatto alto" del Daily Brief --
+    cambia solo la data target del confronto.
+    """
+    import requests
+    tomorrow_str = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+    MACRO_COUNTRIES = ("US", "EU", "JP", "CN", "DE", "UK")
+    try:
+        resp = requests.get(
+            "https://nfs.faireconomy.media/ff_calendar_thisweek.json", timeout=10,
+        )
+        if resp.status_code != 200:
+            return []
+        events = resp.json()
+        if not isinstance(events, list):
+            return []
+
+        currency_map = {
+            "USD": "US", "EUR": "EU", "GBP": "UK", "JPY": "JP",
+            "CNY": "CN", "CHF": "CH", "AUD": "AU", "CAD": "CA",
+        }
+
+        filtered = []
+        for ev in events:
+            if ev.get("impact") not in ("High",):
+                continue
+            currency = ev.get("country", "")
+            country = currency_map.get(currency, currency)
+            if country not in MACRO_COUNTRIES:
+                continue
+
+            date_str = ev.get("date", "")
+            if not date_str:
+                continue
+            try:
+                dt_utc = datetime.fromisoformat(date_str).astimezone(timezone.utc)
+                if dt_utc.strftime("%Y-%m-%d") != tomorrow_str:
+                    continue
+                h_local = dt_utc.hour + 2
+                if h_local >= 24:
+                    h_local -= 24
+                time_local = f"{h_local:02d}:{dt_utc.minute:02d}"
+            except Exception:
+                continue
+
+            filtered.append({
+                "time": time_local, "event": ev.get("title", "?"),
+                "country": country, "impact": "High",
+            })
+
+        filtered.sort(key=lambda e: e["time"])
+        return filtered
+    except Exception:
+        return []
+
+
 def send_zone_digest(config: dict):
     """
     Riepilogo serale delle Restart Zone ancora valide -- "Overnight
@@ -754,14 +983,21 @@ def send_zone_digest(config: dict):
     body = "\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n".join(parts)
     full_message = header + body
 
-    # ── Eventi macro -- riusa la stessa fonte gia' funzionante del
-    # Daily Brief (Forex Factory, nessuna API key). Non reinventata.
+    # ── Eventi macro -- FIX (13/08, bug trovato dall'utente): il digest
+    # serale girava a 19:00 UTC e riusava _get_macro_events() del Daily
+    # Brief, che filtra per "oggi". Alle 19:00 un evento delle 14:30 e'
+    # gia' successo 4h e mezza prima -- inutile per pianificare la notte.
+    # Il digest serale deve mostrare gli eventi di DOMANI (il giorno per
+    # cui si pianificano gli ordini overnight), non quelli di oggi gia'
+    # trascorsi. Non tocco daily_brief.py (corretto per le 08:00, dove
+    # "oggi" ha senso) -- variante dedicata qui, stessa fonte dati
+    # (Forex Factory, nessuna API key), stessa logica di filtro/mappa
+    # valute, solo la data target cambia.
     try:
-        from core.daily_brief import _get_macro_events
-        macro_events = _get_macro_events()
+        macro_events = _get_macro_events_for_tomorrow()
         if macro_events:
             macro_lines = ["", "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
-                          "", "\U0001f4c5 *High Impact Events*"]
+                          "", "\U0001f4c5 *High Impact Events (domani)*"]
             for ev in macro_events:
                 flag = {"US": "\U0001f1fa\U0001f1f8", "EU": "\U0001f1ea\U0001f1fa",
                        "JP": "\U0001f1ef\U0001f1f5", "CN": "\U0001f1e8\U0001f1f3",
@@ -792,4 +1028,4 @@ def send_zone_digest(config: dict):
             ntfy_bot.send_message(ntfy_topic, title, plain)
             logger.info("LH Digest ntfy inviato")
         except Exception as e:
-            logger.error("LH Digest: invio ntfy fallito: %s", e)
+            logger.error("LH Digest: invio ntfy fallito: %s", e) 
