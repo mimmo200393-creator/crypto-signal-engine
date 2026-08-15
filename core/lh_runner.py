@@ -28,6 +28,7 @@ from strategies.liquidity_hunter import (
     generate_lh_signal, scan_restart_zones,
     _new_recurrence_state, _update_zone_recurrence, _apply_recurrence_to_score,
     _params as _lh_params, format_zone_digest,
+    _detect_swings, SWING_CONFIRM_K,
 )
 
 logger = logging.getLogger("lh.runner")
@@ -129,6 +130,14 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     df_h1_zones = core_db.get_candles_df(conn, asset, LH_TIMEFRAMES["H1"], limit=limit)
     df_m30_zones = v3_db.get_v3_candles_df(conn, asset, LH_TIMEFRAMES["M30"], limit=limit)
 
+    # H4: 3 anni =~ 6570 candele. D1: 3 anni =~ 1095 candele.
+    # Spazio totale: < 1MB (irrilevante rispetto ai 65MB di signals.db).
+    # Motivazione: BTC ha livelli strutturali di anni fa ancora attivi
+    # (ATH 2021, minimo bear 2022, range breakout 2023). Oro uguale.
+    # Un anno li perde.
+    df_h4_swings = core_db.get_candles_df(conn, asset, LH_TIMEFRAMES["H4"], limit=6600)
+    df_d1_swings = v3_db.get_v3_candles_df(conn, asset, LH_TIMEFRAMES["D1"], limit=1100)
+
     if len(df_m15) < 20 or len(df_h4) < 10:
         logger.warning("LH [%s]: dati insufficienti, skip.", asset)
         return
@@ -152,6 +161,29 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
             logger.info("LH ZoneScan [%s]: candele M5 insufficienti, zone non raffinate.", asset)
             df_m5_zones = None
 
+    # ── Memoria storica swing H4/D1 (v3.12) ──────────────────────────
+    # Gira ogni ciclo, ma e' economico (poche migliaia di candele, pure
+    # funzioni Python) e idempotente (insert_swings scarta i doppioni via
+    # swing_ref stabile) -- funge sia da backfill iniziale (la prima volta
+    # che gira su un DB vuoto trova tutto lo storico disponibile) sia da
+    # refresh incrementale (i cicli successivi trovano solo gli swing
+    # nuovi, confermati dalle candele piu' recenti). Nessuna scadenza:
+    # lo storico resta per sempre, come richiesto.
+    try:
+        for df_swing, tf_label in ((df_h4_swings, "H4"), (df_d1_swings, "D1")):
+            if df_swing is None or len(df_swing) < 2 * SWING_CONFIRM_K + 1:
+                continue
+            new_swings = _detect_swings(df_swing, asset, tf_label)
+            n_new = lh_db.insert_swings(conn, new_swings)
+            if n_new > 0:
+                total = lh_db.count_swings(conn, asset, tf_label)
+                logger.info(
+                    "LH Swing [%s %s]: %d nuovi swing (totale storico: %d)",
+                    asset, tf_label, n_new, total,
+                )
+    except Exception as e:
+        logger.error("LH Swing [%s]: errore (non-blocking): %s", asset, e)
+
     mie_context = _read_mie_context(conn, asset)
 
     # ── Restart Zone Engine (v3.4) — informativo, indipendente dal segnale ──
@@ -159,8 +191,11 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     # e' un duplicato: e' un canale separato, non deve dipendere dalla
     # logica di trading qui sotto.
     try:
+        # Leggo gli swing storici H4/D1 per la confluenza nel punteggio
+        swing_zones = lh_db.get_swing_zones(conn, asset)
         zones = scan_restart_zones(asset, df_m15, now, mie_context=mie_context,
-                                   df_m5=df_m5_zones, df_h1=df_h1_zones, df_m30=df_m30_zones)
+                                   df_m5=df_m5_zones, df_h1=df_h1_zones, df_m30=df_m30_zones,
+                                   swing_zones=swing_zones)
         # v3.11: log corretto -- prima mostrava "OB attivi in mie_context",
         # fuorviante dal v3.5 (la detection non dipende piu' dagli OB).
         # E soprattutto: NON mostrava se H1/M30 fossero disponibili, che
@@ -241,6 +276,49 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
             enriched_zones.append(zone)
 
         zones = enriched_zones
+
+        # ── Monitoraggio persistente (v3.12): aggiorno la ricorrenza di
+        # TUTTE le zone ACTIVE nel DB, non solo quelle ritrovate in questo
+        # ciclo. Una zona trovata ieri/la settimana scorsa deve continuare
+        # a essere monitorata se il prezzo ci torna -- non essere dimenticata
+        # perche' uscita dalla finestra di lookback H1/M30 (12h/8h).
+        # Economico: solo un update di stato, nessuna notifica per queste.
+        try:
+            all_active = lh_db.get_all_active_recurrence(conn, asset)
+            zone_refs_current = {z.get("zone_ref") for z in zones}
+            max_age_days = rec_params.get("recurrence_max_age_days", 14)
+            for hist_state in all_active:
+                if hist_state["zone_ref"] in zone_refs_current:
+                    continue  # gia' aggiornata nel giro sopra
+
+                # Eta' massima: zona mai rivisitata dopo N giorni ->
+                # il mercato e' andato avanti, non spreca piu' cicli.
+                first_seen = hist_state.get("first_seen_ts", "")
+                if first_seen:
+                    try:
+                        age = (now - datetime.fromisoformat(first_seen)).days
+                        if age > max_age_days and hist_state.get("visits", 0) == 0:
+                            hist_state["status"] = "STALE"
+                            lh_db.upsert_zone_recurrence(conn, hist_state)
+                            logger.info("LH Recurrence [%s]: zona %s STALE (mai rivisitata dopo %d giorni)",
+                                       asset, hist_state["zone_ref"], age)
+                            continue
+                    except Exception:
+                        pass
+
+                new_state = _update_zone_recurrence(
+                    hist_state, current_price,
+                    df_m15, min_impulse_atr_m15, confirmation_bars, invalidate_after, now_iso,
+                )
+                try:
+                    lh_db.upsert_zone_recurrence(conn, new_state)
+                except Exception as e:
+                    logger.warning("LH Recurrence storica [%s]: %s", asset, e)
+                if new_state["status"] == "INVALIDATED" and hist_state["status"] != "INVALIDATED":
+                    logger.info("LH Recurrence storica [%s]: zona %s INVALIDATA",
+                               asset, hist_state["zone_ref"])
+        except Exception as e:
+            logger.warning("LH Recurrence storica [%s]: errore (non-blocking): %s", asset, e)
 
         for zone in zones:
             zref = zone.get("zone_ref")
