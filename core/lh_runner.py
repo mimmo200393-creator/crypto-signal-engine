@@ -225,6 +225,16 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         min_impulse_atr_m15 = rec_params.get("min_impulse_atr", 0.8)
         now_iso = now.isoformat()
 
+        # Prezzo corrente -- serve sia al loop di ricorrenza delle zone
+        # del ciclo corrente sia al monitoraggio persistente delle zone
+        # storiche. Definito PRIMA del loop, non dentro: con zero zone
+        # trovate il loop non gira, e current_price resterebbe indefinita
+        # (bug trovato in produzione 15/08).
+        if df_m5_zones is not None and len(df_m5_zones) > 0:
+            current_price = float(df_m5_zones.iloc[-1]["close"])
+        else:
+            current_price = float(df_m15.iloc[-1]["close"])
+
         enriched_zones = []
         for zone in zones:
             zref = zone.get("zone_ref")
@@ -238,11 +248,6 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                     zref, asset, zone["direction"], zone["zone_kind"],
                     zone["zone_high"], zone["zone_low"], now_iso,
                 )
-
-            if df_m5_zones is not None and len(df_m5_zones) > 0:
-                current_price = float(df_m5_zones.iloc[-1]["close"])
-            else:
-                current_price = float(df_m15.iloc[-1]["close"])
 
             new_state = _update_zone_recurrence(
                 prev_state, current_price,
