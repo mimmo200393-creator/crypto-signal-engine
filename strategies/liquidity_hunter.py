@@ -119,6 +119,10 @@ ASSET_PARAMS = {
         # toccata. Nessun valore calibrato su dati storici.
         "recurrence_confirmation_bars": 6,          # ~1.5h su M15
         "recurrence_invalidate_after_failures": 2,
+        "recurrence_max_age_days": 14,    # zona mai rivisitata dopo 14
+                                           # giorni -> STALE (il mercato
+                                           # e' andato avanti, non spreca
+                                           # piu' cicli di monitoraggio)
     },
     "XAU_USD": {
         "sl_buffer_atr": 0.3, "min_rr": 1.2, "expiry_bars": 18,
@@ -139,6 +143,7 @@ ASSET_PARAMS = {
         "impulse_lookback_bars_m30": 16,
         "recurrence_confirmation_bars": 6,
         "recurrence_invalidate_after_failures": 2,
+        "recurrence_max_age_days": 14,
     },
 }
 DEFAULT_PARAMS = ASSET_PARAMS["BTC_USDT"]
@@ -767,23 +772,18 @@ def _is_decelerating(df_m15: pd.DataFrame, lookback: int = 3) -> bool:
 
 def _score_restart_zone(zone_high: float, zone_low: float, displacement_atr: float,
                         mie_context: dict, refined: bool,
-                        zone_kind: str = None, df_m15: pd.DataFrame = None) -> tuple:
+                        zone_kind: str = None, df_m15: pd.DataFrame = None,
+                        swing_zones: list = None) -> tuple:
     """
     Punteggio di ARRICCHIMENTO (0-100) sulla zona gia' individuata
     dall'impulso. Nessuno di questi fattori puo' eliminare la zona --
-    solo alzarne il punteggio. La forza dell'impulso stesso e' la
-    componente principale (fino a 30 punti), il resto e' conferma
-    incrociata via SOVRAPPOSIZIONE con quanto altri engine hanno gia'
-    trovato (non tramite un legame diretto a un singolo OB).
+    solo alzarne il punteggio.
 
-    v3.10 (ragionamento da trader): due fattori aggiuntivi, entrambi
-    riusano dati/concetti gia' verificati nel sistema, nessuno inventato:
-      - TREND_ALIGNED: la zona e' coerente col bias di timeframe
-        superiore (mie_market_state_bias, gia' usato dal segnale di
-        trading) -- un trader pro tratta diversamente una zona bullish
-        in un mercato H4 in forte downtrend.
-      - DECELERAZIONE: le candele che si avvicinano alla zona rallentano
-        (corpi piu' piccoli) -- stesso principio del Market Radar.
+    v3.12: aggiunto swing_zones (lista di dict dalla tabella
+    lh_swing_zones) -- se la zona coincide con un vecchio swing H4/D1,
+    e' una confluenza strutturale forte (quel livello e' guardato da
+    molti piu' partecipanti di un OB M15). Bonus proporzionato al
+    timeframe: D1 (+15) > H4 (+10). Solo il match piu' alto conta.
     """
     factors = []
     score = 0.0
@@ -856,6 +856,35 @@ def _score_restart_zone(zone_high: float, zone_low: float, displacement_atr: flo
     if df_m15 is not None and _is_decelerating(df_m15):
         score += 10.0
         factors.append("DECELERAZIONE")
+
+    # Confluenza con swing storici H4/D1 (v3.12) -- se la zona coincide
+    # con un vecchio swing high/low di timeframe superiore, quel livello
+    # e' strutturalmente piu' importante (piu' partecipanti lo guardano).
+    # D1 vale piu' di H4. Solo il match piu' alto conta (non somma
+    # multipli swing sovrapposti). Coerenza direzionale: uno swing LOW
+    # e' una zona di SUPPORTO (favorisce BUY), uno swing HIGH una zona
+    # di RESISTENZA (favorisce SELL).
+    if swing_zones:
+        best_swing_bonus = 0
+        best_swing_label = None
+        for sw in swing_zones:
+            sw_h, sw_l = sw.get("zone_high", 0), sw.get("zone_low", 0)
+            if not _ranges_overlap(zone_low, zone_high, sw_l, sw_h):
+                continue
+            # Coerenza direzionale
+            sw_type = sw.get("swing_type")
+            if zone_kind == "BULLISH" and sw_type != "LOW":
+                continue   # zona BUY su uno swing high (resistenza) -> non e' confluenza
+            if zone_kind == "BEARISH" and sw_type != "HIGH":
+                continue   # zona SELL su uno swing low (supporto) -> non e' confluenza
+            tf = sw.get("timeframe", "H4")
+            bonus = 15.0 if tf == "D1" else 10.0
+            if bonus > best_swing_bonus:
+                best_swing_bonus = bonus
+                best_swing_label = f"SWING-{tf}"
+        if best_swing_bonus > 0:
+            score += best_swing_bonus
+            factors.append(best_swing_label)
 
     if not refined:
         score *= 0.9  # zona non raffinata (M5 assente): lieve penalita'
@@ -1020,6 +1049,81 @@ def _apply_recurrence_to_score(base_score: float, confirmations: list,
 # L'I/O (query DB, invio messaggio) vive nel runner, come sempre oggi.
 # ============================================================
 
+# ============================================================
+# MEMORIA STORICA SWING H4/D1 (v3.12) -- fase 1: solo raccolta dati
+#
+# Niente architettura complicata, come richiesto: rileva swing high/low
+# su H4 e D1, salva la zona di reazione (il range della candela stessa
+# dello swing), persiste per sempre -- nessuna scadenza, nessuna
+# invalidazione in questa fase. Serve a costruire memoria storica;
+# l'uso di questa memoria per leggere trend/zone importanti e' un passo
+# successivo, non ora.
+#
+# Regola di rilevamento: stessa identica logica gia' calibrata in
+# order_block_engine.py (_impulse_broke_structure) per confermare uno
+# swing -- k=2 candele per lato, swing STRETTO (disuguaglianza stretta,
+# non "maggiore o uguale": in una zona piatta ogni barra sembrerebbe
+# uno swing altrimenti). Nessuna soglia nuova inventata qui.
+# ============================================================
+
+SWING_CONFIRM_K = 2  # candele per lato per confermare uno swing -- stesso k gia' calibrato altrove
+
+
+def _detect_swings(df: pd.DataFrame, asset: str, timeframe_label: str,
+                   k: int = SWING_CONFIRM_K) -> list:
+    """
+    Scansiona TUTTE le candele disponibili in df (non solo una finestra
+    recente -- usata sia per il backfill iniziale che per il refresh
+    incrementale) cercando swing high e swing low confermati.
+
+    Uno swing high in posizione i e' confermato se high[i] e' STRETTAMENTE
+    maggiore degli high delle k candele prima E delle k candele dopo.
+    Speculare per swing low. La zona di reazione = range high/low della
+    candela stessa dello swing (stessa convenzione OB: nessuna zona
+    sintetica, solo i dati grezzi della candela).
+
+    Ritorna lista di {"swing_ref", "asset", "timeframe", "swing_type",
+    "price", "zone_high", "zone_low", "formation_ts"}.
+    """
+    if df is None or len(df) < 2 * k + 1:
+        return []
+
+    highs = df["high"].astype(float).values
+    lows = df["low"].astype(float).values
+    timestamps = df["timestamp"].values
+
+    swings = []
+    for i in range(k, len(df) - k):
+        window_h_before = highs[i - k:i]
+        window_h_after = highs[i + 1:i + k + 1]
+        window_l_before = lows[i - k:i]
+        window_l_after = lows[i + 1:i + k + 1]
+
+        if highs[i] > window_h_before.max() and highs[i] > window_h_after.max():
+            ts = int(timestamps[i])
+            swings.append({
+                "swing_ref": f"swing:{asset}:{timeframe_label}:HIGH:{ts}",
+                "asset": asset, "timeframe": timeframe_label,
+                "swing_type": "HIGH", "price": round(float(highs[i]), 4),
+                "zone_high": round(float(highs[i]), 4),
+                "zone_low": round(float(lows[i]), 4),
+                "formation_ts": ts,
+            })
+
+        if lows[i] < window_l_before.min() and lows[i] < window_l_after.min():
+            ts = int(timestamps[i])
+            swings.append({
+                "swing_ref": f"swing:{asset}:{timeframe_label}:LOW:{ts}",
+                "asset": asset, "timeframe": timeframe_label,
+                "swing_type": "LOW", "price": round(float(lows[i]), 4),
+                "zone_high": round(float(highs[i]), 4),
+                "zone_low": round(float(lows[i]), 4),
+                "formation_ts": ts,
+            })
+
+    return swings
+
+
 def _score_to_stars(score: float) -> str:
     """Converte il punteggio 0-100 in stelle (5 fasce, nessuna calibrata su dati)."""
     if score >= 90:
@@ -1048,6 +1152,8 @@ _CONFIRMATION_SHORT_TAGS = {
     "TREND_ALLINEATO": "TREND",
     "DECELERAZIONE": "DECEL",
     "OB-FRESH+FVG": "OB FRESH",
+    "SWING-H4": "SWING H4",
+    "SWING-D1": "SWING D1",
 }
 
 
@@ -1197,7 +1303,8 @@ def scan_restart_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
                        mie_context: dict = None,
                        df_m5: pd.DataFrame = None,
                        df_h1: pd.DataFrame = None,
-                       df_m30: pd.DataFrame = None) -> list:
+                       df_m30: pd.DataFrame = None,
+                       swing_zones: list = None) -> list:
     """
     Identifica Bullish/Bearish Restart Zone -- v3.6, ruoli distinti per
     timeframe (non tutti fanno la stessa cosa):
@@ -1295,7 +1402,8 @@ def scan_restart_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
 
         score, confirmations = _score_restart_zone(
             zh, zl, impulse["displacement_atr"], mie_context, refined,
-            zone_kind=impulse["direction"], df_m15=df_m15)
+            zone_kind=impulse["direction"], df_m15=df_m15,
+            swing_zones=swing_zones)
         confirmations = [f"IMPULSO-{impulse['timeframe']}({impulse['displacement_atr']:.1f}ATR)"] + confirmations[1:]
 
         distance_points = abs(price - mid)
