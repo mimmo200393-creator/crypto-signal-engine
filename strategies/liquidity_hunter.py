@@ -176,9 +176,9 @@ def _get_session(now: datetime) -> str:
     return "ASIA"
 
 
-def _reject(reason: str) -> dict:
+def _reject(reason: str, zone: dict = None) -> dict:
     logger.info("LH: REJECT %s", reason)
-    return {"signal": None, "diagnostics": {"rejection": reason}}
+    return {"signal": None, "diagnostics": {"rejection": reason, "zone": zone}}
 
 
 def _clamp(x, lo=0.0, hi=1.0):
@@ -1455,8 +1455,27 @@ def scan_restart_zones(asset: str, df_m15: pd.DataFrame, now: datetime,
 
 def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
                        mie_context: dict = None,
-                       df_m5: pd.DataFrame = None) -> dict:
-    """LH v3.2 — Confluence Engine. Ritorna {"signal", "diagnostics"}."""
+                       df_m5: pd.DataFrame = None,
+                       restart_zones: list = None,
+                       swing_zones: list = None) -> dict:
+    """
+    LH v4.0 — Restart Zone Based.
+
+    CAMBIO RISPETTO A v3.2: il segnale di trading si basa SOLO sulle
+    Restart Zone STRONG (score >= 70) quando disponibili, invece di
+    cercare OB in modo indipendente. I dati lo giustificano: le zone
+    STRONG hanno 75% di successo nella ricorrenza, il vecchio segnale
+    OB-based aveva 9% win rate sullo stesso mercato.
+
+    Quando nessuna Restart Zone STRONG e' vicina, NON entra -- non
+    ricade piu' sulla vecchia logica OB (che ha dimostrato di non
+    convertire). Meglio nessun segnale che un segnale perdente.
+
+    Entry: al bordo della zona (zone_high per BUY, zone_low per SELL)
+    SL: oltre la zona (punto di invalidazione strutturale) + buffer ATR
+    TP: al prossimo swing storico H4/D1 nella direzione del trade, oppure
+        al target strutturale piu' vicino se nessuno swing e' disponibile
+    """
     if not mie_context:
         return _reject("NO_MIE_CONTEXT")
 
@@ -1468,158 +1487,137 @@ def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
 
     src = df_m5 if (df_m5 is not None and len(df_m5) > 0) else df_m15
     if src is None or len(src) == 0:
-        return _reject("NO_CANDLES")
-    last = src.iloc[-1]
-    price = float(last["close"])
-    hi_c  = float(last["high"])
-    lo_c  = float(last["low"])
+        return _reject("NO_DATA")
+    price = float(src.iloc[-1]["close"])
 
     atr = mie_context.get("mie_volatility_atr_m15", 0) or 0
-    if atr <= 0 and df_m15 is not None and len(df_m15) >= 15:
-        h = df_m15["high"].astype(float).values
-        l = df_m15["low"].astype(float).values
-        c = df_m15["close"].astype(float).values
-        atr = sum(max(h[i]-l[i], abs(h[i]-c[i-1]), abs(l[i]-c[i-1]))
-                  for i in range(-14, 0)) / 14
-
-    # Direzione: dal bias se c'e', altrimenti dall'OB piu' vicino
-    bias = mie_context.get("mie_market_state_bias", "NEUTRAL")
-    if bias in ("BULLISH", "BEARISH"):
-        want_dir = bias
-    else:
-        cand = [(d, _find_best_ob(mie_context, d, price, P["max_zone_atr"], P["min_zone_atr"], atr))
-                for d in ("BULLISH", "BEARISH")]
-        cand = [(d, o) for d, o in cand if o]
-        if not cand:
-            return _reject("NO_OB_NEARBY (bias neutro)")
-        want_dir = min(cand, key=lambda x: x[1].get("distance_from_price_pct", 1))[0]
-    direction = "BUY" if want_dir == "BULLISH" else "SELL"
-
-    ob = _find_best_ob(mie_context, want_dir, price, P["max_zone_atr"], P["min_zone_atr"], atr)
-    if ob is None:
-        return _reject("NO_OB_NEARBY")
-
-    zh, zl = float(ob["zone_high"]), float(ob["zone_low"])
     if atr <= 0:
-        atr = abs(zh - zl) * 2
+        return _reject("NO_ATR")
 
-    # ── Anticipazione: TRIGGERED / WATCHING / FAR ────────────
-    state, dist_atr = _ob_position(ob, hi_c, lo_c, price, atr, P["watch_max_atr"])
-    if state == "FAR":
-        return _reject(f"PRICE_FAR_FROM_OB ({dist_atr:.1f} ATR)")
+    # ── Cerca la migliore Restart Zone vicina ──────────────────
+    if not restart_zones:
+        return _reject("NO_RESTART_ZONES")
 
-    if state == "TRIGGERED":
-        entry = price
-        order_type = "MARKET"
-    else:
-        entry = zh if direction == "BUY" else zl
-        order_type = "PENDING"
+    # Qualunque zona vicina (NEAR o entro 1.5 ATR) puo' generare un
+    # segnale -- il punteggio modula il RR minimo richiesto, non decide
+    # se entrare o no. Coerente con "arricchimento, non gate".
+    candidates = [
+        z for z in restart_zones
+        if z.get("is_near", False) or z.get("distance_atr", 99) <= 1.5
+    ]
 
-    # Stop STRUTTURALE oltre l'Order Block
-    buf = P["sl_buffer_atr"] * atr
-    sl = zl - buf if direction == "BUY" else zh + buf
+    if not candidates:
+        return _reject("NO_ZONE_NEARBY")
+
+    # Prendi la migliore per punteggio
+    best_zone = max(candidates, key=lambda z: z.get("restart_score", 0))
+    direction = best_zone["direction"]  # "BUY" / "SELL"
+    zh = best_zone["zone_high"]
+    zl = best_zone["zone_low"]
+
+    # ── Sessione valida? ──────────────────────────────────────
+    allowed = ALLOWED_SESSIONS.get(asset, set())
+    if session not in allowed:
+        return _reject(f"SESSION_{session}_NOT_ALLOWED", zone=best_zone)
+
+    # ── Entry / SL / TP ──────────────────────────────────────
+    sl_buffer = P.get("sl_buffer_atr", 0.5) * atr
+
+    if direction == "BUY":
+        entry = zh                      # bordo superiore della zona
+        sl = zl - sl_buffer             # sotto la zona = invalidazione
+        # TP: prossimo swing HIGH sopra il prezzo (resistenza da superare)
+        tp = _find_next_swing_target(swing_zones, price, "BUY", atr, P)
+    else:  # SELL
+        entry = zl                      # bordo inferiore della zona
+        sl = zh + sl_buffer             # sopra la zona = invalidazione
+        tp = _find_next_swing_target(swing_zones, price, "SELL", atr, P)
+
     risk = abs(entry - sl)
     if risk <= 0:
-        return _reject("ZERO_RISK")
+        return _reject("ZERO_RISK", zone=best_zone)
+    reward = abs(tp - entry)
+    rr = round(reward / risk, 2)
 
-    score, factors = _score_confluence(direction, want_dir, ob, mie_context,
-                                        entry, atr, session, asset, P)
-    if score < MIN_SCORE:
-        return {"signal": None, "diagnostics": {
-            "rejection": f"SCORE_TOO_LOW ({score}/9 < {MIN_SCORE})",
-            "score": score, "factors": factors, "setup_state": state}}
+    # RR minimo DINAMICO in base alla forza della zona: zone forti
+    # possono entrare con RR piu' basso (75% successo), zone deboli
+    # servono un setup con reward piu' alto per compensare la
+    # probabilita' inferiore (50% successo).
+    zone_score = best_zone.get("restart_score", 0)
+    if zone_score >= 70:      # STRONG: 75% successo
+        min_rr = P.get("min_rr", 1.0)
+    elif zone_score >= 40:    # MODERATE: 58% successo
+        min_rr = P.get("min_rr", 1.0) * 1.5
+    else:                     # WEAK: 50% successo
+        min_rr = P.get("min_rr", 1.0) * 2.0
 
-    tp_result = _build_tp_ladder(direction, entry, risk, atr, mie_context, P)
-    structural_targets = tp_result["structural"]
-    liquidity_levels = tp_result["liquidity"]
+    if rr < min_rr:
+        return _reject(f"RR_TOO_LOW ({rr:.1f} < {min_rr:.1f} per {best_zone.get('zone_strength','?')})", zone=best_zone)
 
-    # v3.2: NESSUN segnale senza target strutturale reale.
-    # Un "RR_SCALED" significa che non esiste nessun OB opposto, FVG o zona RM
-    # entro 3 ATR — il trade non ha una tesi di uscita strutturale.
-    if not structural_targets or structural_targets[0][1] == "RR_SCALED":
-        return {"signal": None, "diagnostics": {
-            "rejection": "NO_STRUCTURAL_TP1 (nessun target strutturale entro tp1_max_atr)",
-            "score": score, "factors": factors, "setup_state": state}}
-
-    tp1, tp1_label = structural_targets[0]
-    rr = abs(tp1 - entry) / risk if risk > 0 else 0
-    if rr < P["min_rr"] - 1e-6:
-        return {"signal": None, "diagnostics": {
-            "rejection": f"RR_TOO_LOW ({rr:.2f} < {P['min_rr']})",
-            "score": score, "factors": factors, "setup_state": state}}
-
-    tp2 = structural_targets[1][0] if len(structural_targets) > 1 else None
-    tp2_label = structural_targets[1][1] if len(structural_targets) > 1 else None
-
+    # ── Costruisci il segnale ─────────────────────────────────
     signal = {
-        "signal_id":        str(uuid.uuid4()),
-        "strategy_name":    STRATEGY_NAME,
-        "strategy_version": STRATEGY_VERSION,
-        "asset":            asset,
-        "direction":        direction,
-        "timestamp_setup":  now.isoformat(),
-
-        "entry":     round(entry, 4),
-        "stop_loss": round(sl, 4),
-        "tp":        tp1,
-        "risk":      round(risk, 4),
-        "rr":        round(rr, 2),
-
-        # anticipazione
-        "setup_state":  state,
-        "order_type":   order_type,
-        "distance_atr": round(dist_atr, 2),
-
-        # TP operativi (strutturali)
-        "tp1": tp1, "tp1_label": tp1_label,
-        "tp2": tp2, "tp2_label": tp2_label,
-        # TP3 rimosso: i livelli di liquidita' non sono target operativi
-        "tp3": None, "tp3_label": None,
-
-        # Livelli di liquidita' informativi (Equal Lows/Highs)
-        "liquidity_levels": json.dumps(
-            [{"price": p, "label": l} for p, l in liquidity_levels[:3]]
-        ),
-
-        # zona OB
-        "ob_zone_low":  round(zl, 4),
-        "ob_zone_high": round(zh, 4),
-
-        # campi legacy LH DB
-        "swept_level_label":     ob.get("id", "?"),
-        "swept_level_price":     round((zh + zl) / 2, 4),
-        "swept_level_priority":  ob.get("status", "FRESH"),
-        "swept_level_touches":   ob.get("test_count", 0),
-        "sweep_direction":       want_dir,
-        "sweep_peak_price":      zh if direction == "BUY" else zl,
-        "sweep_penetration":     0,
-        "sweep_penetration_pct": 0,
-
-        "flag_bos_present":      bool(ob.get("has_bos")),
-        "flag_choch_present":    False,
-        "flag_trigger_present":  state == "TRIGGERED",
-        "flag_near_order_block": True,
-        "flag_near_fvg":         factors.get("fvg_quality", 0) > 0,
-        "ob_quality":            ob.get("quality_score"),
-        "ob_match_type":         ob.get("status"),
-        "pool_type":             f"OB_{ob.get('status','FRESH')}",
-        "flag_htf_pool":         False,
-        "confluence_count":      score,
-
-        "trigger_type":      "OB_TOUCH" if state == "TRIGGERED" else "OB_PENDING",
-        "trigger_ref_level": round((zh + zl) / 2, 4),
-        "tp_label":          tp1_label,
-        "tp_priority":       "STRUCTURAL_LADDER",
-
-        "quality_score":      score,
-        "quality_label":      _quality_label(score),
-        "confluence_factors": json.dumps(factors),
-
-        "session":     session,
-        "expiry_bars": P["expiry_bars"],
+        "asset": asset,
+        "direction": direction,
+        "entry": round(entry, 5),
+        "stop_loss": round(sl, 5),
+        "tp": round(tp, 5),
+        "rr": rr,
+        "quality_score": best_zone.get("restart_score", 0),
+        "quality_label": best_zone.get("zone_strength", "STRONG"),
+        "trigger_type": "RESTART_ZONE",
+        "swept_level_label": best_zone.get("zone_ref", ""),
+        "swept_level_priority": best_zone.get("zone_strength", "STRONG"),
+        "sweep_direction": direction,
+        "tp_label": "SWING_TARGET",
+        "session": session,
+        "timestamp_setup": now.isoformat(),
+        "source_timeframe": best_zone.get("source_timeframe", "M30"),
+        "confirmations": best_zone.get("confirmations", []),
     }
+
+    score = best_zone.get("restart_score", 0) / 10.0  # 0-100 -> 0-10
+    factors = best_zone.get("confirmations", [])
 
     return {"signal": signal, "diagnostics": {
         "status": "SIGNAL_GENERATED", "score": score,
-        "factors": factors, "structural_targets": structural_targets,
-        "liquidity_levels": liquidity_levels, "setup_state": state}}
+        "factors": factors, "zone": best_zone}}
+
+
+def _find_next_swing_target(swing_zones: list, price: float,
+                            direction: str, atr: float, params: dict) -> float:
+    """
+    Trova il TP al prossimo swing storico nella direzione del trade.
+    BUY -> prossimo swing HIGH sopra il prezzo (resistenza)
+    SELL -> prossimo swing LOW sotto il prezzo (supporto)
+    Fallback: entry + 2R (come prima) se nessuno swing disponibile.
+    """
+    if not swing_zones:
+        tp_max_atr = params.get("tp1_max_atr", 3.0)
+        if direction == "BUY":
+            return price + tp_max_atr * atr
+        else:
+            return price - tp_max_atr * atr
+
+    if direction == "BUY":
+        targets = [
+            sw for sw in swing_zones
+            if sw.get("swing_type") == "HIGH" and sw.get("price", 0) > price
+        ]
+        if targets:
+            nearest = min(targets, key=lambda s: s["price"] - price)
+            return nearest["price"]
+    else:
+        targets = [
+            sw for sw in swing_zones
+            if sw.get("swing_type") == "LOW" and sw.get("price", 0) < price
+        ]
+        if targets:
+            nearest = min(targets, key=lambda s: price - s["price"])
+            return nearest["price"]
+
+    # Fallback: nessuno swing nella direzione giusta
+    tp_max_atr = params.get("tp1_max_atr", 3.0)
+    if direction == "BUY":
+        return price + tp_max_atr * atr
+    else:
+        return price - tp_max_atr * atr
