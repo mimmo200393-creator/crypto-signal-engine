@@ -126,6 +126,26 @@ CREATE TABLE IF NOT EXISTS lh_zone_recurrence (
 
 CREATE INDEX IF NOT EXISTS idx_lh_zone_recurrence_asset
     ON lh_zone_recurrence(asset, status);
+
+-- Memoria storica swing H4/D1 (v3.12) -- FASE 1: solo raccolta dati.
+-- Persistente per sempre, nessuna scadenza per eta' (a differenza di
+-- lh_zone_alerts/lh_zone_recurrence). swing_ref e' stabile (asset +
+-- timeframe + tipo + timestamp candela), quindi INSERT OR IGNORE
+-- garantisce idempotenza tra backfill iniziale e refresh incrementale.
+CREATE TABLE IF NOT EXISTS lh_swing_zones (
+    swing_ref     TEXT PRIMARY KEY,
+    asset         TEXT NOT NULL,
+    timeframe     TEXT NOT NULL,
+    swing_type    TEXT NOT NULL,
+    price         REAL NOT NULL,
+    zone_high     REAL NOT NULL,
+    zone_low      REAL NOT NULL,
+    formation_ts  INTEGER NOT NULL,
+    discovered_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_lh_swing_zones_lookup
+    ON lh_swing_zones(asset, timeframe, formation_ts);
 """
 
 
@@ -691,3 +711,106 @@ def get_zones_for_digest(conn: sqlite3.Connection, asset: str, hours: int = 24) 
             "confirmed_restarts": restarts, "failed_visits": failures,
         })
     return zones
+
+
+# ============================================================
+# Memoria storica swing H4/D1 (v3.12)
+# ============================================================
+
+def insert_swings(conn: sqlite3.Connection, swings: list) -> int:
+    """
+    Salva una lista di swing rilevati. Idempotente: swing_ref e' stabile
+    (asset+timeframe+tipo+timestamp candela), INSERT OR IGNORE scarta
+    automaticamente quelli gia' presenti -- sicuro chiamarla sia dal
+    backfill iniziale sia dal refresh incrementale di ogni ciclo, senza
+    doppioni.
+
+    Ritorna quanti swing erano NUOVI (non gia' presenti).
+    """
+    if not swings:
+        return 0
+    now_iso = datetime.now(timezone.utc).isoformat()
+    inserted = 0
+    for s in swings:
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO lh_swing_zones (
+                swing_ref, asset, timeframe, swing_type, price,
+                zone_high, zone_low, formation_ts, discovered_at
+            ) VALUES (?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                s["swing_ref"], s["asset"], s["timeframe"], s["swing_type"],
+                s["price"], s["zone_high"], s["zone_low"], s["formation_ts"],
+                now_iso,
+            ),
+        )
+        if cur.rowcount > 0:
+            inserted += 1
+    conn.commit()
+    return inserted
+
+
+def count_swings(conn: sqlite3.Connection, asset: str, timeframe: str = None) -> int:
+    """Utilita' diagnostica: quanti swing sono gia' salvati."""
+    if timeframe:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM lh_swing_zones WHERE asset=? AND timeframe=?",
+            (asset, timeframe),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM lh_swing_zones WHERE asset=?", (asset,)
+        ).fetchone()
+    return row[0] if row else 0
+
+
+def get_swing_zones(conn: sqlite3.Connection, asset: str) -> list:
+    """
+    Ritorna TUTTI gli swing storici per un asset (nessuna scadenza,
+    persistenti per sempre). Usati dal scoring come confluenza: una
+    Restart Zone che cade su un vecchio swing H4/D1 ha piu' probabilita'
+    di produrre una reazione.
+    """
+    rows = conn.execute(
+        "SELECT swing_ref, asset, timeframe, swing_type, price, zone_high, zone_low, formation_ts "
+        "FROM lh_swing_zones WHERE asset=? ORDER BY formation_ts DESC",
+        (asset,),
+    ).fetchall()
+    return [
+        {"swing_ref": r[0], "asset": r[1], "timeframe": r[2], "swing_type": r[3],
+         "price": r[4], "zone_high": r[5], "zone_low": r[6], "formation_ts": r[7]}
+        for r in rows
+    ]
+
+
+def get_all_active_recurrence(conn: sqlite3.Connection, asset: str) -> list:
+    """
+    Ritorna TUTTE le zone ACTIVE in lh_zone_recurrence per un asset --
+    indipendentemente dal fatto che il ciclo corrente le abbia ritrovate
+    nella scansione H1/M30 (che ha una finestra di lookback limitata).
+    Serve per il monitoraggio persistente: le zone trovate ieri/la
+    settimana scorsa devono continuare a essere monitorate se il prezzo
+    ci torna, non essere dimenticate perche' uscite dalla finestra.
+    """
+    rows = conn.execute(
+        "SELECT * FROM lh_zone_recurrence WHERE asset=? AND status='ACTIVE'",
+        (asset,),
+    ).fetchall()
+    if not rows:
+        return []
+    cols = [d[0] for d in conn.execute(
+        "SELECT * FROM lh_zone_recurrence WHERE 1=0").description]
+    result = []
+    for row in rows:
+        state = dict(zip(cols, row))
+        state["price_inside"] = bool(state.get("price_inside", False))
+        state["awaiting_confirmation"] = bool(state.get("awaiting_confirmation", False))
+        state["is_virgin"] = bool(state.get("is_virgin", True))
+        import json
+        try:
+            state["restart_displacements"] = json.loads(state.get("restart_displacements") or "[]")
+        except Exception:
+            state["restart_displacements"] = []
+        result.append(state)
+    return result
