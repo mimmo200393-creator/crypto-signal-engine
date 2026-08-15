@@ -344,7 +344,15 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                 zone.get("m5_refined"), zone["restart_score"], zref,
             )
             if tier == "NEAR":
-                _notify_zone_near(asset, zone, config)
+                # NEAR: non mando la notifica informativa qui -- sara'
+                # generate_lh_signal (che gira subito dopo e vede le
+                # stesse zone) a decidere se mandare un trade con
+                # entry/SL/TP. Evita il doppio messaggio sulla stessa
+                # zona nello stesso momento.
+                logger.info(
+                    "LH ZoneScan [%s]: zona %s NEAR (score=%.0f), delegata al segnale di trading.",
+                    asset, zone["zone_kind"], zone["restart_score"],
+                )
             else:
                 _notify_zone(asset, zone, config)
     except Exception as e:
@@ -432,7 +440,8 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
 
     try:
         result = generate_lh_signal(asset, df_m15, now,
-                                    mie_context=mie_context, df_m5=df_m5)
+                                    mie_context=mie_context, df_m5=df_m5,
+                                    restart_zones=zones, swing_zones=swing_zones)
     except Exception as e:
         logger.error("LH [%s]: errore generazione: %s", asset, e)
         return
@@ -652,68 +661,44 @@ def _notify(signal: dict, config: dict):
     try:
         from notifications import telegram_bot, ntfy_bot
 
-        if signal["quality_label"] == "LOW":
-            return
-
         direction = signal["direction"]
         asset     = signal["asset"]
         emoji     = "\U0001f7e2" if direction == "BUY" else "\U0001f534"
+        dir_it    = "LONG" if direction == "BUY" else "SHORT"
 
         def fp(v):
             if v is None: return "N/A"
             return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
 
-        state = signal.get("setup_state", "TRIGGERED")
-        if state == "WATCHING":
-            head = f"\U0001f441 *IN ATTESA* — ordine pendente ({signal.get('distance_atr', 0)} ATR)"
-        else:
-            head = "\u26a1 *ENTRY ORA* — a mercato"
+        # Stelle dal restart_score
+        score = signal.get("quality_score", 0)
+        n_stars = 5 if score >= 90 else (4 if score >= 70 else (3 if score >= 50 else (2 if score >= 30 else 1)))
+        stars = "\u2605" * n_stars + "\u2606" * (5 - n_stars)
 
-        tp_lines = f"TP1:    `{fp(signal.get('tp1') or signal['tp'])}`  [{signal.get('tp1_label','?')}]  ({signal['rr']:.2f}R)\n"
-        if signal.get("tp2"):
-            tp_lines += f"TP2:    `{fp(signal['tp2'])}`  [{signal.get('tp2_label','?')}]\n"
-
-        # Livelli di liquidita' (informativi, non target operativi)
-        liq_lines = ""
-        try:
-            import json as _j
-            liq_raw = signal.get("liquidity_levels")
-            if isinstance(liq_raw, str):
-                liq_raw = _j.loads(liq_raw)
-            if liq_raw:
-                liq_lines = "\n\U0001f4ca Livelli liquidita (osservazione):\n"
-                for lv in (liq_raw or [])[:3]:
-                    liq_lines += f"  \u2022 `{fp(lv.get('price',0))}`  {lv.get('label','?')}\n"
-        except Exception:
-            pass
-
-        # fattori di confluenza che hanno davvero contribuito
-        att = ""
-        try:
-            import json as _j2
-            facs = signal.get("confluence_factors")
-            if isinstance(facs, str):
-                facs = _j2.loads(facs)
-            if isinstance(facs, dict):
-                strong = [k for k, v in facs.items() if v >= 0.5]
-                att = ", ".join(strong) if strong else "nessun fattore forte"
-        except Exception:
-            att = ""
+        # Tag brevi dalle conferme
+        confs = signal.get("confirmations", [])
+        tag_map = {"ORDER_BLOCK":"OB","FVG":"FVG","BOS":"BOS","SWEEP":"LIQ",
+                   "REACTION_MAP":"RM","TREND_ALLINEATO":"TREND","DECELERAZIONE":"DECEL",
+                   "OB-FRESH+FVG":"OB FRESH","SWING-H4":"SWING H4","SWING-D1":"SWING D1"}
+        tags = []
+        for c in confs:
+            t = tag_map.get(c)
+            if t and t not in tags:
+                tags.append(t)
+            if len(tags) >= 3:
+                break
+        tags_str = " + ".join(tags) if tags else "impulso puro"
 
         text = (
-            f"{emoji} *LIQUIDITY HUNTER v3.2*\n"
-            f"*{asset.replace('_',' ')}* — {direction}\n"
-            f"{head}\n\n"
-            f"Qualita: *{signal['quality_score']}*/9 ({signal['quality_label']})\n\n"
-            f"Entry:  `{fp(signal['entry'])}`\n"
-            f"SL:     `{fp(signal['stop_loss'])}`\n\n"
-            f"{tp_lines}"
-            + (liq_lines if liq_lines else "")
-            + "\n"
-            f"Zona OB: `{fp(signal.get('ob_zone_low'))}` - `{fp(signal.get('ob_zone_high'))}` "
-            f"({signal.get('ob_match_type','?')})\n"
-            + (f"Confluenza: {att}\n" if att else "")
-            + f"Sessione: {signal.get('session','?')}"
+            f"{emoji} *{dir_it} — Restart Zone*\n"
+            f"*{asset.replace('_',' ')}*\n\n"
+            f"{stars}\n"
+            f"{tags_str}\n\n"
+            f"Entry: `{fp(signal['entry'])}`\n"
+            f"SL: `{fp(signal['stop_loss'])}`\n"
+            f"TP: `{fp(signal['tp'])}`\n"
+            f"RR: {signal['rr']:.1f}\n\n"
+            f"Sessione: {signal.get('session','?')}"
         )
 
         bot_token  = config.get("TELEGRAM_BOT_TOKEN", "")
@@ -723,9 +708,8 @@ def _notify(signal: dict, config: dict):
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
         if ntfy_topic:
-            tag = "ATTESA" if signal.get("setup_state") == "WATCHING" else "ENTRY"
-            title = (f"LH {tag} {asset.replace('_',' ')} {direction} | "
-                     f"{signal['quality_score']}/9 {signal['quality_label']}")
+            title = (f"LH {dir_it} {asset.replace('_',' ')} | "
+                     f"{stars} {tags_str}")
             ntfy_bot.send_message(ntfy_topic, title, text.replace("*","").replace("`",""))
 
     except Exception as e:
