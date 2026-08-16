@@ -3,6 +3,7 @@ generate_analytics_dashboard.py
 Crypto Signal Engine — Analytics Lab (unificato)
 
 Struttura:
+    SEZIONE 0 — TT (nuova strategia: Direction/Location/Liquidity)
     SEZIONE 1 — Institutional Edge Lab / OTE-SC
     SEZIONE 2 — NMC Trend Rider Balanced v1.0
     SEZIONE 3 — Liquidity Hunter v1.0
@@ -25,7 +26,72 @@ def q(conn, sql, params=()):
 
 
 # ============================================================
-# Data loaders
+# Data loaders — TT (nuovo, aggiunto in cima -- OTE-SC sotto e'
+# rimasto INVARIATO, nessuna riga toccata)
+# ============================================================
+
+def load_tt_signals(conn):
+    """
+    Segnali TT con esito DECISO (TP/SL/EXPIRED) -- per le statistiche
+    standard (win rate/expectancy). INVALIDATED e' escluso di proposito:
+    la spec di TT lo distingue esplicitamente da una loss (sezione 26,
+    "non deve essere considerato automaticamente una LOSS") -- mischiarlo
+    qui abbasserebbe il win rate in modo scorretto. Ha il suo box
+    separato (vedi load_tt_invalidated_count).
+    """
+    try:
+        rows = q(conn, """
+            SELECT asset, direction, poi_type, pd_zone, ctx_15m_structure,
+                   quality_label, quality_score, planned_tp_type,
+                   status, mae, mfe, planned_rr, actual_rr, bars_open,
+                   signal_created_at
+            FROM tt_signals WHERE status IN ('TP','SL','EXPIRED')
+            ORDER BY signal_created_at DESC
+        """)
+    except sqlite3.OperationalError:
+        return []
+    result = []
+    for r in rows:
+        rr = r[12] if r[12] is not None else r[11]  # actual_rr se presente, altrimenti planned_rr
+        result.append({
+            "asset": r[0], "direction": r[1],
+            "poi_type": r[2] or "N/A", "pd_zone": r[3] or "N/A",
+            "ctx_15m": r[4] or "N/A",
+            "quality_label": r[5] or "N/A", "quality_score": r[6] or 0,
+            "tp_type": r[7] or "N/A",
+            "outcome": r[8],
+            "mae": float(r[9] or 0), "mfe": float(r[10] or 0),
+            "rr": float(rr or 0), "bars_open": int(r[13] or 0),
+            "ts": r[14] or "",
+        })
+    return result
+
+def load_tt_invalidated_count(conn):
+    try:
+        row = q(conn, "SELECT COUNT(*) FROM tt_signals WHERE status='INVALIDATED'")
+        return row[0][0] if row else 0
+    except sqlite3.OperationalError:
+        return 0
+
+def load_tt_recent(conn, limit=20):
+    """
+    Righe recenti -- TUTTI gli stati (anche WAITING_CONFIRMATION/ENTRY),
+    non solo quelli chiusi: da' visibilita' sui setup ancora in corso,
+    coerente con la filosofia "Early Signal prima del touch" di TT.
+    """
+    try:
+        return q(conn, f"""
+            SELECT signal_id, asset, direction, planned_entry, planned_sl, planned_tp,
+                   planned_rr, quality_score, quality_label, poi_type, pd_zone,
+                   status, actual_entry, actual_sl, actual_tp, signal_created_at
+            FROM tt_signals ORDER BY signal_created_at DESC LIMIT {limit}
+        """)
+    except sqlite3.OperationalError:
+        return []
+
+
+# ============================================================
+# Data loaders — ORIGINALI, INVARIATI (OTE-SC, TRB, LH, V4.1)
 # ============================================================
 
 def load_el_signals(conn):
@@ -173,7 +239,7 @@ def load_v41p1_signals(conn):
 
 
 # ============================================================
-# Stats
+# Stats — INVARIATE
 # ============================================================
 
 def stats_el(rows):
@@ -232,14 +298,6 @@ def breakdown(rows, key_fn, keys, stat_fn):
 
 
 def asset_keys_from(rows, preferred=("BTC_USDT", "XAU_USD", "PAXG_USDT")):
-    """
-    Ricava la lista degli asset DAI DATI, invece di una lista fissa.
-    Cosi' se si cambia asset (es. PAXG_USDT -> XAU_USD) la tabella "Per Asset"
-    si aggiorna da sola, senza dover modificare il codice ogni volta.
-    Gli asset noti vengono messi in ordine preferito; eventuali altri
-    (nuovi/imprevisti) vengono aggiunti in coda, ordinati alfabeticamente,
-    cosi' non spariscono mai dalle statistiche.
-    """
     present = {r["asset"] for r in rows if r.get("asset")}
     ordered = [a for a in preferred if a in present]
     ordered += sorted(a for a in present if a not in preferred)
@@ -247,7 +305,8 @@ def asset_keys_from(rows, preferred=("BTC_USDT", "XAU_USD", "PAXG_USDT")):
 
 
 # ============================================================
-# CSS
+# CSS — INVARIATO salvo l'aggiunta della classe .b-invalid (nuova,
+# additiva, non tocca nessuna regola esistente)
 # ============================================================
 
 CSS = """
@@ -298,13 +357,15 @@ tr.hl td{background:rgba(79,255,176,.06)}
 .b-buy{background:rgba(79,255,176,.15);color:var(--buy)}
 .b-sell{background:rgba(255,107,107,.15);color:var(--sell)}
 .b-premium{background:rgba(167,139,250,.15);color:var(--accent4)}
+.b-invalid{background:rgba(90,100,120,.15);color:var(--dim);font-style:italic}
 .empty{text-align:center;padding:24px;color:var(--dim);font-size:13px}
 @media(max-width:900px){.grid-2{grid-template-columns:1fr}.summary-grid.cols8,.summary-grid.cols7,.summary-grid.cols6{grid-template-columns:repeat(3,1fr)}.container{padding:12px}.card table{min-width:600px}}
 """
 
 
 # ============================================================
-# Helpers
+# Helpers — outcome_badge esteso (additivo: solo nuove chiavi nel
+# dizionario, quelle vecchie invariate) per gli stati TT
 # ============================================================
 
 def _empty_row(cols):
@@ -312,7 +373,9 @@ def _empty_row(cols):
 
 def outcome_badge(o):
     cls = {"TP":"b-tp","SL":"b-sl","EXPIRED":"b-exp","OPEN":"b-open",
-           "TP1_HIT":"b-tp","TP2_HIT":"b-tp","SL_HIT":"b-sl"}.get(o,"b-exp")
+           "TP1_HIT":"b-tp","TP2_HIT":"b-tp","SL_HIT":"b-sl",
+           "WAITING_CONFIRMATION":"b-open","ENTRY":"b-open",
+           "INVALIDATED":"b-invalid"}.get(o,"b-exp")
     return f'<span class="badge {cls}">{o}</span>'
 
 def direction_badge(d):
@@ -356,7 +419,93 @@ def perf_table(title, d, keys, key_label, cols, stat_fn_empty):
 
 
 # ============================================================
-# SEZIONE 1 — Edge Lab OTE-SC
+# SEZIONE 0 — TT (NUOVA, aggiunta in cima)
+# ============================================================
+
+def section_tt(rows, recent, invalidated_count):
+    s = stats_el(rows)
+    wc = "pos" if s["win"]>=40 else ("neg" if s["win"]<25 else "warn")
+    ec = "pos" if s["exp_r"]>0 else "neg"
+
+    summary = f"""<div class="summary-grid cols8" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
+  <div><span class="big">{s['n']}</span><span class="lbl">Chiusi (TP/SL/EXP)</span></div>
+  <div><span class="big warn">{invalidated_count}</span><span class="lbl">Invalidated</span></div>
+  <div><span class="big {wc}">{s['win']}%</span><span class="lbl">Win Rate</span></div>
+  <div><span class="big neg">{s['sl']}%</span><span class="lbl">SL Rate</span></div>
+  <div><span class="big {ec}">{s['exp_r']:+.2f}R</span><span class="lbl">Expectancy</span></div>
+  <div><span class="big">{s['avg_rr']:.2f}</span><span class="lbl">Avg R/R</span></div>
+  <div><span class="big neg">{s['avg_mae']:.1f}</span><span class="lbl">Avg MAE</span></div>
+  <div><span class="big pos">{s['avg_mfe']:.1f}</span><span class="lbl">Avg MFE</span></div>
+</div>"""
+
+    no_data = "" if rows else '<div class="card"><div class="empty">In attesa del primo segnale TT chiuso.</div></div>'
+
+    asset_keys = asset_keys_from(rows)
+    dir_keys   = ["BUY","SELL"]
+    poi_keys   = ["DEMAND","SUPPLY"]
+    pd_keys    = ["DISCOUNT","EQUILIBRIUM","PREMIUM"]
+    ql_keys    = ["HIGH","MEDIUM","LOW"]
+
+    bd_asset = breakdown(rows, lambda r: r["asset"],         asset_keys, stats_el)
+    bd_dir   = breakdown(rows, lambda r: r["direction"],     dir_keys,   stats_el)
+    bd_poi   = breakdown(rows, lambda r: r["poi_type"],      poi_keys,   stats_el)
+    bd_pd    = breakdown(rows, lambda r: r["pd_zone"],       pd_keys,    stats_el)
+    bd_ql    = breakdown(rows, lambda r: r["quality_label"], ql_keys,    stats_el)
+
+    if not recent:
+        rec_html = '<div class="card"><div class="empty">Nessun segnale ancora.</div></div>'
+    else:
+        body = ""
+        for r in recent:
+            (sid, asset, direction, planned_entry, planned_sl, planned_tp, planned_rr,
+             qs, ql, poi_type, pd_zone, status, actual_entry, actual_sl, actual_tp, ts) = r
+            entry_show = actual_entry if actual_entry is not None else planned_entry
+            sl_show    = actual_sl if actual_sl is not None else planned_sl
+            tp_show    = actual_tp if actual_tp is not None else planned_tp
+            body += f"""<tr>
+  <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(ts)}</td>
+  <td><strong>{asset.replace('_USDT','')}</strong></td>
+  <td>{direction_badge(direction)}</td>
+  <td>{outcome_badge(status)}</td>
+  <td class="mono">{fmt_p(entry_show)}</td>
+  <td class="mono">{fmt_p(sl_show)}</td>
+  <td class="mono">{fmt_p(tp_show)}</td>
+  <td class="mono">{float(planned_rr or 0):.2f}</td>
+  <td style="font-size:12px;color:var(--dim)">{poi_type or '—'}</td>
+  <td style="font-size:12px;color:var(--dim)">{pd_zone or '—'}</td>
+  <td style="font-size:12px;color:var(--dim)">{ql or '—'}</td>
+</tr>"""
+        rec_html = f"""<div class="card"><div class="ch">Segnali Recenti TT</div>
+  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+  <table><thead><tr>
+    <th>Data</th><th>Asset</th><th>Dir</th><th>Stato</th><th>Entry</th><th>SL</th><th>TP</th>
+    <th>R/R</th><th>POI</th><th>PD</th><th>Quality</th>
+  </tr></thead><tbody>{body}</tbody></table>
+  </div></div>"""
+
+    return f"""
+<div class="card" style="border-top:2px solid var(--accent)">
+  <div class="fw-header" style="color:var(--accent)">
+    ⚡ TT — Direction · Location · Liquidity
+    <span class="fw-tag tag-active">ATTIVO</span>
+    <span style="color:var(--dim);font-size:11px;margin-left:auto">4H→1H→15M→5M · BTC · XAU</span>
+  </div>
+  {summary}{no_data}
+  <div class="grid-2">
+    {perf_table("Per Asset", bd_asset, asset_keys, "Asset", 6, stats_el)}
+    {perf_table("Per Direzione", bd_dir, dir_keys, "Dir", 6, stats_el)}
+  </div>
+  <div class="grid-2">
+    {perf_table("Per Tipo POI", bd_poi, poi_keys, "POI", 6, stats_el)}
+    {perf_table("Per Premium/Discount", bd_pd, pd_keys, "Zona", 6, stats_el)}
+  </div>
+  {perf_table("Per Quality", bd_ql, ql_keys, "Quality", 6, stats_el)}
+  {rec_html}
+</div>"""
+
+
+# ============================================================
+# SEZIONE 1 — Edge Lab OTE-SC — INVARIATA, ZERO RIGHE TOCCATE
 # ============================================================
 
 def section_edge_lab(rows, recent):
@@ -436,7 +585,7 @@ def section_edge_lab(rows, recent):
 
 
 # ============================================================
-# SEZIONE 2 — TRB
+# SEZIONE 2 — TRB — INVARIATA
 # ============================================================
 
 def section_trb(rows, recent):
@@ -525,7 +674,7 @@ def section_trb(rows, recent):
 
 
 # ============================================================
-# SEZIONE 3 — Liquidity Hunter
+# SEZIONE 3 — Liquidity Hunter — INVARIATA
 # ============================================================
 
 def section_lh(rows, recent):
@@ -561,13 +710,6 @@ def section_lh(rows, recent):
         body = ""
         for r in recent:
             sid,asset,direction,entry,sl,tp,rr,qs,ql,level,lvl_pri,sweep,trigger,tp_label,outcome,mae,mfe,bars,ts,sl_orig = r
-            # FIX (13/08): la colonna SL mostrava stop_loss, che il
-            # breakeven sposta a entry quando il trade va in profitto --
-            # per questo SL appariva identico a Entry (falso allarme,
-            # non un errore della strategia). sl_original e' il vero SL
-            # del segnale come nato, mai piu' modificato. Fallback a sl
-            # (stop_loss) solo per righe storiche precedenti al fix,
-            # dove sl_original non era ancora tracciato (NULL).
             sl_display = sl_orig if sl_orig is not None else sl
             oc = {"TP":"b-tp","SL":"b-sl","EXPIRED":"b-exp","OPEN":"b-open"}.get(outcome,"b-exp")
             body += f"""<tr>
@@ -612,7 +754,7 @@ def section_lh(rows, recent):
 
 
 # ============================================================
-# SEZIONE 4 — V4.1 Phase 1
+# SEZIONE 4 — V4.1 Phase 1 — INVARIATA
 # ============================================================
 
 def section_v41p1(rows):
@@ -632,7 +774,6 @@ def section_v41p1(rows):
     bd_trigger = breakdown(rows, lambda r: r["trigger"],                   ["BOS","CHOCH","BOS+CHOCH"], stats_v41)
     v41_asset_keys = asset_keys_from(rows, preferred=("BTC","XAU","PAXG"))
     v41_asset_keys = [a.replace("_USDT","").replace("_USD","") for a in v41_asset_keys]
-    # dedup preservando l'ordine (BTC_USDT e BTC potrebbero collassare)
     _seen = set(); v41_asset_keys = [a for a in v41_asset_keys if not (a in _seen or _seen.add(a))]
     bd_asset   = breakdown(rows, lambda r: r["asset"].replace("_USDT","").replace("_USD",""), v41_asset_keys, stats_v41)
     bd_sess    = breakdown(rows, lambda r: r["session"] or "N/A",          ["ASIA","LONDON","NEW_YORK"], stats_v41)
@@ -672,11 +813,15 @@ def section_v41p1(rows):
 
 
 # ============================================================
-# Generate
+# Generate — MODIFICATO SOLO per: caricare i dati TT + inserire
+# section_tt(...) IN CIMA, prima di section_edge_lab. Il resto invariato.
 # ============================================================
 
 def generate():
     conn = sqlite3.connect(DB_PATH)
+    tt_rows        = load_tt_signals(conn)
+    tt_recent      = load_tt_recent(conn, 20)
+    tt_invalidated = load_tt_invalidated_count(conn)
     el_rows    = load_el_signals(conn)
     el_recent  = load_el_recent(conn, 20)
     trb_rows   = load_trb_signals(conn)
@@ -703,9 +848,11 @@ def generate():
 </header>
 <div class="container">
 
-  {section_edge_lab(el_rows, el_recent)}
+  {section_tt(tt_rows, tt_recent, tt_invalidated)}
 
   <div class="section-divider"><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">Strategie Attive</span></div>
+
+  {section_edge_lab(el_rows, el_recent)}
 
   {section_trb(trb_rows, trb_recent)}
 
@@ -727,7 +874,7 @@ def generate():
 
     print(
         f"Analytics dashboard generata: {OUT_PATH} "
-        f"(EL:{len(el_rows)} | TRB:{len(trb_rows)} | LH:{len(lh_rows)} | V41P1:{len(v41p1_rows)})"
+        f"(TT:{len(tt_rows)}+{tt_invalidated}inv | EL:{len(el_rows)} | TRB:{len(trb_rows)} | LH:{len(lh_rows)} | V41P1:{len(v41p1_rows)})"
     )
 
 
