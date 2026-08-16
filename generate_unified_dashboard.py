@@ -25,8 +25,78 @@ def q(conn, sql, params=()):
 
 
 # ============================================================
-# Data loading — OTE-SC
+# Data loading — TT (nuovo, aggiunto in cima -- OTE-SC sotto e'
+# rimasto INVARIATO, nessuna riga toccata)
 # ============================================================
+
+def load_tt_open(conn):
+    """
+    'Aperto' per TT include due stati distinti (a differenza delle
+    altre strategie che hanno solo OPEN): WAITING_CONFIRMATION (Early
+    Signal, non ancora un trade -- coerente con "prepare the trade" di
+    TT) ed ENTRY (trade reale confermato). Il campo 'status' distingue
+    i due nella tabella.
+    """
+    try:
+        rows = q(conn, """
+            SELECT signal_id, asset, direction, status,
+                   planned_entry, planned_sl, planned_tp, planned_rr,
+                   actual_entry, actual_sl, actual_tp,
+                   poi_type, pd_zone, quality_label, quality_score,
+                   bars_waiting, bars_open, signal_created_at
+            FROM tt_signals WHERE status IN ('WAITING_CONFIRMATION','ENTRY')
+            ORDER BY signal_created_at DESC
+        """)
+    except sqlite3.OperationalError:
+        return []
+    now = datetime.now(timezone.utc)
+    result = []
+    for r in rows:
+        (sid, asset, direction, status, p_entry, p_sl, p_tp, p_rr,
+         a_entry, a_sl, a_tp, poi_type, pd_zone, ql, qs, bars_waiting, bars_open, ts) = r
+        try:
+            setup_dt = datetime.fromisoformat(ts)
+            if setup_dt.tzinfo is None: setup_dt = setup_dt.replace(tzinfo=timezone.utc)
+            elapsed_h = round((now - setup_dt).total_seconds() / 3600, 1)
+        except: elapsed_h = 0
+        # Mostra l'ACTUAL se l'entry e' avvenuta, altrimenti il PLANNED
+        entry = a_entry if a_entry is not None else p_entry
+        sl = a_sl if a_sl is not None else p_sl
+        tp = a_tp if a_tp is not None else p_tp
+        result.append({
+            "asset": asset, "direction": direction, "status": status,
+            "entry": entry, "sl": sl, "tp": tp, "rr": p_rr,
+            "poi_type": poi_type or "N/A", "pd_zone": pd_zone or "N/A",
+            "ql": ql, "qs": qs, "bars_waiting": bars_waiting or 0,
+            "bars_open": bars_open or 0, "elapsed_h": elapsed_h, "ts": ts,
+        })
+    return result
+
+def load_tt_stats(conn):
+    """
+    Win rate/expectancy SOLO su esiti decisi (TP/SL/EXPIRED). INVALIDATED
+    escluso di proposito (spec TT: non e' una loss, gonfierebbe/
+    sgonfierebbe il win rate in modo scorretto se mischiato).
+    """
+    try:
+        rows = q(conn, "SELECT status, COUNT(*) FROM tt_signals WHERE status IN ('TP','SL','EXPIRED') GROUP BY status")
+        d = {r[0]: r[1] for r in rows}
+        n = sum(d.values()); wins = d.get("TP",0); sls = d.get("SL",0)
+        waiting = q(conn, "SELECT COUNT(*) FROM tt_signals WHERE status='WAITING_CONFIRMATION'")[0][0]
+        entry_open = q(conn, "SELECT COUNT(*) FROM tt_signals WHERE status='ENTRY'")[0][0]
+        invalidated = q(conn, "SELECT COUNT(*) FROM tt_signals WHERE status='INVALIDATED'")[0][0]
+        return {"n":n, "open": waiting + entry_open,
+                "win":round(wins/n*100,1) if n>0 else 0,
+                "exp_r":round((wins*2-sls)/n,2) if n>0 else 0,
+                "invalidated": invalidated}
+    except sqlite3.OperationalError:
+        return {"n":0,"open":0,"win":0,"exp_r":0,"invalidated":0}
+
+
+# ============================================================
+# Data loading — OTE-SC — INVARIATA
+# ============================================================
+
 
 def load_el_open(conn):
     try:
@@ -272,6 +342,9 @@ header h1{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;l
 .container{max-width:1320px;margin:0 auto;padding:24px 32px}
 .section-title{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;margin:28px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--border)}
 .section-title.el{color:var(--accent)}
+.section-title.tt{color:#f472b6}
+.pulse-tt{background:#f472b6}
+.b-waiting{background:rgba(244,114,182,.15);color:#f472b6}
 .section-title.trb{color:var(--accent4)}
 .section-title.lh{color:var(--accent5)}
 .section-title.v41p1{color:var(--accent3);opacity:.8}
@@ -313,6 +386,35 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
 # ============================================================
 # Tabelle HTML
 # ============================================================
+
+def tt_open_table(rows):
+    if not rows:
+        return """<div class="card"><div class="ch"><span class="pulse pulse-tt"></span>Segnali Attivi — TT</div>
+  <table><tbody><tr class="empty-row"><td colspan="10">Nessun segnale attivo. In attesa di un Early Signal.</td></tr></tbody></table></div>"""
+    body = ""
+    for r in rows:
+        asset = r["asset"].replace("_USDT","")
+        status_badge = (f'<span class="badge b-waiting">IN ATTESA</span>' if r["status"] == "WAITING_CONFIRMATION"
+                        else f'<span class="badge b-buy">ENTRY</span>')
+        bars_label = f"{r['bars_waiting']} cicli" if r["status"] == "WAITING_CONFIRMATION" else f"{r['bars_open']} cicli"
+        body += f"""<tr>
+  <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(r['ts'])}</td>
+  <td><strong>{asset}</strong></td>
+  <td>{direction_badge(r['direction'])}</td>
+  <td>{status_badge}</td>
+  <td class="mono">{fp(r['entry'])}</td>
+  <td class="mono neg">{fp(r['sl'])}</td>
+  <td class="mono">{fp(r['tp'])}</td>
+  <td class="mono">{float(r['rr'] or 0):.2f}</td>
+  <td style="font-size:12px;color:var(--dim)">{r['poi_type']} · {r['pd_zone']}</td>
+  <td class="mono" style="color:var(--dim)">{r['elapsed_h']}h ({bars_label})</td>
+</tr>"""
+    return f"""<div class="card"><div class="ch"><span class="pulse pulse-tt"></span>Segnali Attivi — TT ({len(rows)})</div>
+  <div style="overflow-x:auto"><table><thead><tr>
+    <th>Data</th><th>Asset</th><th>Dir</th><th>Stato</th><th>Entry</th><th>SL</th><th>TP</th>
+    <th>R/R</th><th>POI · PD</th><th>Tempo</th>
+  </tr></thead><tbody>{body}</tbody></table></div></div>"""
+
 
 def el_open_table(rows):
     if not rows:
@@ -458,6 +560,9 @@ def lh_open_table(rows):
 def generate():
     conn = sqlite3.connect(DB_PATH)
 
+    tt_open   = load_tt_open(conn)
+    tt_stats  = load_tt_stats(conn)
+
     el_open     = load_el_open(conn)
     el_closed   = load_el_recent_closed(conn, 10)
     el_stats    = load_el_stats(conn)
@@ -486,6 +591,12 @@ def generate():
   <div class="meta">{generated} &nbsp;|&nbsp; <a href="analytics_dashboard.html">Analytics Lab →</a></div>
 </header>
 <div class="container">
+
+  <div class="section-title tt">⚡ TT — Direction · Location · Liquidity</div>
+  {kpi_row(tt_stats, "#f472b6")}
+  {tt_open_table(tt_open)}
+
+  <div class="divider"></div>
 
   <div class="section-title el">⚡ Institutional Edge Lab — OTE-SC</div>
   {kpi_row(el_stats, "var(--accent)")}
@@ -520,7 +631,8 @@ def generate():
 
     print(
         f"Dashboard unificata generata: {OUT_PATH} "
-        f"(EL aperti={el_stats['open']} chiusi={el_stats['n']} | "
+        f"(TT aperti={tt_stats['open']} chiusi={tt_stats['n']} | "
+        f"EL aperti={el_stats['open']} chiusi={el_stats['n']} | "
         f"V4.1P1 aperti={v41p1_stats['open']} chiusi={v41p1_stats['n']} | "
         f"TRB aperti={trb_stats['open']} chiusi={trb_stats['n']} | "
         f"LH aperti={lh_stats['open']} chiusi={lh_stats['n']})"
