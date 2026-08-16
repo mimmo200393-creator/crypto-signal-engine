@@ -18,6 +18,7 @@ Ciclo per asset (BTC_USDT, XAU_USD):
        stessa POI -- niente duplicati, spec sezione 27)
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -27,6 +28,11 @@ from core import tt_db
 
 from strategies.tt.liquidity_engine import evaluate_setup, evaluate_execution
 from strategies.tt.direction_engine import compute_direction_4h
+
+try:
+    from core.decision_ledger import tt_integration as ledger_link
+except Exception:
+    ledger_link = None  # Decision Ledger non disponibile -- TT funziona comunque
 
 logger = logging.getLogger("tt.runner")
 
@@ -94,18 +100,35 @@ def _monitor_open_signals(conn, asset: str, df_m5, now):
         new_mfe = max(float(mfe or 0), favorable)
 
         if sl_hit:
-            tt_db.close_signal(conn, sid, "SL", result_r=round(-(abs(entry-sl))/abs(entry-sl), 3) if entry != sl else 0,
+            result_r = round(-(abs(entry-sl))/abs(entry-sl), 3) if entry != sl else 0
+            tt_db.close_signal(conn, sid, "SL", result_r=result_r,
                               mae=new_mae, mfe=new_mfe, bars_open=bars_open)
             logger.info("TT [%s]: %s -> SL", asset, sid[:8])
+            if ledger_link:
+                try:
+                    ledger_link.link_outcome(sid, "SL", entry, sl, mae=new_mae, mfe=new_mfe, duration_bars=bars_open)
+                except Exception as e:
+                    logger.warning("TT [%s]: ledger link_outcome fallito (non-blocking): %s", asset, e)
         elif tp_hit:
             risk = abs(entry - sl)
             reward = abs(tp - entry)
             rr = round(reward / risk, 3) if risk > 0 else 0
             tt_db.close_signal(conn, sid, "TP", result_r=rr, mae=new_mae, mfe=new_mfe, bars_open=bars_open)
             logger.info("TT [%s]: %s -> TP (+%.2fR)", asset, sid[:8], rr)
+            if ledger_link:
+                try:
+                    ledger_link.link_outcome(sid, "TP", entry, sl, mae=new_mae, mfe=new_mfe,
+                                            duration_bars=bars_open, rr_planned=rr)
+                except Exception as e:
+                    logger.warning("TT [%s]: ledger link_outcome fallito (non-blocking): %s", asset, e)
         elif bars_open >= (expiry or 96):
             tt_db.close_signal(conn, sid, "EXPIRED", result_r=0, mae=new_mae, mfe=new_mfe, bars_open=bars_open)
             logger.info("TT [%s]: %s -> EXPIRED", asset, sid[:8])
+            if ledger_link:
+                try:
+                    ledger_link.link_outcome(sid, "EXPIRED", entry, sl, mae=new_mae, mfe=new_mfe, duration_bars=bars_open)
+                except Exception as e:
+                    logger.warning("TT [%s]: ledger link_outcome fallito (non-blocking): %s", asset, e)
         else:
             conn.execute(
                 "UPDATE tt_signals SET mae=?, mfe=?, bars_open=? WHERE signal_id=?",
@@ -240,6 +263,16 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                 )
                 logger.info("TT [%s %s]: ENTRY CONFERMATA @ %.4f", asset, direction, current_price)
                 _notify_entry(asset, direction, sig, current_price, sig["planned_sl"], sig["planned_tp"], config)
+
+                if ledger_link:
+                    try:
+                        sig_for_ledger = dict(sig)
+                        raw_snap = sig_for_ledger.get("context_snapshot")
+                        if isinstance(raw_snap, str):
+                            sig_for_ledger["context_snapshot"] = json.loads(raw_snap)
+                        ledger_link.capture_executed(sid, asset, sig_for_ledger)
+                    except Exception as e:
+                        logger.warning("TT [%s]: ledger capture_executed fallito (non-blocking): %s", asset, e)
             else:
                 logger.info("TT [%s %s]: esecuzione non confermata (%s).",
                            asset, direction, exec_result.get("rejection"))
@@ -259,7 +292,28 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         signal = result["signal"]
 
         if signal is None:
-            logger.info("TT [%s]: no signal — %s", asset, result["diagnostics"].get("rejection", "?"))
+            rejection = result["diagnostics"].get("rejection", "?")
+            logger.info("TT [%s]: no signal — %s", asset, rejection)
+            if ledger_link:
+                try:
+                    import uuid
+                    diag = result["diagnostics"]
+                    fake_signal = {
+                        "direction": diag.get("direction_4h"),
+                        "context_snapshot": {
+                            "direction": {"direction": diag.get("direction_4h")},
+                            "poi": diag.get("poi"),
+                            "liquidity": diag.get("liquidity"),
+                            "premium_discount": diag.get("premium_discount"),
+                            "context_15m": diag.get("context_15m"),
+                        },
+                    }
+                    ledger_link.capture_rejected(
+                        str(uuid.uuid4()), asset, diag.get("direction_4h"), rejection,
+                        signal=fake_signal,
+                    )
+                except Exception as e:
+                    logger.warning("TT [%s]: ledger capture_rejected fallito (non-blocking): %s", asset, e)
             return
 
         if tt_db.has_active_setup_for_poi(conn, asset, signal["direction"], signal["poi_ref"]):
