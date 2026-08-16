@@ -439,6 +439,36 @@ def select_dynamic_target(liq_scenario: dict, opposing_poi, entry: float,
 # 7. SIGNAL ORCHESTRATION: Proximity + Early Signal (spec sezioni 8-12, 26)
 # ============================================================
 
+def _compute_signal_quality(poi: dict, pd_info: dict, ctx_15m: dict,
+                            trade_side: str, planned_rr: float) -> tuple:
+    """
+    Quality Score del SEGNALE (spec sezione 29) -- diverso da poi["quality_score"]
+    (quello e' solo la qualita' della location, calcolato nel Location
+    Engine). Questo combina i pochi elementi che la spec elenca:
+    qualita' POI, Premium/Discount allineato, 15M coerente, RR.
+
+    Pochi elementi forti, non 20 filtri (spec esplicita). Solo SOFT
+    factor -- non blocca mai (il blocco vero e' gia' avvenuto sopra,
+    su RR insufficiente/nessun target/nessuna POI).
+    """
+    score = 3  # base: il setup e' arrivato fin qui, tutti i gate hard sono gia' passati
+
+    score += round(poi.get("quality_score", 0) / 10 * 3)  # fino a +3, scalato da poi_quality (0-10)
+
+    if is_preferred_zone(pd_info.get("pd_zone"), trade_side):
+        score += 2  # Premium/Discount allineato (spec sezione 5)
+
+    if ctx_15m.get("ctx_15m_momentum") == "DECELERATING":
+        score += 2  # il prezzo rallenta avvicinandosi -- buon segno (spec sezione 7)
+
+    if planned_rr >= 2.0:
+        score += 2
+
+    score = min(score, 12)
+    label = "HIGH" if score >= 8 else ("MEDIUM" if score >= 5 else "LOW")
+    return score, label
+
+
 def _direction_to_trade_side(direction_4h: str):
     if direction_4h == "BULLISH":
         return "BUY"
@@ -535,6 +565,9 @@ def evaluate_setup(asset: str, df_h4, df_h1, df_m15, current_price: float) -> di
     if planned_rr < MIN_RR:
         return reject(f"RR_INSUFFICIENT ({planned_rr:.2f} < {MIN_RR})")
 
+    quality_score, quality_label = _compute_signal_quality(
+        poi, pd_info, ctx_15m, trade_side, planned_rr)
+
     now = datetime.now(timezone.utc)
     signal = {
         "asset": asset, "direction": trade_side, "direction_4h": dir_ctx["direction"],
@@ -558,6 +591,9 @@ def evaluate_setup(asset: str, df_h4, df_h1, df_m15, current_price: float) -> di
         "planned_entry": round(planned_entry, 5), "planned_sl": round(planned_sl, 5),
         "planned_tp": round(planned_tp, 5), "planned_rr": planned_rr,
         "planned_tp_type": target["type"], "planned_tp_ref": f"{target['type']}@{target['price']}",
+
+        "quality_score": quality_score, "quality_label": quality_label,
+        "setup_type": "CONSERVATIVE",
 
         "context_snapshot": {"direction": dir_ctx, "poi": poi, "liquidity": liq,
                              "premium_discount": pd_info, "context_15m": ctx_15m},
