@@ -52,6 +52,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
 .b-buy{background:rgba(79,255,176,.15);color:var(--buy)}
 .b-sell{background:rgba(255,107,107,.15);color:var(--sell)}
 .b-premium{background:rgba(167,139,250,.15);color:var(--accent4)}
+.b-invalid{background:rgba(90,100,120,.15);color:var(--dim);font-style:italic}
 .empty{text-align:center;padding:24px;color:var(--dim);font-size:13px}
 @media(max-width:900px){.grid-2{grid-template-columns:1fr}.summary-grid.cols8,.summary-grid.cols7,.summary-grid.cols6{grid-template-columns:repeat(3,1fr)}.container{padding:12px}.card table{min-width:600px}}
 </style>
@@ -59,9 +60,70 @@ tr.hl td{background:rgba(79,255,176,.06)}
 <body>
 <header>
   <h1>Crypto Signal Engine — Analytics Lab</h1>
-  <div class="meta">2026-08-16 16:45 UTC &nbsp;|&nbsp; <a href="unified_dashboard.html">&larr; Dashboard</a> &nbsp;|&nbsp; <a href="engine_edge_dashboard.html">Engine Edge Lab →</a></div>
+  <div class="meta">2026-08-16 16:50 UTC &nbsp;|&nbsp; <a href="unified_dashboard.html">&larr; Dashboard</a> &nbsp;|&nbsp; <a href="engine_edge_dashboard.html">Engine Edge Lab →</a></div>
 </header>
 <div class="container">
+
+  
+<div class="card" style="border-top:2px solid var(--accent)">
+  <div class="fw-header" style="color:var(--accent)">
+    ⚡ TT — Direction · Location · Liquidity
+    <span class="fw-tag tag-active">ATTIVO</span>
+    <span style="color:var(--dim);font-size:11px;margin-left:auto">4H→1H→15M→5M · BTC · XAU</span>
+  </div>
+  <div class="summary-grid cols8" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
+  <div><span class="big">0</span><span class="lbl">Chiusi (TP/SL/EXP)</span></div>
+  <div><span class="big warn">0</span><span class="lbl">Invalidated</span></div>
+  <div><span class="big neg">0%</span><span class="lbl">Win Rate</span></div>
+  <div><span class="big neg">0%</span><span class="lbl">SL Rate</span></div>
+  <div><span class="big neg">+0.00R</span><span class="lbl">Expectancy</span></div>
+  <div><span class="big">0.00</span><span class="lbl">Avg R/R</span></div>
+  <div><span class="big neg">0.0</span><span class="lbl">Avg MAE</span></div>
+  <div><span class="big pos">0.0</span><span class="lbl">Avg MFE</span></div>
+</div><div class="card"><div class="empty">In attesa del primo segnale TT chiuso.</div></div>
+  <div class="grid-2">
+    <div class="card">
+  <div class="ch">Per Asset</div>
+  <table><thead><tr>
+    <th>Asset</th><th>N</th><th>Win%</th><th>Expectancy</th>
+    <th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="6" class="empty">Nessun dato</td></tr></tbody></table>
+</div>
+    <div class="card">
+  <div class="ch">Per Direzione</div>
+  <table><thead><tr>
+    <th>Dir</th><th>N</th><th>Win%</th><th>Expectancy</th>
+    <th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="6" class="empty">Nessun dato</td></tr></tbody></table>
+</div>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+  <div class="ch">Per Tipo POI</div>
+  <table><thead><tr>
+    <th>POI</th><th>N</th><th>Win%</th><th>Expectancy</th>
+    <th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="6" class="empty">Nessun dato</td></tr></tbody></table>
+</div>
+    <div class="card">
+  <div class="ch">Per Premium/Discount</div>
+  <table><thead><tr>
+    <th>Zona</th><th>N</th><th>Win%</th><th>Expectancy</th>
+    <th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="6" class="empty">Nessun dato</td></tr></tbody></table>
+</div>
+  </div>
+  <div class="card">
+  <div class="ch">Per Quality</div>
+  <table><thead><tr>
+    <th>Quality</th><th>N</th><th>Win%</th><th>Expectancy</th>
+    <th>Avg MAE</th><th>Avg MFE</th>
+  </tr></thead><tbody><tr><td colspan="6" class="empty">Nessun dato</td></tr></tbody></table>
+</div>
+  <div class="card"><div class="empty">Nessun segnale ancora.</div></div>
+</div>
+
+  <div class="section-divider"><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">Strategie Attive</span></div>
 
   
 <div class="card" style="border-top:2px solid var(--accent)">
@@ -417,8 +479,6 @@ tr.hl td{background:rgba(79,255,176,.06)}
 </tr></tbody></table>
   </div></div>
 </div>
-
-  <div class="section-divider"><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">Strategie Attive</span></div>
 
   
 <div class="card" style="border-top:2px solid var(--accent4)">
