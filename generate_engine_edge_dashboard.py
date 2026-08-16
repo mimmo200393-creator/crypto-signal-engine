@@ -56,9 +56,9 @@ ENGINES = [
     ("money_flow",    "Money Flow"),
 ]
 
-STRATEGY_ORDER = ["V41P1", "OTE-SC", "LH", "TRB"]
+STRATEGY_ORDER = ["TT", "V41P1", "OTE-SC", "LH", "TRB"]
 STRATEGY_COLOR = {
-    "V41P1": "#ffd166", "OTE-SC": "#4fffb0",
+    "TT": "#f472b6", "V41P1": "#ffd166", "OTE-SC": "#4fffb0",
     "LH": "#38bdf8", "TRB": "#a78bfa",
 }
 
