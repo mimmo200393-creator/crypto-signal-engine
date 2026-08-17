@@ -1526,12 +1526,17 @@ def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
     if direction == "BUY":
         entry = zh                      # bordo superiore della zona
         sl = zl - sl_buffer             # sotto la zona = invalidazione
-        # TP: prossimo swing HIGH sopra il prezzo (resistenza da superare)
-        tp = _find_next_swing_target(swing_zones, price, "BUY", atr, P)
+        # TP: prossimo swing HIGH sopra l'ENTRY (non sopra il prezzo
+        # attuale) -- coerenza con l'Entry quando il segnale viene
+        # anticipato: l'Entry guarda gia' avanti (il bordo della zona,
+        # non il prezzo di oggi), il TP deve ragionare allo stesso modo,
+        # altrimenti con il prezzo ancora lontano dalla zona il target
+        # puo' cadere sotto l'Entry stesso (bug trovato il 18/08).
+        tp = _find_next_swing_target(swing_zones, entry, "BUY", atr, P)
     else:  # SELL
         entry = zl                      # bordo inferiore della zona
         sl = zh + sl_buffer             # sopra la zona = invalidazione
-        tp = _find_next_swing_target(swing_zones, price, "SELL", atr, P)
+        tp = _find_next_swing_target(swing_zones, entry, "SELL", atr, P)
 
     risk = abs(entry - sl)
     if risk <= 0:
