@@ -200,6 +200,17 @@ EDGE_LAB:
     - XAU_USD
 
 # ============================================================
+# OTE Scanner — "Zona prima, direzione dopo"
+# Sostituisce la logica attiva di Edge Lab OTE-SC.
+# Edge Lab resta nel config ma il suo step in scan.yml e' commentato.
+# ============================================================
+OTE_SCANNER:
+  enabled: true
+  assets:
+    - BTC_USDT
+    - XAU_USD
+
+# ============================================================
 # Liquidity Hunter
 # NOTA: anche questa chiave prima MANCAVA (fallback hardcoded).
 # ============================================================
