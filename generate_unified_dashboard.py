@@ -94,62 +94,67 @@ def load_tt_stats(conn):
 
 
 # ============================================================
-# Data loading — OTE-SC — INVARIATA
+# Data loading — OTE (sostituisce Edge Lab OTE-SC)
 # ============================================================
 
 
-def load_el_open(conn):
+def load_ote_open_unified(conn):
+    """Candidate WATCHING/TOUCHED + Signal ENTRY — tutti visibili."""
     try:
-        rows = q(conn, """
-            SELECT signal_id, asset, direction, entry, stop_loss, tp, rr,
-                   quality_score, quality_label, session, ref_session,
-                   liquidity_target, trend_combined, mae, mfe, bars_open,
-                   tradeability_flags, timestamp_setup
-            FROM edge_lab_signals WHERE final_outcome = 'OPEN'
-            ORDER BY timestamp_setup DESC
+        # Candidate attivi (neutri)
+        cand_rows = q(conn, """
+            SELECT 'CAND' as src, candidate_id, asset, 'NEUTRAL' as direction, status,
+                   zone_high, zone_low, zone_score, zone_strength,
+                   proximity_points, created_at, NULL, NULL, NULL
+            FROM ote_candidates WHERE status IN ('WATCHING','TOUCHED')
+            ORDER BY created_at DESC
+        """)
+        # Signal attivi (direzionali)
+        sig_rows = q(conn, """
+            SELECT 'SIG' as src, signal_id, asset, direction, status,
+                   planned_entry, planned_sl, planned_tp, zone_strength,
+                   planned_rr, signal_created_at, mae, mfe, bars_open
+            FROM ote_signals WHERE status='ENTRY'
+            ORDER BY signal_created_at DESC
         """)
     except sqlite3.OperationalError:
         return []
     now = datetime.now(timezone.utc)
     result = []
-    for r in rows:
+    for r in list(cand_rows) + list(sig_rows):
+        src = r[0]
+        ts = r[10]
         try:
-            setup_dt = datetime.fromisoformat(r[17])
+            setup_dt = datetime.fromisoformat(ts)
             if setup_dt.tzinfo is None: setup_dt = setup_dt.replace(tzinfo=timezone.utc)
             elapsed_h = round((now - setup_dt).total_seconds() / 3600, 1)
-            bars_pct  = round((r[15] or 0) / 96 * 100)
-        except: elapsed_h = 0; bars_pct = 0
-        try: flags = json.loads(r[16]) if r[16] else []
-        except: flags = []
-        result.append({
-            "signal_id": r[0], "asset": r[1], "direction": r[2],
-            "entry": r[3], "sl": r[4], "tp": r[5], "rr": r[6],
-            "qs": r[7], "ql": r[8], "session": r[9], "ref_session": r[10],
-            "target": r[11], "trend": r[12], "mae": r[13], "mfe": r[14],
-            "bars_open": r[15], "bars_pct": bars_pct, "flags": flags,
-            "ts": r[17], "elapsed_h": elapsed_h,
-        })
+        except: elapsed_h = 0
+        if src == 'CAND':
+            result.append({
+                "asset": r[2], "direction": "—", "status": r[4],
+                "entry": f"{r[5]:.2f}-{r[6]:.2f}" if r[5] else "—",
+                "sl": "—", "tp": "—", "rr": "—",
+                "zone_strength": r[8] or "—", "elapsed_h": elapsed_h, "ts": ts,
+            })
+        else:
+            result.append({
+                "asset": r[2], "direction": r[3], "status": r[4],
+                "entry": r[5], "sl": r[6], "tp": r[7],
+                "rr": r[9], "zone_strength": r[8] or "—",
+                "elapsed_h": elapsed_h, "ts": ts,
+            })
     return result
 
-def load_el_recent_closed(conn, limit=10):
+def load_ote_stats_unified(conn):
     try:
-        return q(conn, f"""
-            SELECT asset, direction, entry, stop_loss, tp, rr,
-                   quality_label, session, ref_session, liquidity_target,
-                   final_outcome, mae, mfe, bars_open, timestamp_setup
-            FROM edge_lab_signals WHERE final_outcome != 'OPEN'
-            ORDER BY timestamp_setup DESC LIMIT {limit}
-        """)
-    except sqlite3.OperationalError:
-        return []
-
-def load_el_stats(conn):
-    try:
-        rows = q(conn, "SELECT final_outcome, COUNT(*) FROM edge_lab_signals WHERE final_outcome!='OPEN' GROUP BY final_outcome")
-        d = {r[0]: r[1] for r in rows}
+        sig_rows = q(conn, "SELECT status, COUNT(*) FROM ote_signals WHERE status IN ('TP','SL','EXPIRED') GROUP BY status")
+        d = {r[0]: r[1] for r in sig_rows}
         n = sum(d.values()); wins = d.get("TP",0); sls = d.get("SL",0)
-        return {"n":n,"open":q(conn,"SELECT COUNT(*) FROM edge_lab_signals WHERE final_outcome='OPEN'")[0][0],
-                "win":round(wins/n*100,1) if n>0 else 0,"exp_r":round((wins*2-sls)/n,2) if n>0 else 0}
+        cand_active = q(conn, "SELECT COUNT(*) FROM ote_candidates WHERE status IN ('WATCHING','TOUCHED')")[0][0]
+        sig_active = q(conn, "SELECT COUNT(*) FROM ote_signals WHERE status='ENTRY'")[0][0]
+        return {"n":n, "open": cand_active + sig_active,
+                "win":round(wins/n*100,1) if n>0 else 0,
+                "exp_r":round((wins*2-sls)/n,2) if n>0 else 0}
     except sqlite3.OperationalError:
         return {"n":0,"open":0,"win":0,"exp_r":0}
 
@@ -416,58 +421,35 @@ def tt_open_table(rows):
   </tr></thead><tbody>{body}</tbody></table></div></div>"""
 
 
-def el_open_table(rows):
+def ote_open_table(rows):
     if not rows:
-        return """<div class="card"><div class="ch"><span class="pulse"></span>Segnali Aperti — OTE-SC</div>
-  <table><tbody><tr class="empty-row"><td colspan="12">Nessun segnale aperto. Scansione ogni 5 minuti.</td></tr></tbody></table></div>"""
+        return """<div class="card"><div class="ch"><span class="pulse"></span>Segnali Attivi — OTE</div>
+  <table><tbody><tr class="empty-row"><td colspan="9">Nessun segnale attivo. In attesa di zone calde.</td></tr></tbody></table></div>"""
     body = ""
     for r in rows:
         asset = r["asset"].replace("_USDT","")
-        flags_str = " ".join(f'<span style="color:var(--accent3);font-size:11px">⚠ {f}</span>' for f in r["flags"]) if r["flags"] else ""
+        status = r["status"]
+        if status in ("WATCHING","TOUCHED"):
+            status_badge = '<span class="badge b-waiting">WATCHING</span>' if status=="WATCHING" else '<span class="badge b-open">TOUCHED</span>'
+            dir_show = "—"
+        else:
+            status_badge = outcome_badge(status)
+            dir_show = direction_badge(r["direction"])
         body += f"""<tr>
   <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(r['ts'])}</td>
   <td><strong>{asset}</strong></td>
-  <td>{direction_badge(r['direction'])}</td>
-  <td class="mono">{fp(r['entry'])}</td>
-  <td class="mono neg">{fp(r['sl'])}</td>
-  <td class="mono">{fp(r['tp'])}</td>
-  <td class="mono">{float(r['rr'] or 0):.2f}</td>
-  <td>{ql_badge(r['ql'])}</td>
-  <td style="font-size:12px;color:var(--dim)">{r['session']} → {r['ref_session']}</td>
-  <td class="mono neg">{fp(r['mae'])}</td>
-  <td class="mono pos">{fp(r['mfe'])}</td>
-  <td><div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dim)">{r['bars_open']}/96</div>
-    <div class="progress-bar"><div class="progress-fill" style="width:{r['bars_pct']}%"></div></div>{flags_str}</td>
+  <td>{dir_show}</td>
+  <td>{status_badge}</td>
+  <td class="mono">{fp(r['entry']) if isinstance(r['entry'], (int,float)) else r['entry']}</td>
+  <td class="mono neg">{fp(r['sl']) if isinstance(r['sl'], (int,float)) else r['sl']}</td>
+  <td class="mono">{fp(r['tp']) if isinstance(r['tp'], (int,float)) else r['tp']}</td>
+  <td style="font-size:12px;color:var(--dim)">{r.get('zone_strength','—')}</td>
+  <td class="mono" style="color:var(--dim)">{r['elapsed_h']}h</td>
 </tr>"""
-    return f"""<div class="card"><div class="ch"><span class="pulse"></span>Segnali Aperti — OTE-SC ({len(rows)})</div>
+    return f"""<div class="card"><div class="ch"><span class="pulse"></span>Segnali Attivi — OTE ({len(rows)})</div>
   <div style="overflow-x:auto"><table><thead><tr>
-    <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP</th>
-    <th>R/R</th><th>Quality</th><th>Sessione</th><th>MAE</th><th>MFE</th><th>Bars</th>
-  </tr></thead><tbody>{body}</tbody></table></div></div>"""
-
-
-def el_closed_table(rows):
-    if not rows:
-        return """<div class="card"><div class="ch">Ultimi Chiusi — OTE-SC</div>
-  <table><tbody><tr class="empty-row"><td colspan="11">Nessun segnale chiuso ancora.</td></tr></tbody></table></div>"""
-    body = ""
-    for r in rows:
-        asset,direction,entry,sl,tp,rr,ql,sess,ref,target,outcome,mae,mfe,bars,ts = r
-        body += f"""<tr>
-  <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(ts)}</td>
-  <td><strong>{(asset or '').replace('_USDT','')}</strong></td>
-  <td>{direction_badge(direction)}</td>
-  <td class="mono">{fp(entry)}</td>
-  <td class="mono">{fp(tp)}</td>
-  <td class="mono">{float(rr or 0):.2f}</td>
-  <td>{ql_badge(ql)}</td>
-  <td style="font-size:12px;color:var(--dim)">{target or '—'}</td>
-  <td>{outcome_badge(outcome)}</td>
-</tr>"""
-    return f"""<div class="card"><div class="ch">Ultimi Chiusi — OTE-SC</div>
-  <div style="overflow-x:auto"><table><thead><tr>
-    <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>TP</th><th>R/R</th>
-    <th>Quality</th><th>Target</th><th>Esito</th>
+    <th>Data</th><th>Asset</th><th>Dir</th><th>Stato</th><th>Entry</th><th>SL</th><th>TP</th>
+    <th>Zona</th><th>Tempo</th>
   </tr></thead><tbody>{body}</tbody></table></div></div>"""
 
 
@@ -563,9 +545,8 @@ def generate():
     tt_open   = load_tt_open(conn)
     tt_stats  = load_tt_stats(conn)
 
-    el_open     = load_el_open(conn)
-    el_closed   = load_el_recent_closed(conn, 10)
-    el_stats    = load_el_stats(conn)
+    ote_open    = load_ote_open_unified(conn)
+    ote_stats   = load_ote_stats_unified(conn)
     v41p1_open  = load_v41p1_open(conn)
     v41p1_stats = load_v41p1_stats(conn)
     trb_open    = load_trb_open(conn)
@@ -598,10 +579,9 @@ def generate():
 
   <div class="divider"></div>
 
-  <div class="section-title el">⚡ Institutional Edge Lab — OTE-SC</div>
-  {kpi_row(el_stats, "var(--accent)")}
-  {el_open_table(el_open)}
-  {el_closed_table(el_closed)}
+  <div class="section-title el">⚡ OTE — Zona prima, direzione dopo</div>
+  {kpi_row(ote_stats, "var(--accent)")}
+  {ote_open_table(ote_open)}
 
   <div class="divider"></div>
 
@@ -632,7 +612,7 @@ def generate():
     print(
         f"Dashboard unificata generata: {OUT_PATH} "
         f"(TT aperti={tt_stats['open']} chiusi={tt_stats['n']} | "
-        f"EL aperti={el_stats['open']} chiusi={el_stats['n']} | "
+        f"OTE aperti={ote_stats['open']} chiusi={ote_stats['n']} | "
         f"V4.1P1 aperti={v41p1_stats['open']} chiusi={v41p1_stats['n']} | "
         f"TRB aperti={trb_stats['open']} chiusi={trb_stats['n']} | "
         f"LH aperti={lh_stats['open']} chiusi={lh_stats['n']})"
