@@ -112,12 +112,20 @@ jobs:
             python3 lh_digest_runner.py
           fi
 
-      - name: Institutional Edge Lab — OTE-SC (BTC_USDT + PAXG_USDT)
+      # ── Vecchio OTE-SC disattivato (sostituito da OTE Fase A) ──
+      # - name: Institutional Edge Lab — OTE-SC (BTC_USDT + PAXG_USDT)
+      #   env:
+      #     TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      #     TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      #     NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      #   run: python3 edge_lab_runner.py
+
+      - name: OTE Scanner (BTC_USDT + XAU_USD)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: python3 edge_lab_runner.py
+        run: python3 ote_scanner_runner.py
 
       - name: Market Radar V1 (BTC_USDT + XAU_USD)
         env:
