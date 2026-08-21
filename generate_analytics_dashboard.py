@@ -91,51 +91,69 @@ def load_tt_recent(conn, limit=20):
 
 
 # ============================================================
-# Data loaders — ORIGINALI, INVARIATI (OTE-SC, TRB, LH, V4.1)
+# Data loaders — OTE (nuovo, sostituisce Edge Lab OTE-SC)
 # ============================================================
 
-def load_el_signals(conn):
+def load_ote_signals(conn):
+    """Segnali OTE con esito deciso (TP/SL/EXPIRED)."""
     try:
         rows = q(conn, """
-            SELECT asset, direction, session, ref_session,
-                   trend_combined, vol_regime_m15,
-                   quality_label, quality_score,
-                   liquidity_target, liquidity_target_priority,
-                   final_outcome, mae, mfe, rr, bars_open,
-                   tradeability_flags, timestamp_setup
-            FROM edge_lab_signals WHERE final_outcome != 'OPEN'
-            ORDER BY timestamp_setup DESC
+            SELECT asset, direction, zone_ref, zone_score, zone_strength,
+                   quality_label, quality_score, tp_type,
+                   status, mae, mfe, planned_rr, actual_rr, bars_open,
+                   signal_created_at, trigger_type
+            FROM ote_signals WHERE status IN ('TP','SL','EXPIRED')
+            ORDER BY signal_created_at DESC
         """)
     except sqlite3.OperationalError:
         return []
     result = []
     for r in rows:
-        try: flags = json.loads(r[15]) if r[15] else []
-        except: flags = []
+        rr = r[12] if r[12] is not None else r[11]
         result.append({
             "asset": r[0], "direction": r[1],
-            "session": r[2] or "N/A", "ref_session": r[3] or "N/A",
-            "trend": r[4] or "N/A", "vol": r[5] or "N/A",
-            "quality_label": r[6] or "N/A", "quality_score": r[7] or 0,
-            "liq_target": r[8] or "N/A", "liq_priority": r[9] or "N/A",
-            "outcome": r[10],
-            "mae": float(r[11] or 0), "mfe": float(r[12] or 0),
-            "rr": float(r[13] or 0), "bars_open": int(r[14] or 0),
-            "flags": flags, "ts": r[16] or "",
+            "zone_ref": r[2] or "N/A", "zone_score": r[3] or 0,
+            "zone_strength": r[4] or "N/A",
+            "quality_label": r[5] or "N/A", "quality_score": r[6] or 0,
+            "tp_type": r[7] or "N/A",
+            "outcome": r[8],
+            "mae": float(r[9] or 0), "mfe": float(r[10] or 0),
+            "rr": float(rr or 0), "bars_open": int(r[13] or 0),
+            "ts": r[14] or "", "trigger_type": r[15] or "N/A",
         })
     return result
 
-def load_el_recent(conn, limit=20):
+def load_ote_candidates_stats(conn):
+    """Statistiche sui candidate (neutri) per visibilita'."""
+    try:
+        rows = q(conn, """
+            SELECT status, COUNT(*) FROM ote_candidates GROUP BY status
+        """)
+        d = {r[0]: r[1] for r in rows}
+        return {
+            "watching": d.get("WATCHING", 0) + d.get("TOUCHED", 0),
+            "expired": d.get("EXPIRED", 0),
+            "signal_created": d.get("SIGNAL_CREATED", 0),
+            "total": sum(d.values()),
+        }
+    except sqlite3.OperationalError:
+        return {"watching": 0, "expired": 0, "signal_created": 0, "total": 0}
+
+def load_ote_recent(conn, limit=20):
+    """Ultimi segnali OTE (tutti gli stati)."""
     try:
         return q(conn, f"""
-            SELECT signal_id, asset, direction, entry, stop_loss, tp, rr,
-                   quality_score, quality_label, session, ref_session,
-                   liquidity_target, trend_combined, final_outcome,
-                   mae, mfe, bars_open, timestamp_setup
-            FROM edge_lab_signals ORDER BY timestamp_setup DESC LIMIT {limit}
+            SELECT signal_id, asset, direction, planned_entry, planned_sl, planned_tp,
+                   planned_rr, quality_score, quality_label, zone_strength, trigger_type,
+                   tp_type, status, signal_created_at
+            FROM ote_signals ORDER BY signal_created_at DESC LIMIT {limit}
         """)
     except sqlite3.OperationalError:
         return []
+
+# ============================================================
+# Data loaders — TRB, LH, V4.1 (INVARIATI)
+# ============================================================
 
 def load_trb_signals(conn):
     try:
@@ -505,71 +523,70 @@ def section_tt(rows, recent, invalidated_count):
 
 
 # ============================================================
-# SEZIONE 1 — Edge Lab OTE-SC — INVARIATA, ZERO RIGHE TOCCATE
+# SEZIONE 1 — OTE "Zona prima, direzione dopo" (sostituisce Edge Lab OTE-SC)
 # ============================================================
 
-def section_edge_lab(rows, recent):
+def section_ote(rows, recent, cand_stats):
     s = stats_el(rows)
     wc = "pos" if s["win"]>=40 else ("neg" if s["win"]<25 else "warn")
     ec = "pos" if s["exp_r"]>0 else "neg"
 
     summary = f"""<div class="summary-grid cols8" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
-  <div><span class="big">{s['n']}</span><span class="lbl">Chiusi</span></div>
+  <div><span class="big">{s['n']}</span><span class="lbl">Chiusi (TP/SL/EXP)</span></div>
+  <div><span class="big warn">{cand_stats['total']}</span><span class="lbl">Candidate totali</span></div>
   <div><span class="big {wc}">{s['win']}%</span><span class="lbl">Win Rate</span></div>
   <div><span class="big neg">{s['sl']}%</span><span class="lbl">SL Rate</span></div>
   <div><span class="big {ec}">{s['exp_r']:+.2f}R</span><span class="lbl">Expectancy</span></div>
   <div><span class="big">{s['avg_rr']:.2f}</span><span class="lbl">Avg R/R</span></div>
   <div><span class="big neg">{s['avg_mae']:.1f}</span><span class="lbl">Avg MAE</span></div>
   <div><span class="big pos">{s['avg_mfe']:.1f}</span><span class="lbl">Avg MFE</span></div>
-  <div><span class="big">{s['avg_bars']:.0f}</span><span class="lbl">Avg Bars</span></div>
 </div>"""
 
-    no_data = "" if rows else '<div class="card"><div class="empty">In attesa del primo segnale OTE-SC.</div></div>'
+    no_data = "" if rows else '<div class="card"><div class="empty">In attesa del primo segnale OTE chiuso. Candidate attivi: ' + str(cand_stats["watching"]) + '</div></div>'
 
     asset_keys = asset_keys_from(rows)
     dir_keys   = ["BUY","SELL"]
-    sess_keys  = ["ASIA","LONDON","NEW_YORK"]
+    str_keys   = ["STRONG","MODERATE","WEAK"]
     ql_keys    = ["HIGH","MEDIUM","LOW"]
 
     bd_asset = breakdown(rows, lambda r: r["asset"],         asset_keys, stats_el)
     bd_dir   = breakdown(rows, lambda r: r["direction"],     dir_keys,   stats_el)
-    bd_sess  = breakdown(rows, lambda r: r["session"],       sess_keys,  stats_el)
+    bd_str   = breakdown(rows, lambda r: r["zone_strength"], str_keys,   stats_el)
     bd_ql    = breakdown(rows, lambda r: r["quality_label"], ql_keys,    stats_el)
 
-# Recent table
     if not recent:
         rec_html = '<div class="card"><div class="empty">Nessun segnale ancora.</div></div>'
     else:
         body = ""
         for r in recent:
-            sid,asset,direction,entry,sl,tp,rr,qs,ql,sess,ref,liq,trend,outcome,mae,mfe,bars,ts = r
-            oc = {"TP":"b-tp","SL":"b-sl","EXPIRED":"b-exp","OPEN":"b-open"}.get(outcome,"b-exp")
+            (sid, asset, direction, entry, sl, tp, rr, qs, ql,
+             zone_str, trigger, tp_type, status, ts) = r
             body += f"""<tr>
   <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(ts)}</td>
   <td><strong>{asset.replace('_USDT','')}</strong></td>
   <td>{direction_badge(direction)}</td>
+  <td>{outcome_badge(status)}</td>
   <td class="mono">{fmt_p(entry)}</td>
   <td class="mono">{fmt_p(sl)}</td>
   <td class="mono">{fmt_p(tp)}</td>
   <td class="mono">{float(rr or 0):.2f}</td>
-  <td style="font-size:12px;color:var(--dim)">{ql or '—'}</td>
-  <td style="font-size:12px;color:var(--dim)">{liq or '—'}</td>
-  <td><span class="badge {oc}">{outcome}</span></td>
+  <td style="font-size:12px;color:var(--dim)">{zone_str or '—'}</td>
+  <td style="font-size:12px;color:var(--dim)">{trigger or '—'}</td>
 </tr>"""
-        rec_html = f"""<div class="card"><div class="ch">Segnali Recenti OTE-SC</div>
+        rec_html = f"""<div class="card"><div class="ch">Segnali Recenti OTE</div>
   <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
   <table><thead><tr>
-    <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP</th>
-    <th>R/R</th><th>Quality</th><th>Target</th><th>Esito</th>
+    <th>Data</th><th>Asset</th><th>Dir</th><th>Stato</th><th>Entry</th><th>SL</th><th>TP</th>
+    <th>R/R</th><th>Zona</th><th>Trigger</th>
   </tr></thead><tbody>{body}</tbody></table>
   </div></div>"""
 
     return f"""
 <div class="card" style="border-top:2px solid var(--accent)">
   <div class="fw-header" style="color:var(--accent)">
-    ⚡ Institutional Edge Lab — OTE-SC
+    ⚡ OTE — Zona prima, direzione dopo
     <span class="fw-tag tag-active">ATTIVO</span>
-    <span style="color:var(--dim);font-size:11px;margin-left:auto">Phase 1A · BTC · PAXG</span>
+    <span style="color:var(--dim);font-size:11px;margin-left:auto">Sweep+Reaction · BTC · XAU</span>
   </div>
   {summary}{no_data}
   <div class="grid-2">
@@ -577,8 +594,8 @@ def section_edge_lab(rows, recent):
     {perf_table("Per Direzione", bd_dir, dir_keys, "Dir", 6, stats_el)}
   </div>
   <div class="grid-2">
+    {perf_table("Per Zona Strength", bd_str, str_keys, "Strength", 6, stats_el)}
     {perf_table("Per Quality", bd_ql, ql_keys, "Quality", 6, stats_el)}
-    {perf_table("Per Sessione", bd_sess, sess_keys, "Sessione", 6, stats_el)}
   </div>
   {rec_html}
 </div>"""
@@ -822,8 +839,9 @@ def generate():
     tt_rows        = load_tt_signals(conn)
     tt_recent      = load_tt_recent(conn, 20)
     tt_invalidated = load_tt_invalidated_count(conn)
-    el_rows    = load_el_signals(conn)
-    el_recent  = load_el_recent(conn, 20)
+    ote_rows       = load_ote_signals(conn)
+    ote_recent     = load_ote_recent(conn, 20)
+    ote_cand_stats = load_ote_candidates_stats(conn)
     trb_rows   = load_trb_signals(conn)
     trb_recent = load_trb_recent(conn, 20)
     lh_rows    = load_lh_signals(conn)
@@ -852,7 +870,7 @@ def generate():
 
   <div class="section-divider"><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">Strategie Attive</span></div>
 
-  {section_edge_lab(el_rows, el_recent)}
+  {section_ote(ote_rows, ote_recent, ote_cand_stats)}
 
   {section_trb(trb_rows, trb_recent)}
 
@@ -874,7 +892,7 @@ def generate():
 
     print(
         f"Analytics dashboard generata: {OUT_PATH} "
-        f"(TT:{len(tt_rows)}+{tt_invalidated}inv | EL:{len(el_rows)} | TRB:{len(trb_rows)} | LH:{len(lh_rows)} | V41P1:{len(v41p1_rows)})"
+        f"(TT:{len(tt_rows)}+{tt_invalidated}inv | OTE:{len(ote_rows)} cand={ote_cand_stats['total']} | TRB:{len(trb_rows)} | LH:{len(lh_rows)} | V41P1:{len(v41p1_rows)})"
     )
 
 
