@@ -75,26 +75,34 @@ LEVEL_SIGNIFICANCE = {
 
 
 def _find_best_target(levels_in_direction: list, entry: float, sl: float,
-                      direction: str) -> dict:
+                      direction: str, atr: float = None) -> dict:
     """
     Versione OTE di select_dynamic_target — usa MIN_RR di OTE (1.2),
-    non quello hardcoded in TT (1.5). Stessa logica: il livello PIU'
-    SIGNIFICATIVO con RR sufficiente, non il piu' vicino.
+    non quello hardcoded in TT (1.5). Sceglie il livello PIU'
+    SIGNIFICATIVO con RR sufficiente, ma con un TETTO massimo di
+    distanza (8x ATR) -- oltre quella soglia il target e' irrealistico:
+    servirebbe un movimento ininterrotto di giorni, e nel frattempo il
+    prezzo incontrerebbe altra struttura molto prima di arrivarci.
+    A parita' di significativita', preferisce il target PIU' VICINO
+    (bug segnalato il 23/08: TP scelto a 12x ATR, RR=21.99 assurdo).
     """
     risk = abs(entry - sl)
     if risk <= 0:
         return None
+    max_distance = 8.0 * atr if atr else float("inf")
     valid = []
     for lv in levels_in_direction:
         reward = abs(lv["price"] - entry)
+        if reward > max_distance:
+            continue
         rr = round(reward / risk, 3)
         if rr >= MIN_RR:
             sig = LEVEL_SIGNIFICANCE.get(lv["type"], 1)
             valid.append({"price": lv["price"], "type": lv["type"],
-                         "rr": rr, "significance": sig})
+                         "rr": rr, "significance": sig, "distance": reward})
     if not valid:
         return None
-    return max(valid, key=lambda c: (c["significance"], -c["rr"]))
+    return max(valid, key=lambda c: (c["significance"], -c["distance"]))
 
 
 # ============================================================
@@ -306,7 +314,7 @@ def _compute_trade_plan(direction: str, df_h1, zone_high: float,
 
     # TP: prossimo livello significativo nella direzione del trade
     relevant = liq_data.get("above", []) if direction == "BUY" else liq_data.get("below", [])
-    target = _find_best_target(relevant, entry, sl, direction)
+    target = _find_best_target(relevant, entry, sl, direction, atr=atr)
     if target is None:
         return None
 
