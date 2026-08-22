@@ -50,6 +50,7 @@ SOURCE_WEIGHT = {
     "PREV_DAY": 2,        # livello universale
     "ASIAN_SESSION": 2,   # range notturno
     "REACTION_MAP": 2,    # overlay: il prezzo ha gia reagito qui
+    "CONSOLIDATION_RANGE": 3,  # pausa reale del prezzo, ordini accumulati ai bordi
 }
 
 # Soglia per raggruppare fonti "vicine" nella stessa zona
@@ -85,10 +86,21 @@ def find_confluence_zones(conn: sqlite3.Connection, asset: str,
     # ── 6. Session levels ──
     raw_levels.extend(_compute_session_levels(conn, asset, now))
 
+    # ── 7. Range di consolidamento (pause tra un impulso e l'altro) ──
+    atr_h1 = _manual_atr(df_h1)
+    consolidation_ranges = _detect_consolidation_ranges(df_h1, atr_h1)
+    for r in consolidation_ranges:
+        raw_levels.append({
+            "source": "CONSOLIDATION_RANGE",
+            "price_high": r["zone_high"], "price_low": r["zone_low"],
+            "midpoint": (r["zone_high"] + r["zone_low"]) / 2,
+            "details": {"bars": r["bars"], "start_ts": r["start_ts"], "end_ts": r["end_ts"]},
+        })
+
     if not raw_levels:
         return []
 
-    # ── 7. Clustering: raggruppa fonti vicine ──
+    # ── 8. Clustering: raggruppa fonti vicine ──
     tolerance = CLUSTER_TOLERANCE_POINTS.get(asset, 10.0)
     clusters = _cluster_levels(raw_levels, tolerance)
 
@@ -243,6 +255,65 @@ def _compute_equal_levels(df_h1) -> list:
     return levels
 
 
+def _detect_consolidation_ranges(df_h1, atr: float, min_bars: int = 4,
+                                 max_width_atr: float = 1.0) -> list:
+    """
+    Rileva range di consolidamento: periodi di candele H1 consecutive
+    dove il prezzo resta dentro un'ampiezza stretta (< max_width_atr
+    x ATR). Sono le pause tra un impulso e l'altro -- durante il
+    consolidamento si accumulano ordini ai bordi del range, che
+    diventano zone di liquidita' quando il prezzo li rivisita.
+
+    Diverso da uno Swing (un punto) o da un livello di sessione (un
+    orario fisso): qui la zona nasce da DOVE il prezzo si e' davvero
+    fermato, indipendentemente da quando. Calibrato su dati reali:
+    con soglia 1.0xATR e minimo 4 candele, un asset con volatilita'
+    normale produce ~1 range ogni 30-40 ore -- ne' troppo rado ne'
+    rumoroso (verificato il 22/08: 3 range in 100 candele H1, 4-6 ore
+    ciascuno, larghezza 0.79-0.90x ATR).
+
+    Algoritmo greedy: espande una finestra da ogni punto finche'
+    l'ampiezza totale resta sotto soglia, poi salta oltre il range
+    trovato (nessuna sovrapposizione tra range consecutivi).
+    """
+    if df_h1 is None or len(df_h1) < min_bars or atr <= 0:
+        return []
+
+    n = len(df_h1)
+    highs = df_h1["high"].astype(float).values
+    lows = df_h1["low"].astype(float).values
+    timestamps = df_h1["timestamp"].values
+
+    ranges = []
+    i = 0
+    while i < n - min_bars:
+        window_high = highs[i]
+        window_low = lows[i]
+        j = i + 1
+        while j < n:
+            new_high = max(window_high, highs[j])
+            new_low = min(window_low, lows[j])
+            if (new_high - new_low) > max_width_atr * atr:
+                break
+            window_high, window_low = new_high, new_low
+            j += 1
+
+        bars_in_range = j - i
+        if bars_in_range >= min_bars:
+            ranges.append({
+                "zone_high": round(float(window_high), 5),
+                "zone_low": round(float(window_low), 5),
+                "bars": bars_in_range,
+                "start_ts": int(timestamps[i]),
+                "end_ts": int(timestamps[j - 1]),
+            })
+            i = j  # salta oltre il range trovato, nessuna sovrapposizione
+        else:
+            i += 1
+
+    return ranges
+
+
 def _compute_session_levels(conn, asset: str, now: datetime) -> list:
     """Previous Day H/L + Asian Session H/L."""
     levels = []
@@ -341,6 +412,21 @@ def _cluster_levels(raw_levels: list, tolerance: float) -> list:
         all_lows = [m["price_low"] for m in cluster_members]
         zone_high = max(all_highs)
         zone_low = min(all_lows)
+
+        # Fix zona a spessore zero: le fonti "a punto" (Swing, Equal Level,
+        # Previous Day, Asian Session) hanno price_high==price_low. Se il
+        # cluster non contiene nessuna fonte "con bordi veri" (LH Restart,
+        # Order Block, FVG), il risultato e' una zona senza spessore --
+        # non tradeable (bug trovato il 22/08, zona BTC 76972.52-76972.52).
+        # Applico un buffer minimo proporzionale alla tolerance (gia'
+        # calibrata per asset: 5pt XAU, 50pt BTC).
+        RANGE_SOURCES = {"LH_RESTART", "ORDER_BLOCK", "FVG", "CONSOLIDATION_RANGE"}
+        has_range_source = any(m["source"] in RANGE_SOURCES for m in cluster_members)
+        min_width = tolerance * 0.2
+        if not has_range_source and (zone_high - zone_low) < min_width:
+            mid = (zone_high + zone_low) / 2
+            zone_high = mid + min_width / 2
+            zone_low = mid - min_width / 2
 
         # Confluenza: fonti DIVERSE che convergono (non contare due LH come 2)
         sources_seen = {}
