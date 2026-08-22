@@ -245,4 +245,16 @@ def select_best_poi(df_h1: pd.DataFrame, asset: str, direction_4h: str,
     if not valid:
         return None
 
-    return max(valid, key=lambda p: p["quality_score"])
+    # A parita' di quality_score, preferisci la POI PIU' VICINA al
+    # prezzo attuale -- e' quella davvero raggiungibile per un Early
+    # Signal. max() su un pareggio terrebbe la prima della lista
+    # (cronologicamente la piu' vecchia, spesso la piu' lontana),
+    # scartando una POI altrettanto valida ma molto piu' vicina
+    # (bug trovato il 22/08: 132pt scelta invece di 15.5pt, stessa
+    # qualita' 6/10).
+    def _distance_from_price(p):
+        if wanted_type == "DEMAND":
+            return abs(current_price - p["zone_high"])
+        return abs(current_price - p["zone_low"])
+
+    return max(valid, key=lambda p: (p["quality_score"], -_distance_from_price(p)))
