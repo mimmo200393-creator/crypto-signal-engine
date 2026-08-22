@@ -1523,31 +1523,11 @@ def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
     # ── Entry / SL / TP ──────────────────────────────────────
     sl_buffer = P.get("sl_buffer_atr", 0.5) * atr
 
-    if direction == "BUY":
-        entry = zh                      # bordo superiore della zona
-        sl = zl - sl_buffer             # sotto la zona = invalidazione
-        # TP: prossimo swing HIGH sopra l'ENTRY (non sopra il prezzo
-        # attuale) -- coerenza con l'Entry quando il segnale viene
-        # anticipato: l'Entry guarda gia' avanti (il bordo della zona,
-        # non il prezzo di oggi), il TP deve ragionare allo stesso modo,
-        # altrimenti con il prezzo ancora lontano dalla zona il target
-        # puo' cadere sotto l'Entry stesso (bug trovato il 18/08).
-        tp = _find_next_swing_target(swing_zones, entry, "BUY", atr, P)
-    else:  # SELL
-        entry = zl                      # bordo inferiore della zona
-        sl = zh + sl_buffer             # sopra la zona = invalidazione
-        tp = _find_next_swing_target(swing_zones, entry, "SELL", atr, P)
-
-    risk = abs(entry - sl)
-    if risk <= 0:
-        return _reject("ZERO_RISK", zone=best_zone)
-    reward = abs(tp - entry)
-    rr = round(reward / risk, 2)
-
-    # RR minimo DINAMICO in base alla forza della zona: zone forti
-    # possono entrare con RR piu' basso (75% successo), zone deboli
-    # servono un setup con reward piu' alto per compensare la
-    # probabilita' inferiore (50% successo).
+    # RR minimo DINAMICO in base alla forza della zona -- spostato QUI
+    # (prima serviva dopo il calcolo del TP, ma i suoi input -- zone_score --
+    # sono gia' disponibili a questo punto). Zone forti possono entrare con
+    # RR piu' basso (75% successo), zone deboli servono un reward piu' alto
+    # per compensare la probabilita' inferiore (50% successo).
     zone_score = best_zone.get("restart_score", 0)
     if zone_score >= 70:      # STRONG: 75% successo
         min_rr = P.get("min_rr", 1.0)
@@ -1555,6 +1535,29 @@ def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
         min_rr = P.get("min_rr", 1.0) * 1.5
     else:                     # WEAK: 50% successo
         min_rr = P.get("min_rr", 1.0) * 2.0
+
+    if direction == "BUY":
+        entry = zh                      # bordo superiore della zona
+        sl = zl - sl_buffer             # sotto la zona = invalidazione
+        risk = abs(entry - sl)
+        # TP: il PRIMO swing HIGH sopra l'ENTRY che supera il RR minimo,
+        # non semplicemente il piu' vicino in assoluto (bug trovato il
+        # 22/08: su 19 zone STRONG, 8 venivano scartate per RR_TOO_LOW
+        # mentre un target valido esisteva solo pochi punti piu' lontano
+        # del piu' vicino scelto ciecamente).
+        tp = _find_next_swing_target(swing_zones, entry, "BUY", atr, P,
+                                     risk=risk, min_rr=min_rr)
+    else:  # SELL
+        entry = zl                      # bordo inferiore della zona
+        sl = zh + sl_buffer             # sopra la zona = invalidazione
+        risk = abs(entry - sl)
+        tp = _find_next_swing_target(swing_zones, entry, "SELL", atr, P,
+                                     risk=risk, min_rr=min_rr)
+
+    if risk <= 0:
+        return _reject("ZERO_RISK", zone=best_zone)
+    reward = abs(tp - entry)
+    rr = round(reward / risk, 2)
 
     if rr < min_rr:
         return _reject(f"RR_TOO_LOW ({rr:.1f} < {min_rr:.1f} per {best_zone.get('zone_strength','?')})", zone=best_zone)
@@ -1589,12 +1592,24 @@ def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
 
 
 def _find_next_swing_target(swing_zones: list, price: float,
-                            direction: str, atr: float, params: dict) -> float:
+                            direction: str, atr: float, params: dict,
+                            risk: float = None, min_rr: float = None) -> float:
     """
     Trova il TP al prossimo swing storico nella direzione del trade.
     BUY -> prossimo swing HIGH sopra il prezzo (resistenza)
     SELL -> prossimo swing LOW sotto il prezzo (supporto)
     Fallback: entry + 2R (come prima) se nessuno swing disponibile.
+
+    Se risk e min_rr sono forniti: sceglie il PRIMO target, in ordine
+    di vicinanza, che supera la soglia RR -- non semplicemente il piu'
+    vicino in assoluto. Bug trovato il 22/08: il target piu' vicino puo'
+    dare un RR troppo basso mentre uno leggermente piu' lontano lo
+    supera abbondantemente -- scegliere ciecamente il piu' vicino
+    scartava zone STRONG (score 100) per pochi punti di differenza.
+
+    Se nessun target supera la soglia (o risk/min_rr non forniti),
+    ritorna comunque il piu' vicino -- il chiamante decide se il RR
+    risultante e' sufficiente, nessun comportamento nascosto qui.
     """
     if not swing_zones:
         tp_max_atr = params.get("tp1_max_atr", 3.0)
@@ -1609,16 +1624,28 @@ def _find_next_swing_target(swing_zones: list, price: float,
             if sw.get("swing_type") == "HIGH" and sw.get("price", 0) > price
         ]
         if targets:
-            nearest = min(targets, key=lambda s: s["price"] - price)
-            return nearest["price"]
+            targets_sorted = sorted(targets, key=lambda s: s["price"] - price)
+            if risk and min_rr:
+                for t in targets_sorted:
+                    rr = (t["price"] - price) / risk
+                    if rr >= min_rr:
+                        return t["price"]
+                # nessuno supera la soglia -- ritorna comunque il piu'
+                # vicino, il chiamante rifiutera' se il RR e' insufficiente
+            return targets_sorted[0]["price"]
     else:
         targets = [
             sw for sw in swing_zones
             if sw.get("swing_type") == "LOW" and sw.get("price", 0) < price
         ]
         if targets:
-            nearest = min(targets, key=lambda s: price - s["price"])
-            return nearest["price"]
+            targets_sorted = sorted(targets, key=lambda s: price - s["price"])
+            if risk and min_rr:
+                for t in targets_sorted:
+                    rr = (price - t["price"]) / risk
+                    if rr >= min_rr:
+                        return t["price"]
+            return targets_sorted[0]["price"]
 
     # Fallback: nessuno swing nella direzione giusta
     tp_max_atr = params.get("tp1_max_atr", 3.0)
