@@ -54,7 +54,11 @@ OTE_ASSETS = ["BTC_USDT", "XAU_USD"]
 PROXIMITY_POINTS = {"XAU_USD": 12.5, "BTC_USDT": 150.0}
 MIN_ZONE_SCORE = 40          # sotto questo score la zona non diventa candidate
 MIN_RR = 1.2                 # RR minimo per emettere un segnale
-SL_BUFFER_ATR = 0.2          # buffer ATR sotto/sopra il punto di sweep
+SL_BUFFER_ATR = 0.5          # buffer ATR sotto/sopra il punto di sweep
+                              # (bug trovato il 22/08: 0.2 dava SL piu'
+                              # stretti di 1 candela M15, stoppati dal
+                              # rumore. 0.5xATR_H1 ~= 1xATR_M15 su
+                              # entrambi XAU/BTC, verificato sui dati)
 CANDIDATE_EXPIRY_BARS = 48   # 48 cicli da 5min = 4 ore
 SIGNAL_EXPIRY_BARS = 96      # 96 cicli da 5min = 8 ore
 COOLDOWN_HOURS = 2           # dopo un candidate scaduto, stessa zona non ricreata per 2h
