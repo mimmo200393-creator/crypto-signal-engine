@@ -519,6 +519,41 @@ def _monitor_open_signals(conn, asset: str, df_m5):
 # Per-asset runner
 # ============================================================
 
+def _read_mie_snapshots(conn, asset: str, now: datetime) -> dict:
+    """
+    Legge gli snapshot degli engine MIE piu' recenti per il Decision
+    Ledger. Solo Structure e Reaction Map per ora -- i due con edge
+    piu' forte e consistente su Engine Edge Lab (Structure invertito
+    su 4 strategie, Reaction Map positivo su 3). Le chiavi del dict
+    restituito corrispondono a ENGINE_REPORTERS in decision_collector.py.
+    Nessun crash se mancano: OTE resta un lettore passivo.
+    """
+    import json as _json
+    result = {}
+    ts_iso = now.isoformat()
+    try:
+        row = conn.execute("""
+            SELECT snapshot_json FROM structure_snapshots WHERE asset=?
+            ORDER BY ABS(strftime('%s',timestamp_snapshot)-strftime('%s',?)) LIMIT 1
+        """, (asset, ts_iso)).fetchone()
+        if row:
+            result["structure"] = _json.loads(row[0])
+    except Exception as e:
+        logger.warning("OTE _read_mie_snapshots structure: %s", e)
+
+    try:
+        row2 = conn.execute("""
+            SELECT snapshot_json FROM reaction_map_snapshots WHERE asset=?
+            ORDER BY ABS(strftime('%s',timestamp_snapshot)-strftime('%s',?)) LIMIT 1
+        """, (asset, ts_iso)).fetchone()
+        if row2:
+            result["reaction_map"] = _json.loads(row2[0])
+    except Exception as e:
+        logger.warning("OTE _read_mie_snapshots reaction_map: %s", e)
+
+    return result
+
+
 def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     # XAU chiuso nel weekend
     if asset == "XAU_USD":
@@ -545,6 +580,12 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
 
     # Calcolo una volta i livelli Previous Day + Asian Session
     session_levels = _compute_session_levels(conn, asset, now)
+
+    # Engine MIE per il Decision Ledger (Structure + Reaction Map --
+    # i due con edge piu' forte e consistente su Engine Edge Lab).
+    # Nomi delle chiavi = esattamente quelli attesi da ENGINE_REPORTERS
+    # in decision_collector.py, non toccati -- solo letti.
+    mie_snapshots = _read_mie_snapshots(conn, asset, now)
 
     # ── 1. Monitoraggio segnali ENTRY aperti ─────────────────
     try:
@@ -658,7 +699,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
 
             if ledger_link:
                 try:
-                    ledger_link.capture_executed(sid, asset, direction, signal_data)
+                    ledger_link.capture_executed(sid, asset, direction, signal_data, mie_snapshots=mie_snapshots)
                 except Exception as e:
                     logger.warning("OTE ledger capture_executed: %s", e)
 
@@ -739,7 +780,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
 
             if ledger_link:
                 try:
-                    ledger_link.capture_candidate(cid, asset, zone_dict, liq_data)
+                    ledger_link.capture_candidate(cid, asset, mie_snapshots=mie_snapshots)
                 except Exception as e:
                     logger.warning("OTE ledger capture_candidate: %s", e)
 
