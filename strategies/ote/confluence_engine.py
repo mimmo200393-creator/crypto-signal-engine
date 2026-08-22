@@ -96,6 +96,14 @@ def find_confluence_zones(conn: sqlite3.Connection, asset: str,
     rm_zones = _load_reaction_map_zones(conn, asset)
     for cluster in clusters:
         _apply_reaction_map_bonus(cluster, rm_zones)
+        # Ricalcolo zone_strength e (se non c'e' una vera zona LH)
+        # restart_score DOPO il bonus -- prima venivano fissati sul
+        # punteggio pre-bonus e non aggiornati mai, etichettando "WEAK"
+        # zone che in realta' passavano la soglia solo grazie al
+        # Reaction Map (bug trovato il 22/08).
+        cluster["zone_strength"] = _classify_strength(cluster["confluence_score"])
+        if not cluster.get("best_lh"):
+            cluster["restart_score"] = cluster["confluence_score"] * 10
 
     # ── 9. Filtra per score minimo e ordina ──
     valid = [c for c in clusters if c["confluence_score"] >= MIN_CONFLUENCE_SCORE]
