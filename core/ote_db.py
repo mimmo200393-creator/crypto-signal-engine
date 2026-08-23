@@ -192,6 +192,44 @@ def has_active_candidate(conn, asset: str, zone_ref: str) -> bool:
     return row2 is not None
 
 
+def has_overlapping_candidate(conn, asset: str, zone_low: float, zone_high: float,
+                              tolerance: float) -> bool:
+    """
+    Dedup per SOVRAPPOSIZIONE DI PREZZO, non per zone_ref esatto.
+
+    I cluster senza una vera zona LH (nessun best_lh) usano uno zone_ref
+    sintetico basato sui bordi arrotondati. Se tra un ciclo e l'altro una
+    fonte minore entra o esce dal cluster, i bordi si spostano di pochi
+    punti, lo zone_ref cambia stringa, e has_active_candidate (basato su
+    match esatto) non riconosce che e' la stessa area -- producendo 2-3
+    notifiche quasi identiche in pochi minuti (bug segnalato il 23/08,
+    screenshot Telegram: due segnali OTE su BTC con lo stesso identico
+    entry 77005.29 a 10 minuti di distanza).
+
+    Controlla se un midpoint entro `tolerance` da quello nuovo ha gia'
+    un candidate/signal attivo per lo stesso asset, indipendentemente
+    dallo zone_ref.
+    """
+    new_mid = (zone_high + zone_low) / 2
+    rows = conn.execute("""
+        SELECT (zone_high + zone_low) / 2.0 as mid FROM ote_candidates
+        WHERE asset=? AND status IN ('WATCHING','TOUCHED','SIGNAL_CREATED')
+    """, (asset,)).fetchall()
+    for (mid,) in rows:
+        if mid is not None and abs(mid - new_mid) <= tolerance:
+            return True
+
+    rows2 = conn.execute("""
+        SELECT s.planned_entry FROM ote_signals s
+        WHERE s.asset=? AND s.status='ENTRY'
+    """, (asset,)).fetchall()
+    for (entry,) in rows2:
+        if entry is not None and abs(entry - new_mid) <= tolerance:
+            return True
+
+    return False
+
+
 def get_watching_candidates(conn, asset: str) -> list:
     """Tutti i candidate attivi per un asset."""
     rows = conn.execute("""
