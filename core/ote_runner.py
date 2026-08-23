@@ -41,7 +41,7 @@ from strategies.tt.liquidity_engine import (
     check_sweep, check_reaction,
 )
 
-from strategies.ote.confluence_engine import find_confluence_zones
+from strategies.ote.confluence_engine import find_confluence_zones, CLUSTER_TOLERANCE_POINTS
 
 try:
     from core.decision_ledger import ote_integration as ledger_link
@@ -343,6 +343,26 @@ def _has_recent_expired(conn, asset: str, zone_ref: str) -> bool:
         AND expired_at > ?
     """, (asset, zone_ref, cutoff)).fetchone()
     return row is not None
+
+
+def _has_recent_expired_overlapping(conn, asset: str, zone_low: float,
+                                    zone_high: float, tolerance: float) -> bool:
+    """
+    Stesso principio di has_overlapping_candidate ma per il cooldown:
+    controlla la sovrapposizione di prezzo con zone scadute di recente,
+    non lo zone_ref esatto (che puo' cambiare stringa da un ciclo
+    all'altro per cluster senza una vera zona LH -- bug del 23/08).
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=COOLDOWN_HOURS)).isoformat()
+    new_mid = (zone_high + zone_low) / 2
+    rows = conn.execute("""
+        SELECT (zone_high + zone_low) / 2.0 as mid FROM ote_candidates
+        WHERE asset=? AND status IN ('EXPIRED','INVALIDATED') AND expired_at > ?
+    """, (asset, cutoff)).fetchall()
+    for (mid,) in rows:
+        if mid is not None and abs(mid - new_mid) <= tolerance:
+            return True
+    return False
 
 
 # ============================================================
@@ -730,12 +750,23 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
             if dist > proximity_threshold:
                 continue
 
-            # Dedup: un solo candidate attivo per zona
+            # Dedup: un solo candidate attivo per zona (match esatto zone_ref)
             if ote_db.has_active_candidate(conn, asset, zref):
                 continue
 
-            # Cooldown: non ricreare subito dopo uno scaduto
+            # Dedup per SOVRAPPOSIZIONE (bug 23/08: cluster senza LH
+            # possono cambiare zone_ref di ciclo in ciclo pur essendo
+            # la stessa area -- questo controllo cattura anche quei casi)
+            overlap_tolerance = CLUSTER_TOLERANCE_POINTS.get(asset, 10.0)
+            if ote_db.has_overlapping_candidate(conn, asset, zl, zh, overlap_tolerance):
+                continue
+
+            # Cooldown: non ricreare subito dopo uno scaduto (match esatto)
             if _has_recent_expired(conn, asset, zref):
+                continue
+
+            # Cooldown per sovrapposizione, stesso principio del dedup
+            if _has_recent_expired_overlapping(conn, asset, zl, zh, overlap_tolerance):
                 continue
 
             # Liquidity Map neutra (inclusi Previous Day + Asian Session)
