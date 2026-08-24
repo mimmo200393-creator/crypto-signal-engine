@@ -112,13 +112,20 @@ jobs:
             python3 lh_digest_runner.py
           fi
 
-      # ── Vecchio OTE-SC disattivato (sostituito da OTE Fase A) ──
-      # - name: Institutional Edge Lab — OTE-SC (BTC_USDT + PAXG_USDT)
-      #   env:
-      #     TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      #     TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      #     NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-      #   run: python3 edge_lab_runner.py
+      # ── RIATTIVATO il 24/08: questo step probabilmente genera
+      # ANCHE TRB (config.yaml: "Edge Lab (OTE-SC) + Trend Rider —
+      # condividono il market context"). Disattivarlo per il vecchio
+      # OTE-SC il 21/08 ha spento TRB per errore, senza saperlo --
+      # market_context_snapshots e' rimasta vuota da allora e TRB
+      # silenzioso per 3 giorni. OTE-SC tornera' a mandare notifiche
+      # (rumore, non dannoso) insieme a TRB -- da verificare con
+      # core/edge_lab_runner.py se si possono separare i due.
+      - name: Institutional Edge Lab — OTE-SC (BTC_USDT + PAXG_USDT)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 edge_lab_runner.py
 
       - name: OTE Scanner (BTC_USDT + XAU_USD)
         env:
