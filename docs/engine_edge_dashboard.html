@@ -91,7 +91,7 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
 <body>
 <header>
   <h1>Engine Edge Lab</h1>
-  <div class="meta">2026-08-24 23:10 UTC &nbsp;|&nbsp; <a href="analytics_dashboard.html">&larr; Analytics Lab</a> &nbsp;|&nbsp; <a href="radar_lab_dashboard.html">Radar Lab →</a></div>
+  <div class="meta">2026-08-24 23:15 UTC &nbsp;|&nbsp; <a href="analytics_dashboard.html">&larr; Analytics Lab</a> &nbsp;|&nbsp; <a href="radar_lab_dashboard.html">Radar Lab →</a></div>
 </header>
 <div class="container">
   <p class="intro">
@@ -528,15 +528,30 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
   <div class="fw-header" style="color:#38bdf8;border-bottom:none">LH</div>
 </div>
 <div class="summary-grid cols3" style="border:1px solid var(--border);border-top:2px solid #38bdf8;border-radius:6px;overflow:hidden;margin-bottom:16px">
-  <div><span class="big">2</span><span class="lbl">Decisioni chiuse</span></div>
+  <div><span class="big">3</span><span class="lbl">Decisioni chiuse</span></div>
   <div><span class="big neg">0%</span><span class="lbl">Win Rate</span></div>
-  <div><span class="big neg">-0.50R</span><span class="lbl">Expectancy</span></div>
+  <div><span class="big neg">-0.33R</span><span class="lbl">Expectancy</span></div>
 </div>
 <div class="card">
   <div class="ch">Engine Edge — Win Rate quando favorevole vs. neutro/contrario
-    <span class="prov" style="margin-left:8px">4 engine sotto soglia campione (20/gruppo)</span>
+    <span class="prov" style="margin-left:8px">7 engine sotto soglia campione (20/gruppo)</span>
   </div>
   <div class="table-scroll"><table class="engine-table"><tbody><tr class="edge-row">
+  <td><span class="edge-name">Structure</span><span class="prov">provvisorio</span></td>
+  <td>
+    <div class="edge-bar-wrap">
+      <div class="edge-bar-track">
+        <div class="edge-bar-mid"></div>
+        <div class="edge-bar-fill pos-fill" style="width:0.0%;left:50%"></div>
+      </div>
+      <span class="edge-val ">+0.0%</span>
+    </div>
+  </td>
+  <td class="mono" style="font-size:11px;color:var(--dim)">
+    fav 2 (0.0% win, -0.50R avg) &nbsp;·&nbsp;
+    altro 1 (0.0% win, +0.00R avg)
+  </td>
+</tr><tr class="edge-row">
   <td><span class="edge-name">Trend Health</span><span class="prov">provvisorio</span></td>
   <td>
     <div class="edge-bar-wrap">
@@ -548,7 +563,7 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
     </div>
   </td>
   <td class="mono" style="font-size:11px;color:var(--dim)">
-    fav 1 (0.0% win, -1.00R avg) &nbsp;·&nbsp;
+    fav 2 (0.0% win, -0.50R avg) &nbsp;·&nbsp;
     altro 1 (0.0% win, +0.00R avg)
   </td>
 </tr><tr class="edge-row">
@@ -564,7 +579,7 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
   </td>
   <td class="mono" style="font-size:11px;color:var(--dim)">
     fav 1 (0.0% win, -1.00R avg) &nbsp;·&nbsp;
-    altro 1 (0.0% win, +0.00R avg)
+    altro 2 (0.0% win, +0.00R avg)
   </td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">FVG</span><span class="prov">provvisorio</span></td>
@@ -578,8 +593,23 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
     </div>
   </td>
   <td class="mono" style="font-size:11px;color:var(--dim)">
-    fav 1 (0.0% win, +0.00R avg) &nbsp;·&nbsp;
+    fav 2 (0.0% win, +0.00R avg) &nbsp;·&nbsp;
     altro 1 (0.0% win, -1.00R avg)
+  </td>
+</tr><tr class="edge-row">
+  <td><span class="edge-name">Liquidity</span><span class="prov">provvisorio</span></td>
+  <td>
+    <div class="edge-bar-wrap">
+      <div class="edge-bar-track">
+        <div class="edge-bar-mid"></div>
+        <div class="edge-bar-fill pos-fill" style="width:0.0%;left:50%"></div>
+      </div>
+      <span class="edge-val ">+0.0%</span>
+    </div>
+  </td>
+  <td class="mono" style="font-size:11px;color:var(--dim)">
+    fav 1 (0.0% win, +0.00R avg) &nbsp;·&nbsp;
+    altro 2 (0.0% win, -0.50R avg)
   </td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Reaction Map</span><span class="prov">provvisorio</span></td>
@@ -594,35 +624,41 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
   </td>
   <td class="mono" style="font-size:11px;color:var(--dim)">
     fav 1 (0.0% win, +0.00R avg) &nbsp;·&nbsp;
-    altro 1 (0.0% win, -1.00R avg)
+    altro 2 (0.0% win, -0.50R avg)
   </td>
 </tr><tr class="edge-row">
-  <td><span class="edge-name">Structure</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=2 / altro=0)</td>
+  <td><span class="edge-name">Market State</span><span class="prov">provvisorio</span></td>
+  <td>
+    <div class="edge-bar-wrap">
+      <div class="edge-bar-track">
+        <div class="edge-bar-mid"></div>
+        <div class="edge-bar-fill pos-fill" style="width:0.0%;left:50%"></div>
+      </div>
+      <span class="edge-val ">+0.0%</span>
+    </div>
+  </td>
+  <td class="mono" style="font-size:11px;color:var(--dim)">
+    fav 2 (0.0% win, -0.50R avg) &nbsp;·&nbsp;
+    altro 1 (0.0% win, +0.00R avg)
+  </td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Volatility</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=2 / altro=0)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=3 / altro=0)</td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Order Block</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=2 / altro=0)</td>
-</tr><tr class="edge-row">
-  <td><span class="edge-name">Liquidity</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=2)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=3 / altro=0)</td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Session Sweep</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=2)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=3)</td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Candlestick</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=2)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=3)</td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Macro</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=2)</td>
-</tr><tr class="edge-row">
-  <td><span class="edge-name">Market State</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=2 / altro=0)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=3)</td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Money Flow</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=2)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=3)</td>
 </tr></tbody></table></div>
 </div>
 <div class="card"><div class="ch">Per Regime di Mercato</div>
@@ -634,7 +670,7 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
   <td class="mono neg">-1.00R</td>
 </tr><tr>
   <td><strong>TRANSITIONAL</strong></td>
-  <td class="mono">1</td>
+  <td class="mono">2</td>
   <td class="mono neg">0%</td>
   <td class="mono neg">+0.00R</td>
 </tr></tbody></table></div></div>
@@ -859,8 +895,8 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
   <div class="fw-header" style="color:#e2e8f0;border-bottom:none">OTE</div>
 </div>
 <div class="summary-grid cols3" style="border:1px solid var(--border);border-top:2px solid #e2e8f0;border-radius:6px;overflow:hidden;margin-bottom:16px">
-  <div><span class="big">38</span><span class="lbl">Decisioni chiuse</span></div>
-  <div><span class="big neg">15.8%</span><span class="lbl">Win Rate</span></div>
+  <div><span class="big">39</span><span class="lbl">Decisioni chiuse</span></div>
+  <div><span class="big neg">15.4%</span><span class="lbl">Win Rate</span></div>
   <div><span class="big neg">-0.43R</span><span class="lbl">Expectancy</span></div>
 </div>
 <div class="card">
@@ -873,14 +909,14 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
     <div class="edge-bar-wrap">
       <div class="edge-bar-track">
         <div class="edge-bar-mid"></div>
-        <div class="edge-bar-fill pos-fill" style="width:27.500000000000004%;left:50%"></div>
+        <div class="edge-bar-fill pos-fill" style="width:27.800000000000004%;left:50%"></div>
       </div>
-      <span class="edge-val pos">+27.5%</span>
+      <span class="edge-val pos">+27.8%</span>
     </div>
   </td>
   <td class="mono" style="font-size:11px;color:var(--dim)">
     fav 8 (37.5% win, +0.06R avg) &nbsp;·&nbsp;
-    altro 30 (10.0% win, -0.61R avg)
+    altro 31 (9.7% win, -0.61R avg)
   </td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Structure</span><span class="prov">provvisorio</span></td>
@@ -888,56 +924,56 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
     <div class="edge-bar-wrap">
       <div class="edge-bar-track">
         <div class="edge-bar-mid"></div>
-        <div class="edge-bar-fill pos-fill" style="width:19.0%;left:50%"></div>
+        <div class="edge-bar-fill pos-fill" style="width:19.4%;left:50%"></div>
       </div>
-      <span class="edge-val pos">+19.0%</span>
+      <span class="edge-val pos">+19.4%</span>
     </div>
   </td>
   <td class="mono" style="font-size:11px;color:var(--dim)">
     fav 3 (33.3% win, +0.14R avg) &nbsp;·&nbsp;
-    altro 35 (14.3% win, -0.47R avg)
+    altro 36 (13.9% win, -0.47R avg)
   </td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Trend Health</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=38)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=39)</td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Volatility</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=38)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=39)</td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Displacement</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=38)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=39)</td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Order Block</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=38)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=39)</td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">FVG</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=38)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=39)</td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Liquidity</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=38)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=39)</td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Session Sweep</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=38)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=39)</td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Candlestick</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=38)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=39)</td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Macro</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=38)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=39)</td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Market State</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=38)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=39)</td>
 </tr><tr class="edge-row">
   <td><span class="edge-name">Money Flow</span></td>
-  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=38)</td>
+  <td colspan="2" class="empty" style="text-align:left;padding-left:0">dati insufficienti (fav=0 / altro=39)</td>
 </tr></tbody></table></div>
 </div>
 <div class="card"><div class="ch">Per Regime di Mercato</div>
   <div class="table-scroll"><table><thead><tr><th>Regime</th><th>N</th><th>Win%</th><th>Expectancy</th></tr></thead>
   <tbody><tr>
   <td><strong>TRENDING</strong></td>
-  <td class="mono">7</td>
-  <td class="mono pos">42.9%</td>
+  <td class="mono">8</td>
+  <td class="mono warn">37.5%</td>
   <td class="mono pos">+0.48R</td>
 </tr><tr>
   <td><strong>RANGING</strong></td>
