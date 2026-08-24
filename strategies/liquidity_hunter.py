@@ -76,8 +76,8 @@ OB_PROXIMITY_PCT = 0.010     # distanza max dell'OB dal prezzo
 # contribuiscono di rado (candlestick ~0, reaction_map basso su XAU), quindi
 # la scala utile si ferma intorno a 6.3. Le soglie seguono quella scala.
 MIN_SCORE        = 3.5       # su 9 — sotto, il setup e' debole (solo per il TRADE)
-QUALITY_HIGH_MIN = 5.0
-QUALITY_MED_MIN  = 4.2
+QUALITY_HIGH_MIN = 70.0  # stessa soglia di zone_strength="STRONG"
+QUALITY_MED_MIN  = 40.0  # stessa soglia di zone_strength="MODERATE"
 
 ASSET_PARAMS = {
     "BTC_USDT": {
@@ -1571,7 +1571,7 @@ def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
         "tp": round(tp, 5),
         "rr": rr,
         "quality_score": best_zone.get("restart_score", 0),
-        "quality_label": best_zone.get("zone_strength", "STRONG"),
+        "quality_label": _quality_label(best_zone.get("restart_score", 0)),
         "trigger_type": "RESTART_ZONE",
         "swept_level_label": best_zone.get("zone_ref", ""),
         "swept_level_priority": best_zone.get("zone_strength", "STRONG"),
