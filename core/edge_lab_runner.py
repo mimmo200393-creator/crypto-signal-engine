@@ -4,16 +4,18 @@ Edge Lab — Runner (Step 10) + NMC Trend Rider Balanced
 
 Sprint 13: MIE Context Enrichment
 Sprint 13b: Fix anti-duplicati (notifiche ripetute)
-    - Check 3: stesso entry nelle ultime 4 ore → SKIP
-    - Risolve il problema di 3+ notifiche identiche per scan
+Sprint 24/08: OTE-SC silenziato -- continua a girare e registrare dati
+    (serve a TRB per il market_contexts condiviso, e a Engine Edge Lab
+    per l'analisi storica) ma non manda piu' notifiche di trading.
+    TRB resta invariato, notifiche comprese.
 
 Per ogni asset:
     1. Carica candele
     2. Monitora segnali aperti OTE-SC
     3. Costruisce Market Context
     4. Legge MIE context da snapshot DB
-    5. Valuta OTE-SC (arricchito con MIE)
-    6. Valuta TRB (riusa stesso Market Context + MIE)
+    5. Valuta OTE-SC (arricchito con MIE) -- SOLO REGISTRAZIONE, no notifica
+    6. Valuta TRB (riusa stesso Market Context + MIE) -- invariato
 """
 
 from __future__ import annotations
@@ -192,11 +194,17 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
     # ── Leggi MIE context (Sprint 13) ────────────────────────
     mie_context = _read_mie_context(conn, asset)
 
-    # Salva context per TRB (ora include MIE)
+    # Salva context per TRB (ora include MIE) -- QUESTO E' CIO' DA CUI
+    # TRB dipende. Costruito sempre, a prescindere che OTE-SC generi
+    # o meno un segnale/notifica qui sotto.
     market_ctx["mie_context"] = mie_context
     market_contexts[asset] = market_ctx
 
     # ── OTE-SC ──────────────────────────────────────────────
+    # SILENZIATO il 24/08: continua a valutare/registrare (utile per
+    # Engine Edge Lab e come storico), ma NON manda piu' notifiche.
+    # TRB non e' toccato -- dipende solo da market_contexts sopra,
+    # gia' popolato a prescindere da questo blocco.
     if not market_ctx.get("is_tradeable", False):
         logger.info(
             "Edge Lab [%s]: market NOT tradeable — blocks=%s",
@@ -312,10 +320,6 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
             # ══════════════════════════════════════════════════
             # ── Check 3: anti-duplicato per entry (Sprint 13b)
             # ══════════════════════════════════════════════════
-            # Blocca segnali con stesso asset+direction+entry
-            # emessi nelle ultime 4 ore. Risolve il problema
-            # delle 3+ notifiche identiche per scan quando
-            # confirmation_candle_ts è None.
             try:
                 recent_dup = conn.execute(
                     "SELECT COUNT(*) FROM edge_lab_signals "
@@ -342,14 +346,13 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
             )
 
             # ── Decision Ledger: un unico ID per tutto il ciclo ──
-            # Il decision_id (ULID) diventa il signal_id della strategia,
-            # così l'outcome si ricollega senza tabelle di bridge (Opzione 1).
             try:
                 signal["signal_id"] = generate_ulid()
             except Exception as e:
                 logger.debug("Ledger ulid [%s]: %s", asset, e)
 
-            # Inserisce il segnale
+            # Inserisce il segnale -- CONTINUA a registrare (serve per
+            # Engine Edge Lab / storico), solo la notifica e' spenta.
             try:
                 signal_id = edge_lab_db.insert_el_signal(conn, signal)
             except Exception as e:
@@ -366,7 +369,7 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
                 logger.debug("Ledger capture_executed [%s]: %s", asset, e)
 
             logger.info(
-                "Edge Lab [%s %s]: SEGNALE entry=%.4f sl=%.4f tp=%.4f rr=%.2f "
+                "Edge Lab [%s %s]: SEGNALE (silenzioso) entry=%.4f sl=%.4f tp=%.4f rr=%.2f "
                 "quality=%d/%s mie=%d engines (id=%s)",
                 asset, direction,
                 signal["entry"], signal["stop_loss"], signal["tp"], signal["rr"],
@@ -375,10 +378,14 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
                     if k.endswith("_available") and v),
                 signal_id,
             )
-            _notify_otesc(signal, config)
+            # _notify_otesc(signal, config)  # <-- DISATTIVATO il 24/08:
+            # OTE-SC continua a registrare (riga sopra) ma non manda
+            # piu' notifiche di trading. TRB non e' toccato.
 
 
 def _notify_otesc(signal: dict, config: dict):
+    # Tenuta per compatibilita' futura (se si vuole riattivare la
+    # notifica OTE-SC), ma non e' piu' chiamata da _run_for_asset.
     try:
         from notifications import telegram_bot, ntfy_bot
         direction = signal["direction"]
