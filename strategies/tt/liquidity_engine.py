@@ -395,13 +395,25 @@ def evaluate_execution(df_m5: pd.DataFrame, direction: str, sweep_level: float,
 # ============================================================
 
 def select_dynamic_target(liq_scenario: dict, opposing_poi, entry: float,
-                          sl: float, direction: str):
+                          sl: float, direction: str, atr: float = None):
     """
-    Target piu' SIGNIFICATIVO raggiungibile con RR sufficiente -- non
-    il piu' vicino. Direzione del TARGET = direzione del TRADE (sopra
-    per BUY, sotto per SELL) -- diverso dallo sweep_target (Fase 5,
-    usato per confermare l'entry, che invece e' dalla parte opposta).
+    Target piu' SIGNIFICATIVO raggiungibile con RR sufficiente, ENTRO
+    un tetto massimo di distanza (5x ATR, stessa soglia gia' validata
+    su LH) -- oltre quella soglia un target "tecnicamente valido" e'
+    comunque irrealistico: ci vorrebbero giorni di movimento
+    ininterrotto. Se nessun candidato supera RR entro il tetto:
+    fallback a RR fisso 1:2 (stesso principio di LH, bug trovato
+    il 24/08: target scelto a distanza eccessiva causava piu'
+    invalidazioni PRICE_PASSED_SL_BEFORE_ENTRY -- il prezzo aveva
+    piu' tempo di invertirsi prima che l'entry scattasse).
+
+    Direzione del TARGET = direzione del TRADE (sopra per BUY, sotto
+    per SELL) -- diverso dallo sweep_target (Fase 5, usato per
+    confermare l'entry, che invece e' dalla parte opposta).
     """
+    FALLBACK_RR = 2.0
+    MAX_DISTANCE_ATR = 5.0
+
     candidates = []
     relevant = liq_scenario.get("above", []) if direction == "BUY" else liq_scenario.get("below", [])
     for lv in relevant:
@@ -413,26 +425,36 @@ def select_dynamic_target(liq_scenario: dict, opposing_poi, entry: float,
         candidates.append({"price": op_price, "type": "OPPOSING_POI",
                           "significance": LEVEL_SIGNIFICANCE["OPPOSING_POI"]})
 
-    if not candidates:
-        return None
-
     risk = abs(entry - sl)
     if risk <= 0:
         return None
 
+    max_distance = MAX_DISTANCE_ATR * atr if atr else float("inf")
+
     valid = []
     for c in candidates:
         reward = abs(c["price"] - entry)
+        if reward > max_distance:
+            continue
         rr = round(reward / risk, 3)
         if rr >= MIN_RR:
             c["rr"] = rr
             valid.append(c)
 
-    if not valid:
+    if valid:
+        best = max(valid, key=lambda c: (c["significance"], -c["rr"]))
+        return {"price": best["price"], "type": best["type"], "rr": best["rr"]}
+
+    if not candidates:
         return None
 
-    best = max(valid, key=lambda c: (c["significance"], -c["rr"]))
-    return {"price": best["price"], "type": best["type"], "rr": best["rr"]}
+    # Nessun candidato entro il tetto supera il RR minimo: fallback
+    # a rapporto fisso 1:2, un target vicino e raggiungibile.
+    if atr:
+        fallback_price = entry + FALLBACK_RR * risk if direction == "BUY" else entry - FALLBACK_RR * risk
+        return {"price": round(fallback_price, 5), "type": "FALLBACK_FIXED_RR", "rr": FALLBACK_RR}
+
+    return None
 
 
 # ============================================================
@@ -440,12 +462,23 @@ def select_dynamic_target(liq_scenario: dict, opposing_poi, entry: float,
 # ============================================================
 
 def _compute_signal_quality(poi: dict, pd_info: dict, ctx_15m: dict,
-                            trade_side: str, planned_rr: float) -> tuple:
+                            trade_side: str, planned_rr: float,
+                            reaction_map_score: float = None,
+                            regime: str = None) -> tuple:
     """
     Quality Score del SEGNALE (spec sezione 29) -- diverso da poi["quality_score"]
     (quello e' solo la qualita' della location, calcolato nel Location
     Engine). Questo combina i pochi elementi che la spec elenca:
     qualita' POI, Premium/Discount allineato, 15M coerente, RR.
+
+    Aggiunti il 24/08, come SOFT factor (mai hard gate, coerente col
+    resto della funzione):
+      - Reaction Map: l'unico engine con edge positivo confermato su
+        piu' strategie indipendenti (V41P1 +4.8%, TRB +4.1%, verificato
+        su centinaia di trade). TT era isolato da questo dato.
+      - Regime TRANSITIONAL: confermato tossico su due strategie con
+        centinaia di trade (TRB 26.5% WR vs 40%+ negli altri regimi,
+        V41P1 24.7% vs 35-38%). Penalita, non blocco.
 
     Pochi elementi forti, non 20 filtri (spec esplicita). Solo SOFT
     factor -- non blocca mai (il blocco vero e' gia' avvenuto sopra,
@@ -464,7 +497,13 @@ def _compute_signal_quality(poi: dict, pd_info: dict, ctx_15m: dict,
     if planned_rr >= 2.0:
         score += 2
 
-    score = min(score, 12)
+    if reaction_map_score is not None and reaction_map_score >= 5:
+        score += 1  # bonus contenuto: edge reale ma modesto (+4-5%), non uno dei fattori forti
+
+    if regime == "TRANSITIONAL":
+        score -= 2  # penalita, non blocco -- il setup puo' ancora passare con score alto altrove
+
+    score = max(0, min(score, 12))
     label = "HIGH" if score >= 8 else ("MEDIUM" if score >= 5 else "LOW")
     return score, label
 
@@ -477,7 +516,8 @@ def _direction_to_trade_side(direction_4h: str):
     return None
 
 
-def evaluate_setup(asset: str, df_h4, df_h1, df_m15, current_price: float) -> dict:
+def evaluate_setup(asset: str, df_h4, df_h1, df_m15, current_price: float,
+                   reaction_map_score: float = None, regime: str = None) -> dict:
     """
     Entry point principale. Sequenza (spec sezione 33): Direction ->
     Location -> Liquidity -> Premium/Discount -> 15M Context ->
@@ -556,7 +596,7 @@ def evaluate_setup(asset: str, df_h4, df_h1, df_m15, current_price: float) -> di
             if valid_opposing:
                 opposing_poi = max(valid_opposing, key=lambda p: p["zone_high"])
 
-    target = select_dynamic_target(liq, opposing_poi, planned_entry, planned_sl, trade_side)
+    target = select_dynamic_target(liq, opposing_poi, planned_entry, planned_sl, trade_side, atr=atr_h1)
     if target is None:
         return reject("NO_DYNAMIC_TARGET_AVAILABLE")
 
@@ -566,7 +606,8 @@ def evaluate_setup(asset: str, df_h4, df_h1, df_m15, current_price: float) -> di
         return reject(f"RR_INSUFFICIENT ({planned_rr:.2f} < {MIN_RR})")
 
     quality_score, quality_label = _compute_signal_quality(
-        poi, pd_info, ctx_15m, trade_side, planned_rr)
+        poi, pd_info, ctx_15m, trade_side, planned_rr,
+        reaction_map_score=reaction_map_score, regime=regime)
 
     now = datetime.now(timezone.utc)
     signal = {
