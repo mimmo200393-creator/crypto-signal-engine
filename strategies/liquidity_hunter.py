@@ -1591,63 +1591,93 @@ def generate_lh_signal(asset: str, df_m15: pd.DataFrame, now: datetime,
         "factors": factors, "zone": best_zone}}
 
 
+def _detect_equal_levels_from_swings(swing_zones: list, tolerance_pct: float = 0.0015) -> list:
+    """
+    Equal High/Low calcolati dagli swing GIA' disponibili (lh_swing_zones)
+    -- nessun dato nuovo richiesto, nessuna modifica alla firma di
+    generate_lh_signal. Due o piu' swing dello stesso tipo con prezzo
+    quasi identico (tolleranza 0.15%, coerente con quanto gia' usato
+    altrove nel sistema) formano un Equal Level -- un cluster di stop
+    che il mercato tende a rivisitare.
+    """
+    highs = sorted([s for s in swing_zones if s.get("swing_type") == "HIGH"],
+                   key=lambda s: s["price"])
+    lows = sorted([s for s in swing_zones if s.get("swing_type") == "LOW"],
+                  key=lambda s: s["price"])
+    equal = []
+    for group, label in [(highs, "EQUAL_HIGH"), (lows, "EQUAL_LOW")]:
+        i = 0
+        while i < len(group) - 1:
+            cluster = [group[i]]
+            j = i + 1
+            while j < len(group) and abs(group[j]["price"] - cluster[0]["price"]) <= cluster[0]["price"] * tolerance_pct:
+                cluster.append(group[j])
+                j += 1
+            if len(cluster) >= 2:
+                avg_price = sum(c["price"] for c in cluster) / len(cluster)
+                equal.append({"swing_type": "HIGH" if label == "EQUAL_HIGH" else "LOW",
+                             "price": avg_price, "timeframe": label})
+            i = j
+    return equal
+
+
 def _find_next_swing_target(swing_zones: list, price: float,
                             direction: str, atr: float, params: dict,
                             risk: float = None, min_rr: float = None) -> float:
     """
-    Trova il TP al prossimo swing storico nella direzione del trade.
-    BUY -> prossimo swing HIGH sopra il prezzo (resistenza)
-    SELL -> prossimo swing LOW sotto il prezzo (supporto)
-    Fallback: entry + 2R (come prima) se nessuno swing disponibile.
+    Trova il TP al prossimo livello valido nella direzione del trade.
+    BUY -> prossimo swing/equal HIGH sopra il prezzo (resistenza)
+    SELL -> prossimo swing/equal LOW sotto il prezzo (supporto)
 
-    Se risk e min_rr sono forniti: sceglie il PRIMO target, in ordine
-    di vicinanza, che supera la soglia RR -- non semplicemente il piu'
-    vicino in assoluto. Bug trovato il 22/08: il target piu' vicino puo'
-    dare un RR troppo basso mentre uno leggermente piu' lontano lo
-    supera abbondantemente -- scegliere ciecamente il piu' vicino
-    scartava zone STRONG (score 100) per pochi punti di differenza.
+    Sceglie il PRIMO target, in ordine di vicinanza, che supera la
+    soglia RR *entro un tetto massimo di distanza* (5x ATR -- oltre
+    quella soglia il target e' irrealistico, ci vorrebbero giorni di
+    movimento ininterrotto e il prezzo incontrerebbe altra struttura
+    molto prima). Include ora anche gli Equal Level, calcolati dagli
+    stessi swing gia' disponibili -- allarga le opzioni prima di
+    arrendersi al tetto di distanza.
 
-    Se nessun target supera la soglia (o risk/min_rr non forniti),
-    ritorna comunque il piu' vicino -- il chiamante decide se il RR
-    risultante e' sufficiente, nessun comportamento nascosto qui.
+    Se nessun target supera RR entro il tetto: fallback a RR fisso
+    1:2 (entry + 2xrisk) -- un target vicino e raggiungibile, meglio
+    di un target "tecnicamente valido" ma a settimane di distanza.
+    Bug segnalato il 24/08: TP scelto a 6.4x ATR perche' era il primo
+    a superare il RR minimo, ma senza nessun livello intermedio reale.
     """
-    if not swing_zones:
-        tp_max_atr = params.get("tp1_max_atr", 3.0)
-        if direction == "BUY":
-            return price + tp_max_atr * atr
-        else:
-            return price - tp_max_atr * atr
+    MAX_DISTANCE_ATR = 5.0
+    FALLBACK_RR = 2.0  # rapporto fisso 1:2 quando nulla di buono e' vicino
+
+    all_levels = list(swing_zones) if swing_zones else []
+    all_levels.extend(_detect_equal_levels_from_swings(swing_zones or []))
+
+    max_distance = MAX_DISTANCE_ATR * atr if atr else float("inf")
+    target_type = "HIGH" if direction == "BUY" else "LOW"
 
     if direction == "BUY":
-        targets = [
-            sw for sw in swing_zones
-            if sw.get("swing_type") == "HIGH" and sw.get("price", 0) > price
-        ]
-        if targets:
-            targets_sorted = sorted(targets, key=lambda s: s["price"] - price)
-            if risk and min_rr:
-                for t in targets_sorted:
-                    rr = (t["price"] - price) / risk
-                    if rr >= min_rr:
-                        return t["price"]
-                # nessuno supera la soglia -- ritorna comunque il piu'
-                # vicino, il chiamante rifiutera' se il RR e' insufficiente
-            return targets_sorted[0]["price"]
+        candidates = [sw for sw in all_levels
+                     if sw.get("swing_type") == target_type and sw.get("price", 0) > price]
     else:
-        targets = [
-            sw for sw in swing_zones
-            if sw.get("swing_type") == "LOW" and sw.get("price", 0) < price
-        ]
-        if targets:
-            targets_sorted = sorted(targets, key=lambda s: price - s["price"])
-            if risk and min_rr:
-                for t in targets_sorted:
-                    rr = (price - t["price"]) / risk
-                    if rr >= min_rr:
-                        return t["price"]
-            return targets_sorted[0]["price"]
+        candidates = [sw for sw in all_levels
+                     if sw.get("swing_type") == target_type and sw.get("price", 0) < price]
 
-    # Fallback: nessuno swing nella direzione giusta
+    candidates_in_range = [c for c in candidates
+                           if abs(c["price"] - price) <= max_distance]
+    candidates_sorted = sorted(candidates_in_range, key=lambda s: abs(s["price"] - price))
+
+    if risk and min_rr:
+        for t in candidates_sorted:
+            reward = abs(t["price"] - price)
+            rr = reward / risk
+            if rr >= min_rr:
+                return t["price"]
+        # Nessun candidato entro il tetto di distanza supera il RR minimo:
+        # fallback a RR fisso 1:2, un target vicino e raggiungibile.
+        if risk:
+            return price + FALLBACK_RR * risk if direction == "BUY" else price - FALLBACK_RR * risk
+
+    if candidates_sorted:
+        return candidates_sorted[0]["price"]
+
+    # Nessun livello reale entro distanza: stesso fallback ATR di sempre
     tp_max_atr = params.get("tp1_max_atr", 3.0)
     if direction == "BUY":
         return price + tp_max_atr * atr
