@@ -17,6 +17,10 @@ import os
 from datetime import datetime, timezone, timedelta
 
 DB_PATH  = os.environ.get("DB_PATH", "data/signals.db")
+
+# LH: stessa costante di generate_analytics_dashboard.py -- filtra la
+# vista, non cancella lo storico. Aggiornare per un nuovo "azzeramento".
+LH_EPOCH_DATE = "2026-08-24T18:00:00"
 OUT_PATH = "docs/unified_dashboard.html"
 
 
@@ -258,9 +262,9 @@ def load_lh_open(conn):
                    swept_level_label, swept_level_priority,
                    sweep_direction, trigger_type, tp_label,
                    mae, mfe, bars_open, timestamp_setup
-            FROM lh_signals WHERE final_outcome = 'OPEN'
+            FROM lh_signals WHERE final_outcome = 'OPEN' AND timestamp_setup > ?
             ORDER BY timestamp_setup DESC
-        """)
+        """, (LH_EPOCH_DATE,))
     except sqlite3.OperationalError:
         return []
     now = datetime.now(timezone.utc)
@@ -283,10 +287,10 @@ def load_lh_open(conn):
 
 def load_lh_stats(conn):
     try:
-        rows = q(conn,"SELECT final_outcome, COUNT(*) FROM lh_signals WHERE final_outcome!='OPEN' GROUP BY final_outcome")
+        rows = q(conn,"SELECT final_outcome, COUNT(*) FROM lh_signals WHERE final_outcome!='OPEN' AND timestamp_setup > ? GROUP BY final_outcome", (LH_EPOCH_DATE,))
         d = {r[0]:r[1] for r in rows}; n = sum(d.values())
         wins = d.get("TP",0); sls = d.get("SL",0)
-        opn = q(conn,"SELECT COUNT(*) FROM lh_signals WHERE final_outcome='OPEN'")[0][0]
+        opn = q(conn,"SELECT COUNT(*) FROM lh_signals WHERE final_outcome='OPEN' AND timestamp_setup > ?", (LH_EPOCH_DATE,))[0][0]
         return {"n":n,"open":opn,"win":round(wins/n*100,1) if n>0 else 0,"exp_r":round((wins*2-sls)/n,2) if n>0 else 0}
     except sqlite3.OperationalError:
         return {"n":0,"open":0,"win":0,"exp_r":0}
