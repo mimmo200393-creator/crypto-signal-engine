@@ -20,7 +20,7 @@ Ciclo per asset (BTC_USDT, XAU_USD):
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from storage import db as core_db
 from core import v3_db
@@ -44,6 +44,14 @@ TT_TIMEFRAMES = {"H4": "4h", "H1": "1h", "M15": "15m", "M5": "5m"}
 # il trade non e' mai partito). Non calibrato su dati reali.
 MAX_ADVERSE_MOVE_ATR = 1.0
 
+# Cooldown dopo un'invalidazione: la stessa POI (o una POI con prezzo
+# sovrapposto) non genera un nuovo Early Signal per questo tempo.
+# Bug osservato il 24/08: la stessa POI [4373.74-4386.16] ha generato
+# 13 Early Signal identici in ~35 ore, ognuno scaduto (EXPIRED_WAITING)
+# e immediatamente riproposto senza pausa -- stesso problema gia'
+# risolto per LH/OTE.
+COOLDOWN_HOURS = 2
+
 
 def _prepare_dataframes(conn, asset: str, config: dict):
     limit = config.get("BOOTSTRAP_TARGET_CANDLES", 300)
@@ -62,6 +70,32 @@ def _price_touched_poi(df_m5, poi_low: float, poi_high: float) -> bool:
     for _, row in recent.iterrows():
         lo, hi = float(row["low"]), float(row["high"])
         if lo <= poi_high and hi >= poi_low:
+            return True
+    return False
+
+
+def _has_recent_invalidated_poi(conn, asset: str, direction: str,
+                                poi_low: float, poi_high: float) -> bool:
+    """
+    Cooldown: una POI invalidata di recente (stesso poi_ref O area di
+    prezzo sovrapposta) non genera un nuovo Early Signal per
+    COOLDOWN_HOURS. Controlla sia il match esatto (poi_ref uguale) sia
+    la sovrapposizione di prezzo, per coprire entrambe le classi di bug
+    gia' viste su LH/OTE.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=COOLDOWN_HOURS)).isoformat()
+    rows = conn.execute(
+        """
+        SELECT poi_low, poi_high FROM tt_signals
+        WHERE asset=? AND direction=? AND status='INVALIDATED' AND closed_at > ?
+        """,
+        (asset, direction, cutoff),
+    ).fetchall()
+    for prev_low, prev_high in rows:
+        if prev_low is None or prev_high is None:
+            continue
+        # Sovrapposizione: le due zone si intersecano?
+        if poi_low <= prev_high and prev_low <= poi_high:
             return True
     return False
 
@@ -199,6 +233,71 @@ def _notify_entry(asset, direction, signal, entry, sl, tp, config):
         logger.warning("TT _notify_entry: %s", e)
 
 
+def _read_reaction_map_score(conn, asset: str) -> float:
+    """
+    Legge la Reaction Map piu' recente -- l'unico engine con edge
+    positivo confermato su piu' strategie (verificato il 24/08: +4.8%
+    V41P1, +4.1% TRB). Usa la stessa zona "strongest_below"/"strongest_above"
+    gia' letta da OTE, senza assumere una direzione (il chiamante decide
+    quale lato guardare, qui restituiamo solo il punteggio della zona
+    piu' forte in generale come proxy semplice).
+    """
+    try:
+        row = conn.execute(
+            "SELECT snapshot_json FROM reaction_map_snapshots WHERE asset=? "
+            "ORDER BY timestamp_snapshot DESC LIMIT 1", (asset,)
+        ).fetchone()
+        if not row:
+            return None
+        snap = json.loads(row[0])
+        below = snap.get("strongest_below") or {}
+        above = snap.get("strongest_above") or {}
+        scores = [z.get("confluence_score", 0) for z in (below, above) if z]
+        return max(scores) if scores else None
+    except Exception as e:
+        logger.debug("TT _read_reaction_map_score [%s]: %s", asset, e)
+        return None
+
+
+def _classify_regime(conn, asset: str) -> str:
+    """
+    Classificatore di regime minimale -- stesso principio di
+    decision_collector.classify_regime, riletto qui per non introdurre
+    una dipendenza incrociata con l'infrastruttura del Decision Ledger
+    (TT resta isolato). Legge structure_snapshots + volatility_snapshots,
+    le stesse due tabelle gia' lette da OTE.
+    """
+    try:
+        srow = conn.execute(
+            "SELECT snapshot_json FROM structure_snapshots WHERE asset=? "
+            "ORDER BY timestamp_snapshot DESC LIMIT 1", (asset,)
+        ).fetchone()
+        vrow = conn.execute(
+            "SELECT snapshot_json FROM volatility_snapshots WHERE asset=? "
+            "ORDER BY timestamp_snapshot DESC LIMIT 1", (asset,)
+        ).fetchone()
+        if not srow:
+            return "UNKNOWN"
+        s = json.loads(srow[0])
+        v = json.loads(vrow[0]) if vrow else {}
+
+        th = s.get("trend_health", {})
+        current_trend = th.get("current_trend", "NEUTRAL")
+        impulse_count = th.get("impulse_count", 0)
+        h4 = s.get("structure_h4", {}).get("classification", "NEUTRAL")
+        vol_regime = v.get("regime", "NORMAL")
+        contracting = v.get("contracting", False)
+
+        if h4 in ("BULLISH", "BEARISH") and current_trend == h4 and impulse_count >= 1:
+            return "TRENDING"
+        if h4 == "NEUTRAL" or contracting or vol_regime == "CONTRACTING":
+            return "RANGING"
+        return "TRANSITIONAL"
+    except Exception as e:
+        logger.debug("TT _classify_regime [%s]: %s", asset, e)
+        return "UNKNOWN"
+
+
 def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     logger.info("TT: inizio ciclo per %s", asset)
 
@@ -288,7 +387,10 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     # ── Nuovo Early Signal ────────────────────────────────────
     try:
         current_price = float(df_m5.iloc[-1]["close"]) if df_m5 is not None and len(df_m5) > 0 else float(df_m15.iloc[-1]["close"])
-        result = evaluate_setup(asset, df_h4, df_h1, df_m15, current_price)
+        reaction_map_score = _read_reaction_map_score(conn, asset)
+        regime = _classify_regime(conn, asset)
+        result = evaluate_setup(asset, df_h4, df_h1, df_m15, current_price,
+                                reaction_map_score=reaction_map_score, regime=regime)
         signal = result["signal"]
 
         if signal is None:
@@ -319,6 +421,12 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         if tt_db.has_active_setup_for_poi(conn, asset, signal["direction"], signal["poi_ref"]):
             logger.info("TT [%s %s]: setup gia' attivo su questa POI, skip (no duplicati).",
                        asset, signal["direction"])
+            return
+
+        if _has_recent_invalidated_poi(conn, asset, signal["direction"],
+                                       signal["poi_low"], signal["poi_high"]):
+            logger.info("TT [%s %s]: POI invalidata di recente (cooldown %dh), skip.",
+                       asset, signal["direction"], COOLDOWN_HOURS)
             return
 
         sid = tt_db.insert_tt_signal(conn, signal)
