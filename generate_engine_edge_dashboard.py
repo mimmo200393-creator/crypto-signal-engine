@@ -38,6 +38,11 @@ OUT_PATH       = "docs/engine_edge_dashboard.html"
 MIN_SAMPLE = 20  # sotto questa soglia per gruppo, l'edge e' "provvisorio"
 
 CLOSED_OUTCOMES = ("TP", "SL", "BE", "EXPIRED", "VIRTUAL_TP", "VIRTUAL_SL")
+
+# LH: stessa costante di generate_analytics_dashboard.py e
+# generate_unified_dashboard.py -- filtra solo la vista di LH, non
+# cancella lo storico. Le altre strategie non sono toccate.
+LH_EPOCH_DATE = "2026-08-24T18:00:00"
 WIN_OUTCOMES    = ("TP", "VIRTUAL_TP")
 
 ENGINES = [
@@ -92,11 +97,23 @@ def load_closed_decisions(conn, strategy):
     col_sql = ", ".join(cols)
     placeholders = ",".join("?" for _ in CLOSED_OUTCOMES)
     try:
-        rows = q(conn, f"""
-            SELECT {col_sql} FROM decision_ledger
-            WHERE strategy=? AND decision_type='EXECUTED'
-              AND outcome IN ({placeholders})
-        """, (strategy, *CLOSED_OUTCOMES))
+        if strategy == "LH":
+            # LH: solo decisioni da LH_EPOCH_DATE in poi -- i dati prima
+            # includono i bug di target/quality_label corretti il 24/08
+            # (stessa costante usata in generate_analytics_dashboard.py
+            # e generate_unified_dashboard.py, per coerenza tra le tre
+            # dashboard). Le altre strategie non sono toccate.
+            rows = q(conn, f"""
+                SELECT {col_sql} FROM decision_ledger
+                WHERE strategy=? AND decision_type='EXECUTED'
+                  AND outcome IN ({placeholders}) AND ts_iso > ?
+            """, (strategy, *CLOSED_OUTCOMES, LH_EPOCH_DATE))
+        else:
+            rows = q(conn, f"""
+                SELECT {col_sql} FROM decision_ledger
+                WHERE strategy=? AND decision_type='EXECUTED'
+                  AND outcome IN ({placeholders})
+            """, (strategy, *CLOSED_OUTCOMES))
     except sqlite3.OperationalError:
         return []
 
