@@ -18,6 +18,13 @@ import os
 from datetime import datetime, timezone
 
 DB_PATH  = os.environ.get("DB_PATH", "data/signals.db")
+
+# LH: dashboard mostra solo segnali DA QUESTA DATA in poi -- non cancella
+# lo storico (resta nel DB per confronto), filtra solo la vista. I dati
+# prima di questa data includono i bug di target/quality_label corretti
+# il 24/08 e mischierebbero performance pre/post-fix in modo fuorviante.
+# Aggiornare questa data quando si vuole un nuovo "azzeramento" della vista.
+LH_EPOCH_DATE = "2026-08-24T18:00:00"
 OUT_PATH = "docs/analytics_dashboard.html"
 
 
@@ -197,9 +204,9 @@ def load_lh_signals(conn):
                    quality_label, quality_score,
                    tp_label, tp_priority,
                    final_outcome, mae, mfe, rr, bars_open, timestamp_setup
-            FROM lh_signals WHERE final_outcome != 'OPEN'
+            FROM lh_signals WHERE final_outcome != 'OPEN' AND timestamp_setup > ?
             ORDER BY timestamp_setup DESC
-        """)
+        """, (LH_EPOCH_DATE,))
     except sqlite3.OperationalError:
         return []
     return [{
@@ -224,8 +231,9 @@ def load_lh_recent(conn, limit=20):
                    sweep_direction, trigger_type, tp_label,
                    final_outcome, mae, mfe, bars_open, timestamp_setup,
                    sl_original
-            FROM lh_signals ORDER BY timestamp_setup DESC LIMIT {limit}
-        """)
+            FROM lh_signals WHERE timestamp_setup > ?
+            ORDER BY timestamp_setup DESC LIMIT {limit}
+        """, (LH_EPOCH_DATE,))
     except sqlite3.OperationalError:
         return []
 
