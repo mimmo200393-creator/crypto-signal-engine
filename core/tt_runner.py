@@ -460,8 +460,18 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         real_rr = (real_reward / real_risk) if real_risk > 0 else 0
 
         if real_rr < MIN_RR:
+            reason = f"RR_DEGRADED_AT_CONFIRMATION ({real_rr:.2f} < {MIN_RR})"
             logger.info("TT [%s %s]: RR reale al prezzo attuale %.2f < %.2f, scartato prima di entrare.",
                        asset, signal["direction"], real_rr, MIN_RR)
+            if ledger_link:
+                try:
+                    import uuid
+                    ledger_link.capture_rejected(
+                        str(uuid.uuid4()), asset, signal["direction"], reason,
+                        signal=signal,
+                    )
+                except Exception as e:
+                    logger.warning("TT [%s]: ledger capture_rejected fallito (non-blocking): %s", asset, e)
             return
 
         sid = tt_db.insert_tt_signal(conn, signal)
