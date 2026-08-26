@@ -7,28 +7,29 @@ Replica il pattern di lh_integration.py -- stesso collector generico
 specifico per TT.
 
 Differenza rispetto a LH: TT non dipende dai 13 engine MIE (isolamento
-esplicito da TRB/LH, vedi strategies/tt/). I suoi "snapshot" sono i 5
+esplicito da TRB/LH, vedi strategies/tt/). I suoi "snapshot" sono i
 componenti che evaluate_setup() gia' produce dentro
-signal["context_snapshot"] (direction/poi/liquidity/premium_discount/
-context_15m) -- niente da riassemblare, si riusa direttamente.
+signal["context_snapshot"].
+
+── AGGIORNATO 26/08 ──────────────────────────────────────────────
+build_snapshots_dict corretta per il nuovo concept Balance/HL-LH
+(sostituisce Demand/Supply POI + liquidity map, riscritti il 25/08):
+context_snapshot ora contiene "direction"/"location"/"premium_discount"/
+"context_15m" -- non piu' "poi"/"liquidity", che non esistono piu' come
+concetti separati (la location E' gia' la zona operativa, col suo
+Balance dentro). Verificato sui 15 campi di _trade_dict: tutti
+combaciano gia' col segnale reale prodotto da evaluate_setup, nessun
+altro cambiamento necessario.
 
 ── QUANDO SI REGISTRA ────────────────────────────────────────────
-capture_executed() viene chiamata SOLO quando l'ENTRY e' confermata
-(5M sweep+reaction+[structure]), non alla creazione dell'Early Signal
-(WAITING_CONFIRMATION) -- stesso principio di LH ("ordine pendente non
-ancora nel Ledger, catturato al riempimento"). decision_id = signal_id
-di TT, cosi' link_outcome puo' richiuderlo quando il trade si chiude.
+capture_executed() viene chiamata quando l'ENTRY e' confermata --
+col nuovo flusso (25/08) l'entry e' immediata al momento del SETUP
+(NO_CHASE gia' verificato), non c'e' piu' un'attesa separata di
+Confirmation M5.
 
 ── NON-BLOCKING ──────────────────────────────────────────────────
 Ogni funzione cattura le eccezioni e logga un warning: se il Ledger
 fallisce, TT continua a funzionare. Stesso principio di lh_integration.
-
-── NOTA ──────────────────────────────────────────────────────────
-Non ho verificato l'implementazione interna di decision_collector.py
-(non l'ho vista) -- questo file replica solo l'INTERFACCIA gia'
-confermata funzionante da lh_integration.py. Essendo tutto avvolto in
-try/except non-blocking, un eventuale disallineamento si manifesta
-come un warning nei log, mai come un errore che blocca TT.
 """
 
 from __future__ import annotations
@@ -48,24 +49,28 @@ STRATEGY = "TT"
 # (dati insufficienti, nessuna direzione chiara), che gonfierebbero il
 # Ledger senza aggiungere informazione utile.
 SIGNIFICANT_REJECT_GATES = {
-    "RR_INSUFFICIENT",              # POI+liquidity trovati, ma il reward non bastava
+    "RR_INSUFFICIENT",              # location trovata, ma il reward non bastava
     "NO_DYNAMIC_TARGET_AVAILABLE",  # nessun target raggiungibile con RR sufficiente
-    "NO_LIQUIDITY_TARGET",          # POI valida ma nessuna liquidity collegata
+    "NO_VALID_LOCATION",            # nessuna Expansion/Pullback/Balance valida
+    "NO_CHASE",                     # location trovata ma prezzo gia' scappato
+    "TACTICAL_DIRECTION_UNCLEAR",   # H1/M30 non concordano
 }
 
 
 def build_snapshots_dict(context_snapshot: dict) -> dict:
     """
-    A differenza di LH (13 engine MIE esterni da assemblare), TT ha gia'
+    Aggiornato 26/08 per il nuovo concept Balance/HL-LH: TT ha gia'
     tutto dentro context_snapshot (prodotto da evaluate_setup() in
-    strategies/tt/liquidity_engine.py) -- direction/poi/liquidity/
-    premium_discount/context_15m. Nessun riassemblaggio necessario.
+    strategies/tt/liquidity_engine.py) -- direction/location/
+    premium_discount/context_15m. "location" sostituisce "poi"
+    (rinominato il 25/08 quando la location e' diventata il Balance
+    stesso, non piu' una zona Demand/Supply separata dalla liquidity
+    map -- quel concetto e' sparito, non serve piu' un campo dedicato).
     """
     context_snapshot = context_snapshot or {}
     return {
         "direction_4h":     context_snapshot.get("direction"),
-        "poi":              context_snapshot.get("poi"),
-        "liquidity":        context_snapshot.get("liquidity"),
+        "location":         context_snapshot.get("location"),
         "premium_discount": context_snapshot.get("premium_discount"),
         "context_15m":      context_snapshot.get("context_15m"),
     }
@@ -75,7 +80,10 @@ def _trade_dict(signal: dict) -> dict:
     """
     Estrae i campi del trade dal signal TT per il Ledger. Include i
     campi specifici di TT (poi_type, pd_zone, quality) oltre a quelli
-    standard, cosi' l'analisi futura puo' incrociare i due.
+    standard, cosi' l'analisi futura puo' incrociare i due. Verificato
+    il 26/08: tutti e 15 i campi combaciano col segnale reale prodotto
+    dal nuovo evaluate_setup (Balance/HL-LH), nessuna modifica
+    necessaria qui oltre all'aggiunta dei campi multi-timeframe.
     """
     return {
         "entry":         signal.get("planned_entry"),
@@ -94,16 +102,21 @@ def _trade_dict(signal: dict) -> dict:
         "proximity_points":  signal.get("proximity_points"),
         "setup_type":        signal.get("setup_type"),
         "planned_tp_type":   signal.get("planned_tp_type"),
+        # Campi multi-timeframe (aggiunti 25/08): niente gate rigidi tra
+        # timeframe -- la classificazione va registrata per poter
+        # misurare nel tempo quale combinazione ha edge reale.
+        "direction_1h":      signal.get("direction_1h"),
+        "direction_30m":     signal.get("direction_30m"),
+        "mtf_combination":   signal.get("mtf_combination"),
     }
 
 
 def capture_executed(decision_id: str, asset: str, signal: dict,
                      ledger_path: str = ledger_writer.DEFAULT_LEDGER_PATH) -> None:
     """
-    Registra un segnale TT ESEGUITO (ENTRY confermata) nel Ledger.
-    decision_id = signal_id di TT. snapshots costruiti direttamente da
-    signal["context_snapshot"] -- nessun parametro esterno da passare,
-    a differenza di LH.
+    Registra un segnale TT ESEGUITO nel Ledger. decision_id = signal_id
+    di TT. snapshots costruiti direttamente da signal["context_snapshot"]
+    -- nessun parametro esterno da passare, a differenza di LH.
     """
     try:
         snapshots = build_snapshots_dict(signal.get("context_snapshot"))
@@ -124,9 +137,20 @@ def capture_executed(decision_id: str, asset: str, signal: dict,
 def capture_rejected(decision_id: str, asset: str, direction: Optional[str],
                      reject_gate: str, signal: Optional[dict] = None,
                      ledger_path: str = ledger_writer.DEFAULT_LEDGER_PATH) -> None:
-    """Registra un rifiuto TT significativo (solo i gate rilevanti)."""
+    """
+    Registra un rifiuto TT significativo (solo i gate rilevanti).
+
+    Confronto per PREFISSO, non per stringa esatta (fix 26/08): i
+    motivi di rifiuto reali (liquidity_engine.py) includono sempre
+    dettagli tra parentesi, es. "NO_CHASE (12.34 > 15.0)" o
+    "RR_INSUFFICIENT (1.23 < 1.5)" -- un confronto esatto contro
+    SIGNIFICANT_REJECT_GATES non avrebbe MAI fatto match per questi
+    casi, escludendoli in silenzio dal Ledger senza nessun errore
+    visibile (bug trovato confrontando il codice riga per riga).
+    """
     try:
-        if reject_gate not in SIGNIFICANT_REJECT_GATES:
+        base_reason = reject_gate.split(" ")[0].split("(")[0]
+        if base_reason not in SIGNIFICANT_REJECT_GATES:
             return
         snapshots = build_snapshots_dict(signal.get("context_snapshot") if signal else None)
         trade = _trade_dict(signal) if signal else None
@@ -153,9 +177,7 @@ def link_outcome(decision_id: str, outcome: str, entry: float, stop_loss: float,
     """
     Collega l'esito di un trade TT chiuso al Ledger. Idempotente.
     Stessa logica di lh_integration.link_outcome (replica esatta,
-    incluso il caso breakeven) -- TT non ha ancora un concetto di
-    breakeven attivo (nessun meccanismo di spostamento SL a entry come
-    LH), ma la protezione risk=0 resta utile come guardia difensiva.
+    incluso il caso breakeven).
     """
     try:
         risk = abs(entry - stop_loss) if (entry and stop_loss) else None
