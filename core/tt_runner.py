@@ -10,7 +10,7 @@ un'altra strategia, quindi riusarle non viola l'isolamento di TT.
 
 Ciclo per asset (BTC_USDT, XAU_USD):
     1. Carica H4/H1/M15/M5
-    2. Monitora i segnali WAITING_CONFIRMATION esistenti:
+    2. Monitora i segnali SETUP esistenti:
        - il prezzo ha toccato la POI? -> valuta l'esecuzione 5M
        - il setup e' ancora valido? (bias, POI, scadenza)
     3. Monitora i segnali ENTRY (aperti): TP/SL/EXPIRED
@@ -26,7 +26,7 @@ from storage import db as core_db
 from core import v3_db
 from core import tt_db
 
-from strategies.tt.liquidity_engine import evaluate_setup, evaluate_execution
+from strategies.tt.liquidity_engine import evaluate_setup, evaluate_execution_v2, MIN_RR
 from strategies.tt.direction_engine import compute_direction_4h
 
 try:
@@ -39,7 +39,7 @@ logger = logging.getLogger("tt.runner")
 TT_ASSETS = ["BTC_USDT", "XAU_USD"]
 TT_TIMEFRAMES = {"H4": "4h", "H1": "1h", "M15": "15m", "M5": "5m"}
 
-# Quanto lontano dal SL prima di considerare un WAITING_CONFIRMATION
+# Quanto lontano dal SL prima di considerare un SETUP
 # ormai "andato" senza essere mai entrato (invalidazione, non una loss:
 # il trade non e' mai partito). Non calibrato su dati reali.
 MAX_ADVERSE_MOVE_ATR = 1.0
@@ -57,9 +57,10 @@ def _prepare_dataframes(conn, asset: str, config: dict):
     limit = config.get("BOOTSTRAP_TARGET_CANDLES", 300)
     df_h4 = core_db.get_candles_df(conn, asset, TT_TIMEFRAMES["H4"], limit=limit)
     df_h1 = core_db.get_candles_df(conn, asset, TT_TIMEFRAMES["H1"], limit=limit)
+    df_m30 = v3_db.get_v3_candles_df(conn, asset, "30m", limit=limit)
     df_m15 = v3_db.get_v3_candles_df(conn, asset, TT_TIMEFRAMES["M15"], limit=limit)
     df_m5 = v3_db.get_v3_candles_df(conn, asset, TT_TIMEFRAMES["M5"], limit=100)
-    return df_h4, df_h1, df_m15, df_m5
+    return df_h4, df_h1, df_m30, df_m15, df_m5
 
 
 def _price_touched_poi(df_m5, poi_low: float, poi_high: float) -> bool:
@@ -171,41 +172,6 @@ def _monitor_open_signals(conn, asset: str, df_m5, now):
             conn.commit()
 
 
-def _notify_early_signal(asset: str, signal: dict, config: dict):
-    try:
-        from notifications import telegram_bot, ntfy_bot
-        direction = signal["direction"]
-        emoji = "\U0001f7e2" if direction == "BUY" else "\U0001f534"
-
-        def fp(v):
-            return f"{v:,.2f}" if abs(v) > 1000 else f"{v:.4f}"
-
-        text = (
-            f"{emoji} *TT — EARLY SIGNAL*\n"
-            f"*{asset.replace('_',' ')}* — {direction}\n\n"
-            f"POI: {signal['poi_type']} `{fp(signal['poi_low'])}` - `{fp(signal['poi_high'])}` "
-            f"(quality {signal['poi_quality']}/10)\n"
-            f"PD: {signal['pd_zone']} ({signal['pd_pct']:.0f}%)\n"
-            f"15M: {signal['ctx_15m_structure']}, {signal['ctx_15m_momentum']}\n"
-            f"Prossimita': {signal['proximity_points']:.1f} punti\n\n"
-            f"Planned Entry: `{fp(signal['planned_entry'])}`\n"
-            f"Planned SL: `{fp(signal['planned_sl'])}`\n"
-            f"Planned TP: `{fp(signal['planned_tp'])}` ({signal['planned_tp_type']})\n"
-            f"RR: {signal['planned_rr']:.2f}\n\n"
-            f"_In attesa di conferma -- non e' ancora un trade._"
-        )
-        bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
-        chat_id = config.get("TELEGRAM_CHAT_ID", "")
-        ntfy_topic = config.get("NTFY_TOPIC", "")
-        if bot_token and chat_id:
-            telegram_bot.send_message(bot_token, chat_id, text)
-        if ntfy_topic:
-            title = f"TT Early Signal {asset.replace('_',' ')} {direction}"
-            ntfy_bot.send_message(ntfy_topic, title, text.replace("*", "").replace("`", ""))
-    except Exception as e:
-        logger.warning("TT _notify_early_signal: %s", e)
-
-
 def _notify_entry(asset, direction, signal, entry, sl, tp, config):
     try:
         from notifications import telegram_bot, ntfy_bot
@@ -301,13 +267,22 @@ def _classify_regime(conn, asset: str) -> str:
 def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     logger.info("TT: inizio ciclo per %s", asset)
 
-    df_h4, df_h1, df_m15, df_m5 = _prepare_dataframes(conn, asset, config)
+    # XAU e' chiuso nel weekend (stesso controllo gia' in LH, mai
+    # presente in TT -- gap trovato testando il nuovo location engine:
+    # ATR calcolato su dati weekend quasi piatti produce SL
+    # irrealisticamente stretti, es. 0.08 punti invece dei tipici 10-15).
+    # BTC non e' toccato, tratta 24/7.
+    if asset == "XAU_USD" and now.weekday() >= 5:  # 5=sabato, 6=domenica
+        logger.info("TT [%s]: mercato chiuso (weekend), skip.", asset)
+        return
+
+    df_h4, df_h1, df_m30, df_m15, df_m5 = _prepare_dataframes(conn, asset, config)
 
     if len(df_h4) < 15 or len(df_h1) < 20 or len(df_m15) < 15:
         logger.warning("TT [%s]: dati insufficienti, skip.", asset)
         return
 
-    # ── Monitoraggio segnali WAITING_CONFIRMATION ────────────
+    # ── Monitoraggio segnali SETUP ────────────
     try:
         waiting = tt_db.get_waiting_signals(conn, asset)
         current_price = float(df_m5.iloc[-1]["close"]) if df_m5 is not None and len(df_m5) > 0 else None
@@ -343,21 +318,35 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
             if not _price_touched_poi(df_m5, poi_low, poi_high):
                 continue
 
-            logger.info("TT [%s %s]: tocco POI, valuto esecuzione 5M...", asset, direction)
-            exec_result = evaluate_execution(
-                df_m5, direction, sig["sweep_target_level"],
-                setup_type=sig.get("setup_type", "CONSERVATIVE"),
-            )
+            logger.info("TT [%s %s]: tocco Location, valuto Confirmation 5M...", asset, direction)
+            exec_result = evaluate_execution_v2(df_m5, direction)
 
             if exec_result["entry_confirmed"]:
-                sweep = exec_result.get("sweep") or {}
-                reaction = exec_result.get("reaction") or {}
+                # Ricontrollo il RR REALE al momento della Confirmation,
+                # non solo quello pianificato al momento del SETUP.
+                # Bug trovato il 25/08: tra SETUP e Confirmation possono
+                # passare ore -- il prezzo si muove, e il RR pianificato
+                # (calcolato sulla location) puo' non avere piu' nulla
+                # a che vedere col RR reale (calcolato sul prezzo di
+                # entry vero). Caso reale: RR pianificato 10.72, RR
+                # reale alla Confirmation 0.87 -- un trade mediocre
+                # travestito da eccezionale.
+                real_risk = abs(current_price - sig["planned_sl"])
+                real_reward = abs(sig["planned_tp"] - current_price)
+                real_rr = (real_reward / real_risk) if real_risk > 0 else 0
+
+                if real_rr < MIN_RR:
+                    tt_db.invalidate_signal(conn, sid, f"RR_DEGRADED_AT_CONFIRMATION ({real_rr:.2f} < {MIN_RR})")
+                    logger.info("TT [%s %s]: RR reale sceso a %.2f (pianificato %.2f) -- sotto soglia, INVALIDATED invece di ENTRY.",
+                               asset, direction, real_rr, sig["planned_rr"])
+                    continue
+
                 structure = exec_result.get("structure") or {}
                 tt_db.confirm_entry(
                     conn, sid, actual_entry=current_price, actual_sl=sig["planned_sl"],
                     actual_tp=sig["planned_tp"], touch_ts=now.isoformat(),
-                    sweep_level=sweep.get("sweep_level_hit"),
-                    reaction_type=reaction.get("reaction_type"),
+                    sweep_level=None,
+                    reaction_type=None,
                     structure_level=structure.get("broken_level"),
                 )
                 logger.info("TT [%s %s]: ENTRY CONFERMATA @ %.4f", asset, direction, current_price)
@@ -389,7 +378,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         current_price = float(df_m5.iloc[-1]["close"]) if df_m5 is not None and len(df_m5) > 0 else float(df_m15.iloc[-1]["close"])
         reaction_map_score = _read_reaction_map_score(conn, asset)
         regime = _classify_regime(conn, asset)
-        result = evaluate_setup(asset, df_h4, df_h1, df_m15, current_price,
+        result = evaluate_setup(asset, df_h4, df_h1, df_m30, df_m15, current_price,
                                 reaction_map_score=reaction_map_score, regime=regime)
         signal = result["signal"]
 
@@ -404,8 +393,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                         "direction": diag.get("direction_4h"),
                         "context_snapshot": {
                             "direction": {"direction": diag.get("direction_4h")},
-                            "poi": diag.get("poi"),
-                            "liquidity": diag.get("liquidity"),
+                            "location": diag.get("location"),
                             "premium_discount": diag.get("premium_discount"),
                             "context_15m": diag.get("context_15m"),
                         },
@@ -423,17 +411,70 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                        asset, signal["direction"])
             return
 
+        # Tolleranza di sovrapposizione: 1x ATR M15 (stessa scala della
+        # location, che ora e' su M15). Ricavo l'ATR dall'ampiezza
+        # dell'Expansion (prezzo) diviso il suo multiplo in ATR --
+        # stesso dato gia' calcolato da select_location, evito di
+        # ricalcolarlo da zero. Scala automaticamente per asset.
+        expansion_atr_ratio = signal.get("expansion_size_atr") or 0
+        expansion_price_size = abs(signal["expansion_end_price"] - signal["expansion_start_price"])
+        atr_estimate = (expansion_price_size / expansion_atr_ratio) if expansion_atr_ratio > 0 else 5.0
+        overlap_tolerance = atr_estimate
+        if tt_db.has_active_overlapping_setup(conn, asset, signal["direction"],
+                                              signal["poi_low"], signal["poi_high"],
+                                              tolerance=overlap_tolerance):
+            logger.info("TT [%s %s]: location sovrapposta a un setup gia' attivo (stessa storia in evoluzione), skip.",
+                       asset, signal["direction"])
+            return
+
         if _has_recent_invalidated_poi(conn, asset, signal["direction"],
                                        signal["poi_low"], signal["poi_high"]):
             logger.info("TT [%s %s]: POI invalidata di recente (cooldown %dh), skip.",
                        asset, signal["direction"], COOLDOWN_HOURS)
             return
 
+        # ══════════════════════════════════════════════════════
+        # Entry IMMEDIATO al SETUP -- niente piu' attesa di
+        # Confirmation M5 separata (rimosso il 25/08). Verificato
+        # con dati reali: la Confirmation via check_structure_break
+        # richiedeva un intero nuovo ciclo swing+rottura, durante il
+        # quale il prezzo poteva scappare 20+ punti dalla location
+        # prima che l'entry scattasse davvero -- il RR pianificato
+        # (calcolato sulla location) diventava scollegato dal RR
+        # reale (calcolato sul prezzo di entry vero), a volte
+        # crollando sotto la soglia minima, a volte gonfiandosi
+        # artificialmente se il prezzo era tornato vicino allo SL.
+        #
+        # La conferma "buyers/sellers regain control" e' gia'
+        # implicita nella regola k=2 di conferma dello swing HL/LH
+        # stesso (2 candele M15 di conferma dopo il minimo/massimo)
+        # -- non serve una seconda verifica M5 separata sopra quella.
+        #
+        # NO_CHASE (gia' verificato dentro evaluate_setup, sul
+        # current_price) sostituisce la vecchia attesa: se il prezzo
+        # e' ancora abbastanza vicino alla location ORA, entriamo
+        # ORA, al prezzo reale -- non aspettiamo che si allontani.
+        # ══════════════════════════════════════════════════════
+        real_risk = abs(current_price - signal["planned_sl"])
+        real_reward = abs(signal["planned_tp"] - current_price)
+        real_rr = (real_reward / real_risk) if real_risk > 0 else 0
+
+        if real_rr < MIN_RR:
+            logger.info("TT [%s %s]: RR reale al prezzo attuale %.2f < %.2f, scartato prima di entrare.",
+                       asset, signal["direction"], real_rr, MIN_RR)
+            return
+
         sid = tt_db.insert_tt_signal(conn, signal)
-        logger.info("TT [%s %s]: EARLY SIGNAL creato (id=%s) entry=%.4f sl=%.4f tp=%.4f rr=%.2f",
-                   asset, signal["direction"], sid[:8], signal["planned_entry"],
-                   signal["planned_sl"], signal["planned_tp"], signal["planned_rr"])
-        _notify_early_signal(asset, signal, config)
+        tt_db.confirm_entry(
+            conn, sid, actual_entry=current_price, actual_sl=signal["planned_sl"],
+            actual_tp=signal["planned_tp"], touch_ts=now.isoformat(),
+            sweep_level=None, reaction_type=None, structure_level=None,
+        )
+        logger.info("TT [%s %s]: ENTRY immediato (id=%s) entry=%.4f sl=%.4f tp=%.4f rr_reale=%.2f (rr_location=%.2f)",
+                   asset, signal["direction"], sid[:8], current_price,
+                   signal["planned_sl"], signal["planned_tp"], real_rr, signal["planned_rr"])
+        _notify_entry(asset, signal["direction"], signal, current_price,
+                     signal["planned_sl"], signal["planned_tp"], config)
     except Exception as e:
         logger.error("TT [%s]: errore generazione segnale: %s", asset, e)
 
