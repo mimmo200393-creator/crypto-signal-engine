@@ -29,8 +29,8 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from strategies.tt.direction_engine import compute_direction_4h
-from strategies.tt.location_engine import select_best_poi, _detect_pois
+from strategies.tt.direction_engine import compute_direction_4h, _detect_swings as _detect_swings_h4
+from strategies.tt.location_engine import select_location
 
 
 # ============================================================
@@ -54,12 +54,21 @@ LEVEL_SIGNIFICANCE = {
     "EQUAL_HIGH": 3, "EQUAL_LOW": 3,
     "IMPULSE_HIGH": 1, "IMPULSE_LOW": 1,
     "OPPOSING_POI": 4,
+    "PREVIOUS_STRUCTURE": 5,  # last_bos_price -- "Previous HH/LL", la
+                              # referenza esplicita del documento 25/08
+                              # per il TP, priorita' massima
 }
 
 # Baseline non calibrate -- da validare via backtest (spec sezione 9, 25).
 PROXIMITY_POINTS = {"XAU_USD": 12.5, "BTC_USDT": 150.0}
 MIN_RR = 1.5
-SL_BUFFER_ATR = 0.3
+SL_BUFFER_ATR = 1.0  # ricalibrato il 25/08: la location e' un PUNTO (lo
+                      # swing HL/LH), senza ampiezza propria -- 0.3x dava
+                      # SEMPRE e SOLO 0.3x ATR di rischio, senza eccezione
+                      # (verificato su 11/11 trade reali), gonfiando il RR
+                      # e l'expectancy in modo irrealistico (+3.39R con
+                      # 0.3x, +0.76R -- piu credibile -- con 1.0x, stesso
+                      # win rate). Stesso principio del fix OTE (0.2x->0.5x).
 
 
 def _manual_atr(df: pd.DataFrame, period: int = 14) -> float:
@@ -364,6 +373,25 @@ def check_structure_break(df_m5: pd.DataFrame, direction: str, from_index: int =
     return {"confirmed": False}
 
 
+def evaluate_execution_v2(df_m5: pd.DataFrame, direction: str) -> dict:
+    """
+    Confirmation per il nuovo setup STRUCTURE_PULLBACK (documento
+    25/08): "buyers/sellers regain control" = rottura di uno swing
+    M5 nella direzione del trade. Stessa funzione check_structure_break
+    gia' validata (usata anche dal vecchio setup CONSERVATIVE) --
+    riuso puro, nessuna modifica.
+
+    A differenza del vecchio flusso, qui NON serve sweep+reazione
+    prima: il Touch sulla location (HL/LH) e' gia' di per se' il
+    punto di osservazione -- la Confirmation e' l'unico trigger.
+    """
+    structure = check_structure_break(df_m5, direction, from_index=0)
+    if not structure["confirmed"]:
+        return {"entry_confirmed": False, "structure": structure,
+               "rejection": "NO_STRUCTURE_CONFIRMATION"}
+    return {"entry_confirmed": True, "structure": structure, "rejection": None}
+
+
 def evaluate_execution(df_m5: pd.DataFrame, direction: str, sweep_level: float,
                        setup_type: str = "CONSERVATIVE") -> dict:
     """TOUCH (implicito) -> SWEEP -> REACTION -> [STRUCTURE se CONSERVATIVE] -> ENTRY."""
@@ -461,53 +489,6 @@ def select_dynamic_target(liq_scenario: dict, opposing_poi, entry: float,
 # 7. SIGNAL ORCHESTRATION: Proximity + Early Signal (spec sezioni 8-12, 26)
 # ============================================================
 
-def _compute_signal_quality(poi: dict, pd_info: dict, ctx_15m: dict,
-                            trade_side: str, planned_rr: float,
-                            reaction_map_score: float = None,
-                            regime: str = None) -> tuple:
-    """
-    Quality Score del SEGNALE (spec sezione 29) -- diverso da poi["quality_score"]
-    (quello e' solo la qualita' della location, calcolato nel Location
-    Engine). Questo combina i pochi elementi che la spec elenca:
-    qualita' POI, Premium/Discount allineato, 15M coerente, RR.
-
-    Aggiunti il 24/08, come SOFT factor (mai hard gate, coerente col
-    resto della funzione):
-      - Reaction Map: l'unico engine con edge positivo confermato su
-        piu' strategie indipendenti (V41P1 +4.8%, TRB +4.1%, verificato
-        su centinaia di trade). TT era isolato da questo dato.
-      - Regime TRANSITIONAL: confermato tossico su due strategie con
-        centinaia di trade (TRB 26.5% WR vs 40%+ negli altri regimi,
-        V41P1 24.7% vs 35-38%). Penalita, non blocco.
-
-    Pochi elementi forti, non 20 filtri (spec esplicita). Solo SOFT
-    factor -- non blocca mai (il blocco vero e' gia' avvenuto sopra,
-    su RR insufficiente/nessun target/nessuna POI).
-    """
-    score = 3  # base: il setup e' arrivato fin qui, tutti i gate hard sono gia' passati
-
-    score += round(poi.get("quality_score", 0) / 10 * 3)  # fino a +3, scalato da poi_quality (0-10)
-
-    if is_preferred_zone(pd_info.get("pd_zone"), trade_side):
-        score += 2  # Premium/Discount allineato (spec sezione 5)
-
-    if ctx_15m.get("ctx_15m_momentum") == "DECELERATING":
-        score += 2  # il prezzo rallenta avvicinandosi -- buon segno (spec sezione 7)
-
-    if planned_rr >= 2.0:
-        score += 2
-
-    if reaction_map_score is not None and reaction_map_score >= 5:
-        score += 1  # bonus contenuto: edge reale ma modesto (+4-5%), non uno dei fattori forti
-
-    if regime == "TRANSITIONAL":
-        score -= 2  # penalita, non blocco -- il setup puo' ancora passare con score alto altrove
-
-    score = max(0, min(score, 12))
-    label = "HIGH" if score >= 8 else ("MEDIUM" if score >= 5 else "LOW")
-    return score, label
-
-
 def _direction_to_trade_side(direction_4h: str):
     if direction_4h == "BULLISH":
         return "BUY"
@@ -516,13 +497,32 @@ def _direction_to_trade_side(direction_4h: str):
     return None
 
 
-def evaluate_setup(asset: str, df_h4, df_h1, df_m15, current_price: float,
+def evaluate_setup(asset: str, df_h4, df_h1, df_m30, df_m15, current_price: float,
                    reaction_map_score: float = None, regime: str = None) -> dict:
     """
-    Entry point principale. Sequenza (spec sezione 33): Direction ->
-    Location -> Liquidity -> Premium/Discount -> 15M Context ->
-    Proximity -> Early Signal. Ogni gate ferma la catena con un motivo
-    esplicito.
+    Entry point principale -- RISCRITTO 25/08, framework multi-timeframe
+    (idea dell'utente): niente gate rigidi tra timeframe. Ogni
+    combinazione viene calcolata, classificata e registrata -- sono i
+    dati, nel tempo, a dover dire quale combinazione ha edge, non una
+    decisione presa a priori su un campione piccolo.
+
+        H4          = macro trend/regime (contesto, MAI un gate)
+        H1 + M30    = direzione TATTICA (guida davvero il trade)
+        M15         = Balance + HL/LH + setup (location)
+        M5          = entry (immediato, verificato il 25/08)
+
+    La direzione tattica (H1+M30, devono concordare tra loro -- se
+    discordano tra loro, quella si' che e' vera incertezza, non un
+    disaccordo col macro) determina il trade. La relazione con H4
+    determina solo la CLASSIFICAZIONE:
+
+        macro == tattica       -> MACRO_CONTINUATION_<direzione>
+        macro != tattica       -> TACTICAL_COUNTERTREND_<direzione>
+        macro == NEUTRAL       -> TACTICAL_ONLY_<direzione>
+
+    Ogni combinazione passa (nessun rigetto qui) -- la classificazione
+    viene salvata nel segnale per poter misurare dopo, con dati veri,
+    quale combinazione vince davvero.
     """
     diag = {"asset": asset}
 
@@ -530,73 +530,114 @@ def evaluate_setup(asset: str, df_h4, df_h1, df_m15, current_price: float,
         diag["rejection"] = reason
         return {"signal": None, "diagnostics": diag}
 
-    dir_ctx = compute_direction_4h(df_h4)
-    diag["direction_4h"] = dir_ctx["direction"]
-    if dir_ctx["direction"] == "NEUTRAL":
-        return reject("DIRECTION_NOT_CLEAR")
+    dir_h4 = compute_direction_4h(df_h4)["direction"]
+    diag["direction_4h"] = dir_h4
 
-    trade_side = _direction_to_trade_side(dir_ctx["direction"])
+    dir_h1 = compute_direction_4h(df_h1)["direction"]
+    dir_m30 = compute_direction_4h(df_m30)["direction"]
+    diag["direction_1h"] = dir_h1
+    diag["direction_30m"] = dir_m30
 
-    poi = select_best_poi(df_h1, asset, dir_ctx["direction"], current_price)
-    if poi is None:
-        return reject("NO_VALID_POI")
-    diag["poi"] = poi
+    # La direzione TATTICA guida il trade -- H1 e M30 devono concordare
+    # tra loro (quella e' vera incertezza a breve termine, diversa dal
+    # disaccordo col macro H4). Se non concordano, o sono NEUTRAL,
+    # non c'e' ancora una direzione tattica chiara -- non rigettiamo
+    # per un disaccordo col macro (quello si misura), ma serve comunque
+    # un chiaro accordo TATTICO per sapere in che direzione guardare.
+    if dir_h1 == "NEUTRAL" or dir_m30 == "NEUTRAL" or dir_h1 != dir_m30:
+        return reject(f"TACTICAL_DIRECTION_UNCLEAR (H1={dir_h1} M30={dir_m30})")
 
-    liq = build_liquidity_for_poi(df_h1, poi, current_price)
-    if liq["sweep_target"] is None:
-        return reject("NO_LIQUIDITY_TARGET")
-    diag["liquidity"] = liq
+    tactical_direction = dir_h1  # H1 e M30 concordano, questa e' la direzione tattica
 
-    poi_mid = (poi["zone_high"] + poi["zone_low"]) / 2
-    pd_info = compute_premium_discount(poi_mid, dir_ctx["swing_range_low"], dir_ctx["swing_range_high"])
+    if dir_h4 == "NEUTRAL":
+        mtf_combination = f"TACTICAL_ONLY_{tactical_direction}"
+    elif dir_h4 == tactical_direction:
+        mtf_combination = f"MACRO_CONTINUATION_{tactical_direction}"
+    else:
+        mtf_combination = f"TACTICAL_COUNTERTREND_{tactical_direction}"
+    diag["mtf_combination"] = mtf_combination
+
+    trade_side = _direction_to_trade_side(tactical_direction)
+    dir_ctx = compute_direction_4h(df_h4)  # per last_bos_price/swing_range, serve l'oggetto completo
+
+    # Location su M15 (non piu' H1) -- verificato il 25/08: la stessa
+    # logica Expansion/Pullback/Balance/HL-LH su H1 produceva solo
+    # ~0.5 setup/giorno (il pattern e' raro su quella scala). Su M15
+    # lo stesso pattern si ripete naturalmente piu' spesso (~4/giorno,
+    # qualita' per lo piu' HIGH) mantenendo intatta la logica -- non
+    # e' stata allentata nessuna soglia, solo cambiata la scala.
+    location = select_location(df_m15, tactical_direction, current_price)
+    if location is None:
+        return reject("NO_VALID_LOCATION")  # Expansion insuff. o Pullback non confermato -- WATCH
+    diag["location"] = location
+
+    pd_info = compute_premium_discount(location["location_price"],
+                                       dir_ctx["swing_range_low"], dir_ctx["swing_range_high"])
     diag["premium_discount"] = pd_info
 
     ctx_15m = compute_15m_context(df_m15)
     diag["context_15m"] = ctx_15m
 
-    proximity_threshold = PROXIMITY_POINTS.get(asset, 15.0)
-    if trade_side == "BUY":
-        edge = poi["zone_high"]
-        distance = current_price - edge
+    # Proximity / NO_CHASE (spec sezione 12): se il prezzo e' gia'
+    # scappato oltre la location prima della Confirmation, non si
+    # insegue -- si aspetta il prossimo Pullback.
+    #
+    # Per il Balance attivo, questo controllo e' gia' stato fatto
+    # correttamente dentro select_location_from_active_balance
+    # (contro l'intero range, non il suo centro) -- lo salto qui per
+    # non rigettare erroneamente casi validi dove il prezzo e' vicino
+    # a un bordo del range ma lontano dal centro (location_price).
+    if location.get("is_active_balance"):
+        diag["proximity_points"] = 0.0
     else:
-        edge = poi["zone_low"]
-        distance = edge - current_price
-    diag["proximity_points"] = round(distance, 4)
+        proximity_threshold = PROXIMITY_POINTS.get(asset, 15.0)
+        loc_price = location["location_price"]
+        if trade_side == "BUY":
+            distance = current_price - loc_price
+        else:
+            distance = loc_price - current_price
+        diag["proximity_points"] = round(distance, 4)
 
-    if distance < 0:
-        return reject("PRICE_ALREADY_PAST_EDGE")
-    if distance > proximity_threshold:
-        return reject(f"TOO_FAR ({distance:.2f} > {proximity_threshold})")
+        if distance < 0:
+            return reject("PRICE_ALREADY_PAST_LOCATION")
+        if distance > proximity_threshold:
+            return reject(f"NO_CHASE ({distance:.2f} > {proximity_threshold})")
 
-    atr_h1 = _manual_atr(df_h1)
+    loc_price = location["location_price"]
+
+    atr_h1 = location["atr_h1"]
     sl_buffer = SL_BUFFER_ATR * atr_h1 if atr_h1 > 0 else 0
 
-    if trade_side == "BUY":
-        planned_entry = poi["zone_high"]
-        planned_sl = poi["zone_low"] - sl_buffer
+    # Se e' un Balance attivo (idea del 25/08): entry al punto migliore
+    # del range, SL sotto/sopra l'INTERO range -- non un punto singolo.
+    # Verificato: 63.2% WR, +1.10R contro risultati peggiori col solo
+    # punto. Altrimenti (fallback), stesso comportamento di prima.
+    if location.get("is_active_balance"):
+        if trade_side == "BUY":
+            planned_entry = location["range_low"]
+            planned_sl = location["range_low"] - sl_buffer
+        else:
+            planned_entry = location["range_high"]
+            planned_sl = location["range_high"] + sl_buffer
+    elif trade_side == "BUY":
+        planned_entry = loc_price
+        planned_sl = loc_price - sl_buffer  # oltre l'invalidazione dell'HL
     else:
-        planned_entry = poi["zone_low"]
-        planned_sl = poi["zone_high"] + sl_buffer
+        planned_entry = loc_price
+        planned_sl = loc_price + sl_buffer  # oltre l'invalidazione del LH
 
     risk = abs(planned_entry - planned_sl)
     if risk <= 0:
         return reject("SL_NOT_CALCULABLE")
 
-    opposing_type = "SUPPLY" if trade_side == "BUY" else "DEMAND"
-    all_pois = _detect_pois(df_h1, asset)
-    opposing_candidates = [p for p in all_pois if p["poi_type"] == opposing_type]
-    opposing_poi = None
-    if opposing_candidates:
-        if trade_side == "BUY":
-            valid_opposing = [p for p in opposing_candidates if p["zone_low"] > planned_entry]
-            if valid_opposing:
-                opposing_poi = min(valid_opposing, key=lambda p: p["zone_low"])
-        else:
-            valid_opposing = [p for p in opposing_candidates if p["zone_high"] < planned_entry]
-            if valid_opposing:
-                opposing_poi = max(valid_opposing, key=lambda p: p["zone_high"])
-
-    target = select_dynamic_target(liq, opposing_poi, planned_entry, planned_sl, trade_side, atr=atr_h1)
+    # TP: Previous HH/LL (last_bos_price, priorita' massima) + swing
+    # H1 nella direzione del trade -- non piu' zone di liquidita'
+    # generiche. select_dynamic_target riusa il tetto di distanza e
+    # il fallback 1:2 gia' corretti il 24/08.
+    candidates = _build_tp_candidates(df_m15, dir_ctx, trade_side, planned_entry)
+    target = select_dynamic_target({"above": candidates} if trade_side == "BUY"
+                                   else {"below": candidates},
+                                   None, planned_entry, planned_sl, trade_side, atr=atr_h1)
     if target is None:
         return reject("NO_DYNAMIC_TARGET_AVAILABLE")
 
@@ -605,40 +646,118 @@ def evaluate_setup(asset: str, df_h4, df_h1, df_m15, current_price: float,
     if planned_rr < MIN_RR:
         return reject(f"RR_INSUFFICIENT ({planned_rr:.2f} < {MIN_RR})")
 
-    quality_score, quality_label = _compute_signal_quality(
-        poi, pd_info, ctx_15m, trade_side, planned_rr,
+    quality_score, quality_label = _compute_signal_quality_v2(
+        location, pd_info, ctx_15m, trade_side, planned_rr,
         reaction_map_score=reaction_map_score, regime=regime)
 
     now = datetime.now(timezone.utc)
     signal = {
-        "asset": asset, "direction": trade_side, "direction_4h": dir_ctx["direction"],
+        "asset": asset, "direction": trade_side, "direction_4h": dir_h4,
+        "direction_1h": dir_h1, "direction_30m": dir_m30,
+        "mtf_combination": mtf_combination,
         "swing_range_low": dir_ctx["swing_range_low"], "swing_range_high": dir_ctx["swing_range_high"],
         "last_bos_price": dir_ctx["last_bos_price"], "last_bos_ts": dir_ctx["last_bos_ts"],
 
-        "poi_type": poi["poi_type"], "poi_high": poi["zone_high"], "poi_low": poi["zone_low"],
-        "poi_quality": poi["quality_score"], "poi_ref": poi["poi_ref"],
+        "poi_type": location["location_type"],
+        "poi_high": location.get("range_high", loc_price),
+        "poi_low": location.get("range_low", loc_price),
+        "poi_quality": quality_score, "poi_ref": f"loc:{asset}:{location['location_type']}:{location['location_ts']}",
 
-        "liquidity_type": liq["sweep_target"]["type"], "liquidity_level": liq["sweep_target"]["price"],
-        "liquidity_direction": "below" if trade_side == "BUY" else "above",
-        "liquidity_distance_pct": None, "sweep_target_level": liq["sweep_target"]["price"],
+        "liquidity_type": target["type"], "liquidity_level": planned_tp,
+        "liquidity_direction": "above" if trade_side == "BUY" else "below",
+        "liquidity_distance_pct": None, "sweep_target_level": None,  # niente piu' sweep a questo livello
 
         "pd_zone": pd_info["pd_zone"], "pd_pct": pd_info["pd_pct"],
 
         "ctx_15m_structure": ctx_15m["ctx_15m_structure"], "ctx_15m_momentum": ctx_15m["ctx_15m_momentum"],
         "ctx_15m_note": ctx_15m["ctx_15m_note"],
 
-        "proximity_points": round(distance, 4), "signal_created_at": now.isoformat(),
+        "proximity_points": diag["proximity_points"], "signal_created_at": now.isoformat(),
 
         "planned_entry": round(planned_entry, 5), "planned_sl": round(planned_sl, 5),
         "planned_tp": round(planned_tp, 5), "planned_rr": planned_rr,
         "planned_tp_type": target["type"], "planned_tp_ref": f"{target['type']}@{target['price']}",
 
         "quality_score": quality_score, "quality_label": quality_label,
-        "setup_type": "CONSERVATIVE",
+        "setup_type": "STRUCTURE_PULLBACK",  # nuovo tipo, distinto da AGGRESSIVE/CONSERVATIVE
+        "expiry_bars_waiting": 96,  # 8h (cicli da 5min) -- il nuovo meccanismo di
+                                    # Confirmation richiede naturalmente piu' tempo del
+                                    # vecchio sweep+reazione. Validato il 25/08: un caso
+                                    # reale si e' confermato a 2.8h, oltre le 2h di prima.
 
-        "context_snapshot": {"direction": dir_ctx, "poi": poi, "liquidity": liq,
+        "expansion_start_price": location["expansion_start_price"],
+        "expansion_end_price": location["expansion_end_price"],
+        "expansion_size_atr": location["expansion_size_atr"],
+        "balance_detected": location["balance"] is not None,
+
+        "context_snapshot": {"direction": dir_ctx, "location": location,
                              "premium_discount": pd_info, "context_15m": ctx_15m},
     }
 
-    diag["status"] = "EARLY_SIGNAL_CREATED"
+    diag["status"] = "SETUP_CREATED"
     return {"signal": signal, "diagnostics": diag}
+
+
+def _build_tp_candidates(df_h1, dir_ctx: dict, trade_side: str, entry: float) -> list:
+    """
+    Costruisce i candidati TP: Previous HH/LL (last_bos_price, massima
+    priorita') + swing H1 nella direzione del trade. Sostituisce la
+    vecchia liquidity map generica -- il documento chiede esplicitamente
+    "Previous HH -> next Liquidity", non zone di liquidita' qualunque.
+    """
+    candidates = []
+    if dir_ctx.get("last_bos_price") is not None:
+        bos = dir_ctx["last_bos_price"]
+        if (trade_side == "BUY" and bos > entry) or (trade_side == "SELL" and bos < entry):
+            candidates.append({"price": bos, "type": "PREVIOUS_STRUCTURE"})
+
+    swings = _detect_swings_h4(df_h1)  # stessa funzione, riusata su H1 qui
+    target_type = "HIGH" if trade_side == "BUY" else "LOW"
+    for s in swings:
+        if s["type"] != target_type:
+            continue
+        if trade_side == "BUY" and s["price"] > entry:
+            candidates.append({"price": s["price"], "type": "SWING_HIGH"})
+        elif trade_side == "SELL" and s["price"] < entry:
+            candidates.append({"price": s["price"], "type": "SWING_LOW"})
+
+    return candidates
+
+
+def _compute_signal_quality_v2(location: dict, pd_info: dict, ctx_15m: dict,
+                               trade_side: str, planned_rr: float,
+                               reaction_map_score: float = None,
+                               regime: str = None) -> tuple:
+    """
+    Quality Score v2 -- stessa filosofia della precedente (pochi
+    elementi forti, soft factor, mai hard gate), adattata al nuovo
+    concept: Expansion forte, Balance presente, Liquidity context
+    (FVG in confluenza), Premium/Discount, RR, Reaction Map, regime.
+    """
+    score = 3
+
+    if location["expansion_size_atr"] >= 3.0:
+        score += 3
+    elif location["expansion_size_atr"] >= 2.0:
+        score += 2
+
+    if location["balance"] is not None:
+        score += 2  # vero consolidamento durante il pullback -- preparazione confermata
+
+    score += location["liquidity_context_score"]  # +1 se FVG in confluenza
+
+    if is_preferred_zone(pd_info.get("pd_zone"), trade_side):
+        score += 1
+
+    if planned_rr >= 2.0:
+        score += 2
+
+    if reaction_map_score is not None and reaction_map_score >= 5:
+        score += 1
+
+    if regime == "TRANSITIONAL":
+        score -= 2
+
+    score = max(0, min(score, 12))
+    label = "HIGH" if score >= 8 else ("MEDIUM" if score >= 5 else "LOW")
+    return score, label
