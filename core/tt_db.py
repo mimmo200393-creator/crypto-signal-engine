@@ -17,6 +17,7 @@ sempre rispondere "cosa avrebbe detto l'algoritmo in quel momento".
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -135,7 +136,84 @@ CREATE INDEX IF NOT EXISTS idx_tt_created
 """
 
 
+def _migrate_tt_signals_if_needed(conn: sqlite3.Connection):
+    """
+    Migrazione di sicurezza -- bug reale trovato in produzione il 26/08:
+    "table tt_signals has no column named direction_1h". CREATE TABLE
+    IF NOT EXISTS non aggiunge colonne a una tabella gia' esistente con
+    lo schema vecchio (pre 25/08, senza direction_1h/direction_30m/
+    mtf_combination/expansion_*/balance_detected), e SQLite non permette
+    di modificare un CHECK constraint via ALTER TABLE (lo status vecchio
+    accettava solo 'WAITING_CONFIRMATION', non 'SETUP' -- un secondo
+    errore sarebbe scattato subito dopo aver corretto solo le colonne).
+
+    Se la tabella esiste ma le manca anche una sola colonna nuova, la
+    ricrea da zero: backup dei dati esistenti in tt_signals_pre_migration
+    (mai cancellato, per sicurezza), drop, create con lo schema attuale,
+    ripristino di tutte le colonne compatibili per nome. Se la tabella
+    non esiste ancora, non fa nulla (la crea normalmente init_tt_schema).
+    """
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='tt_signals'"
+    ).fetchone()
+    if row is None:
+        return  # non esiste ancora, niente da migrare
+
+    existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(tt_signals)").fetchall()}
+    required_new_cols = {"direction_1h", "direction_30m", "mtf_combination",
+                         "expansion_start_price", "expansion_end_price",
+                         "expansion_size_atr", "balance_detected"}
+
+    if required_new_cols.issubset(existing_cols):
+        return  # schema gia' aggiornato, niente da fare
+
+    logger_migration = logging.getLogger("tt_db.migration")
+    logger_migration.warning(
+        "tt_signals ha lo schema vecchio (mancano: %s) -- migrazione in corso.",
+        required_new_cols - existing_cols,
+    )
+
+    conn.execute("DROP TABLE IF EXISTS tt_signals_pre_migration")
+    conn.execute("ALTER TABLE tt_signals RENAME TO tt_signals_pre_migration")
+    conn.executescript(SCHEMA_SQL)
+
+    new_cols = {r[1] for r in conn.execute("PRAGMA table_info(tt_signals)").fetchall()}
+    common_cols = [c for c in existing_cols if c in new_cols]
+    col_list = ", ".join(common_cols)
+    # Traduzione inline durante la copia: WAITING_CONFIRMATION -> SETUP
+    # (rinominato il 25/08, stesso significato). Fatta nella SELECT, non
+    # sulla tabella vecchia -- quella ha ancora il SUO vecchio CHECK
+    # constraint, che rifiuterebbe 'SETUP' prima ancora di arrivare alla
+    # tabella nuova.
+    select_cols = ", ".join(
+        "CASE WHEN status='WAITING_CONFIRMATION' THEN 'SETUP' ELSE status END"
+        if c == "status" else c
+        for c in common_cols
+    )
+    try:
+        conn.execute(
+            f"INSERT INTO tt_signals ({col_list}) SELECT {select_cols} FROM tt_signals_pre_migration"
+        )
+        n_migrated = conn.execute("SELECT COUNT(*) FROM tt_signals").fetchone()[0]
+        logger_migration.warning(
+            "Migrazione completata: %d righe ripristinate. Vecchia tabella conservata in tt_signals_pre_migration.",
+            n_migrated,
+        )
+    except sqlite3.Error as e:
+        # Anche in caso di errore nel ripristino dati (es. CHECK violato
+        # da un valore di status vecchio non piu' valido), la tabella
+        # NUOVA con lo schema corretto resta comunque creata e utilizzabile
+        # -- i dati vecchi restano al sicuro in tt_signals_pre_migration
+        # per ispezione manuale, non vengono mai persi.
+        logger_migration.error(
+            "Ripristino dati falliti (%s) -- tabella nuova vuota ma funzionante, "
+            "dati vecchi intatti in tt_signals_pre_migration.", e,
+        )
+    conn.commit()
+
+
 def init_tt_schema(conn: sqlite3.Connection):
+    _migrate_tt_signals_if_needed(conn)
     conn.executescript(SCHEMA_SQL)
     conn.commit()
 
