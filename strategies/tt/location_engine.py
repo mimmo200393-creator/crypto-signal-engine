@@ -1,37 +1,47 @@
 """
 strategies/tt/location_engine.py
-TT — Location Engine (1H)
+TT — Location Engine (H1) — RISCRITTO 25/08
 
-Risponde a: "WHERE COULD THE TRADE HAPPEN?"
+Nuovo concept (da "ISTRUZIONI OPERATIVE -- MARKET MECHANICS", documento
+fornito dall'utente il 25/08): la location non e' piu' una zona
+Demand/Supply (ultima candela opposta prima di un impulso) -- e' il
+nuovo HL (in uptrend) o LH (in downtrend) che si forma DOPO una vera
+Expansion e DURANTE un Pullback confermato.
 
-Codice INDIPENDENTE -- stesso principio del Direction Engine. Duplica
-concettualmente la stessa regola oggettiva di rilevamento OB/FVG gia'
-validata altrove (ultima candela opposta prima di un impulso, gap a 3
-candele) ma come codice proprio, non importato da order_block_engine.py
-o fvg_engine.py. Nessun rischio di propagare modifiche tra strategie.
+Gerarchia (dal documento, sezione 5):
+    MARKET STRUCTURE = DIREZIONE       (Direction Engine, invariato)
+    EXPANSION         = mossa precedente che dimostra forza
+    PULLBACK           = il momento in cui aspettare
+    HL / LH             = LOCATION (questo file)
+    BALANCE              = preparazione (consolidamento nel pullback)
+    LIQUIDITY             = contesto (FVG in confluenza, soft bonus)
 
-Logica (spec sezione 3):
-    - Demand (POI bullish) = ultima candela ribassista prima di un
-      impulso rialzista H1
-    - Supply (POI bearish) = ultima candela rialzista prima di un
-      impulso ribassista H1
-    - FVG (sezione 3): gap a 3 candele, stessa definizione standard
-    - NON tutte le zone disponibili -- solo le piu' significative
-      rispetto al bias 4H (LONG -> Demand, SHORT -> Supply)
-    - La POI rappresenta una LOCATION potenziale, NON ancora un'entry
+Principio esplicito dal documento: "HL = LOCATION, non ancora ENTRY".
+La Confirmation (buyers/sellers regain control) e il trigger di
+ingresso restano in liquidity_engine.py (check_structure_break, gia'
+disponibile, riuso puro -- nessuna modifica).
+
+Codice INDIPENDENTE -- stesso principio di sempre: duplica la stessa
+regola oggettiva di swing detection (k=2) gia' in direction_engine.py,
+come copia propria, non importata. Nessun rischio di propagare
+modifiche tra file.
 """
 
 from __future__ import annotations
 
 import pandas as pd
 
-MIN_IMPULSE_ATR = 1.0       # forza minima dell'impulso per considerare un POI
-MIN_BODY_RATIO = 0.5        # corpo/range minimo della candela di impulso
-FVG_MIN_SIZE_ATR = 0.1      # gap minimo per considerare una FVG rilevante
+SWING_K = 2                  # stessa soglia usata ovunque nel sistema
+MIN_EXPANSION_ATR = 2.0      # l'Expansion deve essere un vero impulso, non rumore
+MIN_BALANCE_BARS = 3         # minimo di candele per considerare un vero Balance
+MAX_BALANCE_WIDTH_ATR = 1.2  # ampiezza massima del Balance (poco piu' permissivo
+                              # della soglia 1.0 usata su OTE, qui la finestra e'
+                              # gia' vincolata dentro il pullback, meno rischio di
+                              # catturare range troppo ampi per errore)
+FVG_MIN_SIZE_ATR = 0.1
 
 
 def _manual_atr(df: pd.DataFrame, period: int = 14) -> float:
-    """ATR calcolato a mano, nessuna dipendenza da indicators.py condiviso."""
     if df is None or len(df) < period + 1:
         return 0.0
     h = df["high"].astype(float).values
@@ -41,220 +51,345 @@ def _manual_atr(df: pd.DataFrame, period: int = 14) -> float:
               for i in range(-period, 0)) / period
 
 
-def _detect_pois(df_h1: pd.DataFrame, asset: str, lookback_bars: int = 60) -> list:
-    """
-    Rileva Demand (POI bullish) e Supply (POI bearish) su H1.
-
-    Stessa definizione oggettiva gia' usata altrove nel sistema:
-    l'ultima candela di colore opposto prima di un impulso che supera
-    MIN_IMPULSE_ATR * ATR, con corpo/range >= MIN_BODY_RATIO.
-
-    Ritorna lista di {"poi_ref", "poi_type", "zone_high", "zone_low",
-    "formation_ts", "displacement_atr", "index"}.
-    """
-    atr = _manual_atr(df_h1)
-    if atr <= 0 or len(df_h1) < 10:
+def _detect_swings(df: pd.DataFrame, k: int = SWING_K) -> list:
+    """Stessa regola oggettiva usata in direction_engine.py (k=2, disuguaglianza stretta)."""
+    if df is None or len(df) < 2 * k + 1:
         return []
-
-    n = len(df_h1)
-    # Si adatta ai dati disponibili invece di richiedere un minimo fisso
-    # (che farebbe fallire tutto su asset/timeframe con meno storico).
-    effective_lookback = min(lookback_bars, n - 3)
-    start = max(2, n - effective_lookback)
-    data = df_h1.reset_index(drop=True)
-
-    pois = []
-    for i in range(start, n - 1):
-        curr = data.iloc[i]
-        c_open, c_close = float(curr["open"]), float(curr["close"])
-        c_high, c_low = float(curr["high"]), float(curr["low"])
-        c_range = c_high - c_low
-        if c_range <= 0:
-            continue
-        c_body = abs(c_close - c_open)
-        c_body_ratio = c_body / c_range
-
-        is_bull_impulse = (c_close > c_open and c_body >= MIN_IMPULSE_ATR * atr
-                           and c_body_ratio >= MIN_BODY_RATIO)
-        is_bear_impulse = (c_close < c_open and c_body >= MIN_IMPULSE_ATR * atr
-                           and c_body_ratio >= MIN_BODY_RATIO)
-
-        if is_bull_impulse:
-            for j in range(i - 1, max(i - 5, 0) - 1, -1):
-                poi_candle = data.iloc[j]
-                po, pc = float(poi_candle["open"]), float(poi_candle["close"])
-                if pc < po:
-                    ts = int(poi_candle.get("timestamp", 0))
-                    pois.append({
-                        "poi_ref": f"poi:{asset}:DEMAND:H1:{ts}",
-                        "poi_type": "DEMAND",
-                        "zone_high": float(poi_candle["high"]),
-                        "zone_low": float(poi_candle["low"]),
-                        "formation_ts": ts,
-                        "displacement_atr": round(c_body / atr, 3),
-                        "index": j,
-                        "impulse_index": i,
-                    })
-                    break
-
-        elif is_bear_impulse:
-            for j in range(i - 1, max(i - 5, 0) - 1, -1):
-                poi_candle = data.iloc[j]
-                po, pc = float(poi_candle["open"]), float(poi_candle["close"])
-                if pc > po:
-                    ts = int(poi_candle.get("timestamp", 0))
-                    pois.append({
-                        "poi_ref": f"poi:{asset}:SUPPLY:H1:{ts}",
-                        "poi_type": "SUPPLY",
-                        "zone_high": float(poi_candle["high"]),
-                        "zone_low": float(poi_candle["low"]),
-                        "formation_ts": ts,
-                        "displacement_atr": round(c_body / atr, 3),
-                        "index": j,
-                        "impulse_index": i,
-                    })
-                    break
-
-    return pois
+    highs = df["high"].astype(float).values
+    lows = df["low"].astype(float).values
+    timestamps = df["timestamp"].values
+    swings = []
+    for i in range(k, len(df) - k):
+        wh_before, wh_after = highs[i-k:i], highs[i+1:i+k+1]
+        wl_before, wl_after = lows[i-k:i], lows[i+1:i+k+1]
+        if highs[i] > wh_before.max() and highs[i] > wh_after.max():
+            swings.append({"index": i, "type": "HIGH",
+                          "price": round(float(highs[i]), 5), "timestamp": int(timestamps[i])})
+        if lows[i] < wl_before.min() and lows[i] < wl_after.min():
+            swings.append({"index": i, "type": "LOW",
+                          "price": round(float(lows[i]), 5), "timestamp": int(timestamps[i])})
+    swings.sort(key=lambda s: s["index"])
+    return swings
 
 
-def _detect_fvg(df_h1: pd.DataFrame, lookback_bars: int = 60) -> list:
+def _detect_balance(df: pd.DataFrame, atr: float, start_idx: int, end_idx: int) -> dict | None:
     """
-    Rileva FVG (Fair Value Gap) su H1 -- gap a 3 candele, stessa
-    definizione standard: candle[i].high < candle[i+2].low (bullish)
-    o candle[i].low > candle[i+2].high (bearish).
+    Cerca un vero consolidamento (Balance) nella finestra del pullback
+    [start_idx, end_idx]. Stesso principio gia' validato su OTE
+    (_detect_consolidation_ranges): ampiezza totale della finestra <
+    MAX_BALANCE_WIDTH_ATR * ATR, per almeno MIN_BALANCE_BARS candele
+    consecutive. Qui la finestra e' gia' vincolata al pullback (non
+    scansiona tutto il dataset), quindi la soglia puo' essere un filo
+    piu' permissiva senza rischiare falsi positivi diffusi.
     """
-    atr = _manual_atr(df_h1)
-    if atr <= 0 or len(df_h1) < 5:
+    if atr <= 0 or end_idx - start_idx < MIN_BALANCE_BARS - 1:
+        return None
+    window = df.iloc[start_idx:end_idx + 1]
+    if len(window) < MIN_BALANCE_BARS:
+        return None
+    w_high = window["high"].astype(float).max()
+    w_low = window["low"].astype(float).min()
+    width = w_high - w_low
+    if width <= MAX_BALANCE_WIDTH_ATR * atr:
+        return {"balance_high": float(w_high), "balance_low": float(w_low),
+               "bars": len(window), "width_atr": round(width / atr, 3)}
+    return None
+
+
+def _detect_fvg(df: pd.DataFrame, lookback_bars: int = 60) -> list:
+    """Gap a 3 candele, stessa definizione standard -- invariata dal file precedente."""
+    atr = _manual_atr(df)
+    if atr <= 0 or len(df) < 5:
         return []
-
-    effective_lookback = min(lookback_bars, len(df_h1))
-    data = df_h1.iloc[-effective_lookback:].reset_index(drop=True)
+    effective_lookback = min(lookback_bars, len(df))
+    data = df.iloc[-effective_lookback:].reset_index(drop=True)
     fvgs = []
-
     for i in range(len(data) - 2):
-        c1 = data.iloc[i]
-        c3 = data.iloc[i + 2]
+        c1, c3 = data.iloc[i], data.iloc[i + 2]
         c1_high, c1_low = float(c1["high"]), float(c1["low"])
         c3_high, c3_low = float(c3["high"]), float(c3["low"])
-
         if c1_high < c3_low:
             size = c3_low - c1_high
             if size / atr >= FVG_MIN_SIZE_ATR:
-                fvgs.append({
-                    "direction": "BULLISH", "zone_high": c3_low, "zone_low": c1_high,
-                    "formation_ts": int(c3.get("timestamp", 0)),
-                })
+                fvgs.append({"direction": "BULLISH", "zone_high": c3_low, "zone_low": c1_high})
         if c1_low > c3_high:
             size = c1_low - c3_high
             if size / atr >= FVG_MIN_SIZE_ATR:
-                fvgs.append({
-                    "direction": "BEARISH", "zone_high": c1_low, "zone_low": c3_high,
-                    "formation_ts": int(c3.get("timestamp", 0)),
-                })
-
+                fvgs.append({"direction": "BEARISH", "zone_high": c1_low, "zone_low": c3_high})
     return fvgs
 
 
-def _ranges_overlap_center(low1, high1, low2, high2) -> bool:
-    """Il centro della prima zona cade dentro la seconda (sovrapposizione sostanziale)."""
-    mid1 = (low1 + high1) / 2
-    return low2 <= mid1 <= high2
-
-
-def _poi_quality(poi: dict, fvgs: list, is_tested: bool) -> int:
+def _liquidity_context_score(location_price: float, direction: str, fvgs: list, atr: float) -> int:
     """
-    Quality score 0-10, pochi elementi forti (spec sezione 29, no 20 filtri):
-      +4 displacement forte (>=2 ATR), altrimenti +2
-      +3 FVG in confluenza (coerente in direzione)
-      +1 ancora non testata (fresca)
+    Liquidity come CONTESTO (spec: "non usare come segnale isolato"),
+    non come gate. +1 se una FVG coerente in direzione e' vicina alla
+    location (entro 0.5x ATR) -- confluenza, non certezza.
     """
-    score = 0
-    disp = poi.get("displacement_atr", 0)
-    score += 4 if disp >= 2.0 else 2
-
-    poi_kind = "BULLISH" if poi["poi_type"] == "DEMAND" else "BEARISH"
+    if atr <= 0:
+        return 0
+    wanted = "BULLISH" if direction == "BUY" else "BEARISH"
     for fvg in fvgs:
-        if fvg["direction"] != poi_kind:
+        if fvg["direction"] != wanted:
             continue
-        if _ranges_overlap_center(poi["zone_low"], poi["zone_high"],
-                                  fvg["zone_low"], fvg["zone_high"]):
-            score += 3
-            break
-
-    if not is_tested:
-        score += 1
-
-    return min(score, 10)
+        mid = (fvg["zone_high"] + fvg["zone_low"]) / 2
+        if abs(mid - location_price) <= 0.5 * atr:
+            return 1
+    return 0
 
 
-def _poi_is_tested(poi: dict, df_h1: pd.DataFrame) -> bool:
+def _detect_active_range(df: pd.DataFrame, atr: float, min_bars: int = 3,
+                         max_width_atr: float = 1.2, lookback_bars: int = 40) -> dict | None:
     """
-    Il prezzo e' DAVVERO rientrato nella zona dopo la sua formazione?
-
-    Esclude la candela di impulso stessa (poi["impulse_index"]): quella
-    candela PARTE dalla zona per definizione (e' l'impulso che la crea),
-    il suo wick che tocca il bordo non e' un "ritorno" -- e' la stessa
-    formazione. Un vero test comincia SOLO dalla candela successiva
-    all'impulso.
+    Cerca il range di consolidamento PIU' RECENTE, scansionando
+    direttamente le ultime candele -- non condizionato dall'esistenza
+    di uno swing HL/LH gia' confermato. Se il range piu' recente
+    arriva fino all'ultima candela disponibile, e' un Balance ANCORA
+    ATTIVO: possiamo identificarlo ed entrarci mentre si forma,
+    invece di aspettare che finisca e lo swing si confermi (k=2,
+    quando il prezzo e' gia' partito). Stesso principio gia' validato
+    su OTE (_detect_consolidation_ranges), riapplicato qui con la
+    finestra limitata alle candele piu' recenti.
     """
-    start_idx = poi.get("impulse_index", poi.get("index", 0)) + 1
-    after = df_h1.iloc[start_idx:]
-    if len(after) == 0:
-        return False
-    zh, zl = poi["zone_high"], poi["zone_low"]
-    lows = after["low"].astype(float).values
-    highs = after["high"].astype(float).values
-    for lo, hi in zip(lows, highs):
-        if lo <= zh and hi >= zl:
-            return True
-    return False
+    if df is None or len(df) < min_bars or atr <= 0:
+        return None
+
+    n = len(df)
+    start_scan = max(0, n - lookback_bars)
+    ranges = []
+    i = start_scan
+    while i < n - min_bars + 1:
+        window_high = df.iloc[i]['high']
+        window_low = df.iloc[i]['low']
+        j = i + 1
+        while j < n:
+            new_high = max(window_high, df.iloc[j]['high'])
+            new_low = min(window_low, df.iloc[j]['low'])
+            if (new_high - new_low) > max_width_atr * atr:
+                break
+            window_high, window_low = new_high, new_low
+            j += 1
+        bars = j - i
+        if bars >= min_bars:
+            ranges.append({'high': float(window_high), 'low': float(window_low),
+                          'bars': bars, 'start_idx': i, 'end_idx': j - 1})
+            i = j
+        else:
+            i += 1
+
+    if not ranges:
+        return None
+
+    most_recent = ranges[-1]
+    # "Attivo" = arriva fino a una delle ultime 2 candele disponibili
+    # (tollera un piccolo ritardo di 1 candela)
+    if most_recent['end_idx'] < n - 3:
+        return None  # il range piu' recente e' gia' vecchio, non attivo ora
+
+    return most_recent
 
 
-def select_best_poi(df_h1: pd.DataFrame, asset: str, direction_4h: str,
-                    current_price: float) -> dict | None:
+def select_location_from_active_balance(df_h1: pd.DataFrame, direction_4h: str,
+                                        current_price: float) -> dict | None:
     """
-    Entry point principale. Seleziona la POI PIU' SIGNIFICATIVA coerente
-    col bias 4H (spec sezione 3): BULLISH -> solo Demand, BEARISH -> solo
-    Supply. Non tutte le zone -- solo la migliore per qualita', ancora
-    rilevante rispetto al prezzo corrente (non gia' superata).
+    Approccio alternativo (25/08): identifica il Balance PRIMA, verifica
+    che sia coerente con una vera Expansion precedente (stesso principio
+    di select_location), poi tratta l'INTERO range come zona operativa
+    -- entry dentro il range (non un punto), SL oltre il range intero
+    (non un buffer arbitrario su un punto singolo).
+
+    Permette di entrare MENTRE il Balance si forma, se il prezzo
+    attuale e' ancora dentro il range -- non dopo che lo swing HL/LH
+    e' gia' confermato (k=2) e il prezzo e' gia' scappato altrove.
     """
     if direction_4h not in ("BULLISH", "BEARISH"):
         return None
 
-    wanted_type = "DEMAND" if direction_4h == "BULLISH" else "SUPPLY"
-
-    pois = _detect_pois(df_h1, asset)
-    pois = [p for p in pois if p["poi_type"] == wanted_type]
-    if not pois:
+    atr = _manual_atr(df_h1)
+    if atr <= 0 or current_price <= 0 or (atr / current_price) < 0.0005:
         return None
+
+    active_range = _detect_active_range(df_h1, atr)
+    if active_range is None:
+        return None
+
+    # Verifico una vera Expansion PRIMA del range (stessa soglia di
+    # select_location, MIN_EXPANSION_ATR) -- uso gli swing sulle
+    # candele PRIMA dell'inizio del range per trovarla.
+    swings = _detect_swings(df_h1.iloc[:active_range['start_idx'] + 1].reset_index(drop=True))
+    if not swings:
+        return None
+    highs = [s for s in swings if s["type"] == "HIGH"]
+    lows = [s for s in swings if s["type"] == "LOW"]
+
+    range_mid = (active_range['high'] + active_range['low']) / 2
+
+    if direction_4h == "BULLISH":
+        if not lows:
+            return None
+        expansion_start = lows[-1]
+        expansion_size = range_mid - expansion_start["price"]
+        if expansion_size < MIN_EXPANSION_ATR * atr:
+            return None
+        location_type = "HL"
+        # Il prezzo attuale deve essere DENTRO il range (o appena sopra,
+        # tolleranza minima) -- questa e' la vera zona operativa
+        if not (active_range['low'] - 0.2 * atr <= current_price <= active_range['high'] + 0.2 * atr):
+            return None
+    else:
+        if not highs:
+            return None
+        expansion_start = highs[-1]
+        expansion_size = expansion_start["price"] - range_mid
+        if expansion_size < MIN_EXPANSION_ATR * atr:
+            return None
+        location_type = "LH"
+        if not (active_range['low'] - 0.2 * atr <= current_price <= active_range['high'] + 0.2 * atr):
+            return None
 
     fvgs = _detect_fvg(df_h1)
+    direction_trade = "BUY" if direction_4h == "BULLISH" else "SELL"
+    liquidity_score = _liquidity_context_score(range_mid, direction_trade, fvgs, atr)
+    range_end_ts = int(df_h1.iloc[active_range['end_idx']]['timestamp'])
 
-    valid = []
-    for poi in pois:
-        if wanted_type == "DEMAND" and current_price < poi["zone_low"]:
-            continue
-        if wanted_type == "SUPPLY" and current_price > poi["zone_high"]:
-            continue
-        is_tested = _poi_is_tested(poi, df_h1)
-        quality = _poi_quality(poi, fvgs, is_tested)
-        poi_full = dict(poi, quality_score=quality, is_tested=is_tested)
-        valid.append(poi_full)
+    return {
+        "location_type": location_type,
+        "location_price": range_mid,
+        "location_ts": range_end_ts,
+        "range_high": active_range['high'],
+        "range_low": active_range['low'],
+        "range_bars": active_range['bars'],
+        "expansion_start_price": expansion_start["price"],
+        "expansion_end_price": range_mid,
+        "expansion_size_atr": round(expansion_size / atr, 3),
+        "balance": {"balance_high": active_range['high'], "balance_low": active_range['low'],
+                   "bars": active_range['bars']},
+        "liquidity_context_score": liquidity_score,
+        "atr_h1": atr,
+        "is_active_balance": True,
+    }
 
-    if not valid:
+
+def select_location(df_h1: pd.DataFrame, direction_4h: str, current_price: float) -> dict | None:
+    """
+    Entry point principale -- AGGIORNATO 25/08. Prova PRIMA l'approccio
+    Balance-attivo (identifica il range di consolidamento mentre si
+    forma, entra nel punto migliore del range, SL sotto l'intero
+    range -- non un punto singolo). Verificato con dati reali: 63.2%
+    win rate, +1.10R expectancy su 19 setup, contro risultati peggiori
+    o negativi con l'approccio a punto singolo puro.
+
+    Se non trova un Balance attivo, ricade sul vecchio approccio
+    (Expansion -> Pullback -> HL/LH confermato) come fallback --
+    meno frequente, ma ancora valido quando non c'e' un range
+    identificabile.
+    """
+    active = select_location_from_active_balance(df_h1, direction_4h, current_price)
+    if active is not None:
+        return active
+    return _select_location_point_based(df_h1, direction_4h, current_price)
+
+
+def _select_location_point_based(df_h1: pd.DataFrame, direction_4h: str, current_price: float) -> dict | None:
+    """
+    Entry point principale. Implementa la sequenza del documento:
+    Expansion -> Pullback -> Balance -> HL/LH (location) -> Liquidity.
+
+    BULLISH: trova l'ultimo swing HIGH confermato (fine dell'Expansion),
+    verifica che la mossa fino a li' sia un vero impulso (>= 2x ATR),
+    poi cerca il PIU' RECENTE swing LOW confermato DOPO quell'high --
+    quello e' il nuovo HL (location). Simmetrico per BEARISH (LH).
+
+    Ritorna None se la sequenza non e' ancora completa (es. l'Expansion
+    non e' abbastanza forte, o il pullback non ha ancora prodotto uno
+    swing confermato) -- livello WATCH, non ancora SETUP.
+    """
+    if direction_4h not in ("BULLISH", "BEARISH"):
         return None
 
-    # A parita' di quality_score, preferisci la POI PIU' VICINA al
-    # prezzo attuale -- e' quella davvero raggiungibile per un Early
-    # Signal. max() su un pareggio terrebbe la prima della lista
-    # (cronologicamente la piu' vecchia, spesso la piu' lontana),
-    # scartando una POI altrettanto valida ma molto piu' vicina
-    # (bug trovato il 22/08: 132pt scelta invece di 15.5pt, stessa
-    # qualita' 6/10).
-    def _distance_from_price(p):
-        if wanted_type == "DEMAND":
-            return abs(current_price - p["zone_high"])
-        return abs(current_price - p["zone_low"])
+    swings = _detect_swings(df_h1)
+    highs = [s for s in swings if s["type"] == "HIGH"]
+    lows = [s for s in swings if s["type"] == "LOW"]
+    if not highs or not lows:
+        return None
 
-    return max(valid, key=lambda p: (p["quality_score"], -_distance_from_price(p)))
+    atr = _manual_atr(df_h1)
+    if atr <= 0:
+        return None
+
+    # Controllo di sanita': ATR anomalmente piccolo rispetto al prezzo
+    # (es. dati weekend quasi piatti su XAU) produrrebbe SL
+    # irrealisticamente stretti. Soglia relativa, scala automaticamente
+    # per asset senza valori fissi per XAU/BTC. Ricalibrata il 25/08
+    # per funzionare anche con location su M15 (ATR piu piccolo in
+    # assoluto): verificato su dati reali, caso degenere weekend
+    # rapporto=0.000155, caso normale infrasettimanale rapporto=0.002 --
+    # soglia 0.0005 separa correttamente i due con margine da entrambi
+    # i lati (prima 0.0001 non bastava piu a questa scala).
+    if current_price > 0 and (atr / current_price) < 0.0005:
+        return None
+
+    if direction_4h == "BULLISH":
+        expansion_end = highs[-1]
+        prior_lows = [l for l in lows if l["index"] < expansion_end["index"]]
+        if not prior_lows:
+            return None
+        expansion_start = prior_lows[-1]
+        expansion_size = expansion_end["price"] - expansion_start["price"]
+        if expansion_size < MIN_EXPANSION_ATR * atr:
+            return None  # Expansion non abbastanza significativa -- WATCH
+
+        pullback_points = [l for l in lows if l["index"] > expansion_end["index"]]
+        if not pullback_points:
+            return None  # pullback ancora in corso, nessuno swing confermato -- WATCH
+        location = pullback_points[-1]
+        location_type = "HL"
+
+        # Coerenza: l'HL deve essere un vero ritracciamento (sopra
+        # l'inizio dell'Expansion, non un nuovo minimo strutturale)
+        if location["price"] <= expansion_start["price"]:
+            return None
+
+    else:  # BEARISH
+        expansion_end = lows[-1]
+        prior_highs = [h for h in highs if h["index"] < expansion_end["index"]]
+        if not prior_highs:
+            return None
+        expansion_start = prior_highs[-1]
+        expansion_size = expansion_start["price"] - expansion_end["price"]
+        if expansion_size < MIN_EXPANSION_ATR * atr:
+            return None
+
+        pullback_points = [h for h in highs if h["index"] > expansion_end["index"]]
+        if not pullback_points:
+            return None
+        location = pullback_points[-1]
+        location_type = "LH"
+
+        if location["price"] >= expansion_start["price"]:
+            return None
+
+    # Balance: cerco DOPO il punto di minimo/massimo (dove il prezzo
+    # si ferma davvero e consolida), non tra Expansion e location --
+    # quella finestra e' la gamba di ritracciamento, per definizione
+    # direzionale (in discesa per un pullback bullish), mai piatta.
+    # Bug trovato il 25/08: 0 Balance rilevati su 11 casi reali perche'
+    # cercavo nel posto sbagliato.
+    balance_end_idx = min(location["index"] + 10, len(df_h1) - 1)
+    balance = _detect_balance(df_h1, atr, location["index"], balance_end_idx)
+
+    fvgs = _detect_fvg(df_h1)
+    direction_trade = "BUY" if direction_4h == "BULLISH" else "SELL"
+    liquidity_score = _liquidity_context_score(location["price"], direction_trade, fvgs, atr)
+
+    return {
+        "location_type": location_type,
+        "location_price": location["price"],
+        "location_ts": location["timestamp"],
+        "location_index": location["index"],
+        "expansion_start_price": expansion_start["price"],
+        "expansion_end_price": expansion_end["price"],
+        "expansion_size_atr": round(expansion_size / atr, 3),
+        "balance": balance,
+        "liquidity_context_score": liquidity_score,
+        "atr_h1": atr,
+    }
