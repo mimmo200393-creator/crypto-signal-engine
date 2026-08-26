@@ -49,11 +49,14 @@ STRATEGY = "TT"
 # (dati insufficienti, nessuna direzione chiara), che gonfierebbero il
 # Ledger senza aggiungere informazione utile.
 SIGNIFICANT_REJECT_GATES = {
-    "RR_INSUFFICIENT",              # location trovata, ma il reward non bastava
-    "NO_DYNAMIC_TARGET_AVAILABLE",  # nessun target raggiungibile con RR sufficiente
-    "NO_VALID_LOCATION",            # nessuna Expansion/Pullback/Balance valida
-    "NO_CHASE",                     # location trovata ma prezzo gia' scappato
-    "TACTICAL_DIRECTION_UNCLEAR",   # H1/M30 non concordano
+    "RR_INSUFFICIENT",                  # location trovata, ma il reward non bastava
+    "NO_DYNAMIC_TARGET_AVAILABLE",      # nessun target raggiungibile con RR sufficiente
+    "NO_VALID_LOCATION",                # nessuna Expansion/Pullback/Balance valida
+    "NO_CHASE",                         # location trovata ma prezzo gia' scappato
+    "TACTICAL_DIRECTION_UNCLEAR",       # H1/M30 non concordano
+    "RR_DEGRADED_AT_CONFIRMATION",      # trovato nel log reale del 26/08: il RR era
+                                         # buono al SETUP ma il prezzo si e' mosso
+                                         # prima dell'entry, degradandolo sotto soglia
 }
 
 
