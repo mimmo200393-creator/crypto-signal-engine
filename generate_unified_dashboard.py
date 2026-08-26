@@ -21,6 +21,7 @@ DB_PATH  = os.environ.get("DB_PATH", "data/signals.db")
 # LH: stessa costante di generate_analytics_dashboard.py -- filtra la
 # vista, non cancella lo storico. Aggiornare per un nuovo "azzeramento".
 LH_EPOCH_DATE = "2026-08-24T18:00:00"
+TT_EPOCH_DATE = "2026-08-27T00:00:00"
 OUT_PATH = "docs/unified_dashboard.html"
 
 
@@ -36,10 +37,10 @@ def q(conn, sql, params=()):
 def load_tt_open(conn):
     """
     'Aperto' per TT include due stati distinti (a differenza delle
-    altre strategie che hanno solo OPEN): WAITING_CONFIRMATION (Early
-    Signal, non ancora un trade -- coerente con "prepare the trade" di
-    TT) ed ENTRY (trade reale confermato). Il campo 'status' distingue
-    i due nella tabella.
+    altre strategie che hanno solo OPEN): SETUP (rinominato da
+    WAITING_CONFIRMATION il 25/08 -- stesso significato, Early Signal
+    non ancora un trade) ed ENTRY (trade reale confermato). Il campo
+    'status' distingue i due nella tabella.
     """
     try:
         rows = q(conn, """
@@ -48,9 +49,9 @@ def load_tt_open(conn):
                    actual_entry, actual_sl, actual_tp,
                    poi_type, pd_zone, quality_label, quality_score,
                    bars_waiting, bars_open, signal_created_at
-            FROM tt_signals WHERE status IN ('WAITING_CONFIRMATION','ENTRY')
+            FROM tt_signals WHERE status IN ('SETUP','ENTRY') AND signal_created_at > ?
             ORDER BY signal_created_at DESC
-        """)
+        """, (TT_EPOCH_DATE,))
     except sqlite3.OperationalError:
         return []
     now = datetime.now(timezone.utc)
@@ -83,12 +84,12 @@ def load_tt_stats(conn):
     sgonfierebbe il win rate in modo scorretto se mischiato).
     """
     try:
-        rows = q(conn, "SELECT status, COUNT(*) FROM tt_signals WHERE status IN ('TP','SL','EXPIRED') GROUP BY status")
+        rows = q(conn, "SELECT status, COUNT(*) FROM tt_signals WHERE status IN ('TP','SL','EXPIRED') AND signal_created_at > ? GROUP BY status", (TT_EPOCH_DATE,))
         d = {r[0]: r[1] for r in rows}
         n = sum(d.values()); wins = d.get("TP",0); sls = d.get("SL",0)
-        waiting = q(conn, "SELECT COUNT(*) FROM tt_signals WHERE status='WAITING_CONFIRMATION'")[0][0]
-        entry_open = q(conn, "SELECT COUNT(*) FROM tt_signals WHERE status='ENTRY'")[0][0]
-        invalidated = q(conn, "SELECT COUNT(*) FROM tt_signals WHERE status='INVALIDATED'")[0][0]
+        waiting = q(conn, "SELECT COUNT(*) FROM tt_signals WHERE status='SETUP' AND signal_created_at > ?", (TT_EPOCH_DATE,))[0][0]
+        entry_open = q(conn, "SELECT COUNT(*) FROM tt_signals WHERE status='ENTRY' AND signal_created_at > ?", (TT_EPOCH_DATE,))[0][0]
+        invalidated = q(conn, "SELECT COUNT(*) FROM tt_signals WHERE status='INVALIDATED' AND signal_created_at > ?", (TT_EPOCH_DATE,))[0][0]
         return {"n":n, "open": waiting + entry_open,
                 "win":round(wins/n*100,1) if n>0 else 0,
                 "exp_r":round((wins*2-sls)/n,2) if n>0 else 0,
@@ -403,9 +404,9 @@ def tt_open_table(rows):
     body = ""
     for r in rows:
         asset = r["asset"].replace("_USDT","")
-        status_badge = (f'<span class="badge b-waiting">IN ATTESA</span>' if r["status"] == "WAITING_CONFIRMATION"
+        status_badge = (f'<span class="badge b-waiting">IN ATTESA</span>' if r["status"] == "SETUP"
                         else f'<span class="badge b-buy">ENTRY</span>')
-        bars_label = f"{r['bars_waiting']} cicli" if r["status"] == "WAITING_CONFIRMATION" else f"{r['bars_open']} cicli"
+        bars_label = f"{r['bars_waiting']} cicli" if r["status"] == "SETUP" else f"{r['bars_open']} cicli"
         body += f"""<tr>
   <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(r['ts'])}</td>
   <td><strong>{asset}</strong></td>
