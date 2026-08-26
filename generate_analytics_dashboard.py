@@ -25,6 +25,12 @@ DB_PATH  = os.environ.get("DB_PATH", "data/signals.db")
 # il 24/08 e mischierebbero performance pre/post-fix in modo fuorviante.
 # Aggiornare questa data quando si vuole un nuovo "azzeramento" della vista.
 LH_EPOCH_DATE = "2026-08-24T18:00:00"
+# TT_EPOCH_DATE: azzeramento vista richiesto il 26/08 -- i segnali TT
+# precedenti usano ancora POI Demand/Supply (concetto sostituito da
+# HL/LH nella riscrittura del 25/08) e mescolano risultati pre/post
+# riscrittura in modo fuorviante. Aggiornare quando si vuole un nuovo
+# azzeramento.
+TT_EPOCH_DATE = "2026-08-27T00:00:00"
 OUT_PATH = "docs/analytics_dashboard.html"
 
 
@@ -52,9 +58,9 @@ def load_tt_signals(conn):
                    quality_label, quality_score, planned_tp_type,
                    status, mae, mfe, planned_rr, actual_rr, bars_open,
                    signal_created_at
-            FROM tt_signals WHERE status IN ('TP','SL','EXPIRED')
+            FROM tt_signals WHERE status IN ('TP','SL','EXPIRED') AND signal_created_at > ?
             ORDER BY signal_created_at DESC
-        """)
+        """, (TT_EPOCH_DATE,))
     except sqlite3.OperationalError:
         return []
     result = []
@@ -75,14 +81,14 @@ def load_tt_signals(conn):
 
 def load_tt_invalidated_count(conn):
     try:
-        row = q(conn, "SELECT COUNT(*) FROM tt_signals WHERE status='INVALIDATED'")
+        row = q(conn, "SELECT COUNT(*) FROM tt_signals WHERE status='INVALIDATED' AND signal_created_at > ?", (TT_EPOCH_DATE,))
         return row[0][0] if row else 0
     except sqlite3.OperationalError:
         return 0
 
 def load_tt_recent(conn, limit=20):
     """
-    Righe recenti -- TUTTI gli stati (anche WAITING_CONFIRMATION/ENTRY),
+    Righe recenti -- TUTTI gli stati (anche SETUP/ENTRY),
     non solo quelli chiusi: da' visibilita' sui setup ancora in corso,
     coerente con la filosofia "Early Signal prima del touch" di TT.
     """
@@ -91,8 +97,8 @@ def load_tt_recent(conn, limit=20):
             SELECT signal_id, asset, direction, planned_entry, planned_sl, planned_tp,
                    planned_rr, quality_score, quality_label, poi_type, pd_zone,
                    status, actual_entry, actual_sl, actual_tp, signal_created_at
-            FROM tt_signals ORDER BY signal_created_at DESC LIMIT {limit}
-        """)
+            FROM tt_signals WHERE signal_created_at > ? ORDER BY signal_created_at DESC LIMIT {limit}
+        """, (TT_EPOCH_DATE,))
     except sqlite3.OperationalError:
         return []
 
@@ -400,7 +406,7 @@ def _empty_row(cols):
 def outcome_badge(o):
     cls = {"TP":"b-tp","SL":"b-sl","EXPIRED":"b-exp","OPEN":"b-open",
            "TP1_HIT":"b-tp","TP2_HIT":"b-tp","SL_HIT":"b-sl",
-           "WAITING_CONFIRMATION":"b-open","ENTRY":"b-open",
+           "SETUP":"b-open","ENTRY":"b-open",
            "INVALIDATED":"b-invalid"}.get(o,"b-exp")
     return f'<span class="badge {cls}">{o}</span>'
 
