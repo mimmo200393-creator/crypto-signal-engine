@@ -8,7 +8,7 @@ Schema pensato per il framework:
     -> 5M REACTION -> 5M STRUCTURE -> ENTRY -> DYNAMIC TARGET -> RESULT
 
 Differenza fondamentale rispetto a edge_lab_signals (il vecchio schema
-OTE-SC): qui esiste uno stato WAITING_CONFIRMATION persistente, e i
+OTE-SC): qui esiste uno stato SETUP persistente, e i
 campi Planned (al momento del SIGNAL) sono SEPARATI dai campi Actual
 (al momento dell'ENTRY) -- mai sovrascritti, cosi' il backtest puo'
 sempre rispondere "cosa avrebbe detto l'algoritmo in quel momento".
@@ -31,8 +31,11 @@ CREATE TABLE IF NOT EXISTS tt_signals (
     direction                  TEXT NOT NULL CHECK(direction IN ('BUY','SELL')),
 
     -- ── Stato: il cuore della macchina a stati ──────────────
-    status TEXT NOT NULL DEFAULT 'WAITING_CONFIRMATION' CHECK(status IN (
-        'WAITING_CONFIRMATION',
+    -- Rinominato WAITING_CONFIRMATION -> SETUP il 25/08 (nuovo concept
+    -- Expansion/Pullback/Balance/HL-LH): un setup completo in attesa
+    -- della sola Confirmation.
+    status TEXT NOT NULL DEFAULT 'SETUP' CHECK(status IN (
+        'SETUP',
         'ENTRY',
         'INVALIDATED',
         'TP', 'SL', 'EXPIRED'
@@ -41,17 +44,24 @@ CREATE TABLE IF NOT EXISTS tt_signals (
 
     -- ── 4H Direction ─────────────────────────────────────────
     direction_4h                TEXT,
+    direction_1h                TEXT,
+    direction_30m               TEXT,
+    mtf_combination              TEXT,
     swing_range_low             REAL,
     swing_range_high            REAL,
     last_bos_price              REAL,
     last_bos_ts                 INTEGER,
 
-    -- ── 1H Location (POI) ────────────────────────────────────
+    -- ── H1 Location (nuovo concept 25/08: HL/LH, non piu' Demand/Supply) ──
     poi_type                    TEXT,
     poi_high                    REAL,
     poi_low                     REAL,
     poi_quality                 INTEGER,
     poi_ref                     TEXT,
+    expansion_start_price       REAL,
+    expansion_end_price         REAL,
+    expansion_size_atr          REAL,
+    balance_detected            BOOLEAN DEFAULT 0,
 
     -- ── 1H Liquidity ──────────────────────────────────────────
     liquidity_type               TEXT,
@@ -95,7 +105,7 @@ CREATE TABLE IF NOT EXISTS tt_signals (
     structure_5m_confirmed        BOOLEAN DEFAULT 0,
     structure_5m_broken_level     REAL,
     entry_ts                      DATETIME,
-    setup_type                    TEXT DEFAULT 'CONSERVATIVE' CHECK(setup_type IN ('AGGRESSIVE','CONSERVATIVE')),
+    setup_type                    TEXT DEFAULT 'STRUCTURE_PULLBACK' CHECK(setup_type IN ('AGGRESSIVE','CONSERVATIVE','STRUCTURE_PULLBACK')),
 
     -- ── Quality / Score ─────────────────────────────────────────
     quality_score                 INTEGER,
@@ -131,7 +141,7 @@ def init_tt_schema(conn: sqlite3.Connection):
 
 
 # ============================================================
-# Insert — crea un nuovo Early Signal (status WAITING_CONFIRMATION)
+# Insert — crea un nuovo Early Signal (status SETUP)
 # ============================================================
 
 def insert_tt_signal(conn: sqlite3.Connection, signal: dict) -> str:
@@ -140,8 +150,10 @@ def insert_tt_signal(conn: sqlite3.Connection, signal: dict) -> str:
         """
         INSERT INTO tt_signals (
             signal_id, asset, direction, status,
-            direction_4h, swing_range_low, swing_range_high, last_bos_price, last_bos_ts,
+            direction_4h, direction_1h, direction_30m, mtf_combination,
+            swing_range_low, swing_range_high, last_bos_price, last_bos_ts,
             poi_type, poi_high, poi_low, poi_quality, poi_ref,
+            expansion_start_price, expansion_end_price, expansion_size_atr, balance_detected,
             liquidity_type, liquidity_level, liquidity_direction, liquidity_distance_pct, sweep_target_level,
             pd_zone, pd_pct,
             ctx_15m_structure, ctx_15m_momentum, ctx_15m_note,
@@ -151,15 +163,19 @@ def insert_tt_signal(conn: sqlite3.Connection, signal: dict) -> str:
             expiry_bars_waiting, expiry_bars_open,
             context_snapshot
         ) VALUES (
-            ?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?, ?,?, ?,?,?,?,?,?, ?,?,?, ?,?, ?
+            ?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?, ?,?, ?,?,?,?,?,?, ?,?,?, ?,?, ?
         )
         """,
         (
-            signal_id, signal["asset"], signal["direction"], "WAITING_CONFIRMATION",
-            signal.get("direction_4h"), signal.get("swing_range_low"), signal.get("swing_range_high"),
+            signal_id, signal["asset"], signal["direction"], "SETUP",
+            signal.get("direction_4h"), signal.get("direction_1h"), signal.get("direction_30m"),
+            signal.get("mtf_combination"),
+            signal.get("swing_range_low"), signal.get("swing_range_high"),
             signal.get("last_bos_price"), signal.get("last_bos_ts"),
             signal.get("poi_type"), signal.get("poi_high"), signal.get("poi_low"),
             signal.get("poi_quality"), signal.get("poi_ref"),
+            signal.get("expansion_start_price"), signal.get("expansion_end_price"),
+            signal.get("expansion_size_atr"), signal.get("balance_detected", False),
             signal.get("liquidity_type"), signal.get("liquidity_level"),
             signal.get("liquidity_direction"), signal.get("liquidity_distance_pct"),
             signal.get("sweep_target_level"),
@@ -168,7 +184,7 @@ def insert_tt_signal(conn: sqlite3.Connection, signal: dict) -> str:
             signal.get("proximity_points"), signal["signal_created_at"],
             signal["planned_entry"], signal["planned_sl"], signal["planned_tp"], signal["planned_rr"],
             signal.get("planned_tp_type"), signal.get("planned_tp_ref"),
-            signal.get("setup_type", "CONSERVATIVE"),
+            signal.get("setup_type", "STRUCTURE_PULLBACK"),
             signal.get("quality_score"), signal.get("quality_label"),
             signal.get("expiry_bars_waiting", 24), signal.get("expiry_bars_open", 96),
             json.dumps(signal.get("context_snapshot", {}), default=str),
@@ -179,11 +195,11 @@ def insert_tt_signal(conn: sqlite3.Connection, signal: dict) -> str:
 
 
 # ============================================================
-# Query: setup WAITING_CONFIRMATION attivi per asset/direzione/POI
+# Query: setup SETUP attivi per asset/direzione/POI
 # ============================================================
 
 def get_waiting_signals(conn: sqlite3.Connection, asset: str = None) -> list[dict]:
-    q = "SELECT * FROM tt_signals WHERE status = 'WAITING_CONFIRMATION'"
+    q = "SELECT * FROM tt_signals WHERE status = 'SETUP'"
     params = ()
     if asset:
         q += " AND asset = ?"
@@ -200,18 +216,50 @@ def has_active_setup_for_poi(conn: sqlite3.Connection, asset: str,
                              direction: str, poi_ref: str) -> bool:
     """
     Una POI = un solo active setup (sez.27, no duplicati). Attivo =
-    WAITING_CONFIRMATION o ENTRY (non ancora chiuso).
+    SETUP o ENTRY (non ancora chiuso).
     """
     row = conn.execute(
         """
         SELECT 1 FROM tt_signals
         WHERE asset=? AND direction=? AND poi_ref=?
-          AND status IN ('WAITING_CONFIRMATION', 'ENTRY')
+          AND status IN ('SETUP', 'ENTRY')
         LIMIT 1
         """,
         (asset, direction, poi_ref),
     ).fetchone()
     return row is not None
+
+
+def has_active_overlapping_setup(conn: sqlite3.Connection, asset: str,
+                                 direction: str, poi_low: float,
+                                 poi_high: float, tolerance: float) -> bool:
+    """
+    Dedup per SOVRAPPOSIZIONE DI PREZZO su setup ancora ATTIVI (SETUP
+    o ENTRY), non solo match esatto su poi_ref. Bug trovato il 25/08:
+    durante un pullback esteso, ogni nuovo swing HL confermato ha un
+    location_ts diverso (quindi poi_ref diverso) anche se fa parte
+    della STESSA storia in evoluzione -- has_active_setup_for_poi
+    (match esatto) non lo riconosceva, producendo location "nuove"
+    ogni volta che il pullback avanzava di un altro swing, gonfiando
+    il conteggio di opportunita' distinte (verificato: 4 location
+    "diverse" erano in realta' 2 storie, ognuna vista due volte).
+    """
+    rows = conn.execute(
+        """
+        SELECT poi_low, poi_high FROM tt_signals
+        WHERE asset=? AND direction=? AND status IN ('SETUP', 'ENTRY')
+        """,
+        (asset, direction),
+    ).fetchall()
+    for prev_low, prev_high in rows:
+        if prev_low is None or prev_high is None:
+            continue
+        # Sovrapposizione allargata dalla tolleranza (non solo overlap
+        # esatto -- due HL a pochi punti di distanza sulla stessa
+        # gamba sono la stessa storia, non due storie diverse)
+        if (poi_low - tolerance) <= prev_high and prev_low <= (poi_high + tolerance):
+            return True
+    return False
 
 
 # ============================================================
