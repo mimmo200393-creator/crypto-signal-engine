@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 
 from storage import db as core_db
@@ -72,6 +73,30 @@ def _read_raw_snapshots(conn, asset: str) -> dict:
         except Exception:
             raw[prefix] = None
     return raw
+
+
+def _build_ledger_snapshots(conn, asset: str, df_h4, df_m15) -> dict:
+    """
+    Costruisce il dict di snapshot MIE+MFM per il Decision Ledger.
+    Estratta il 27/08 per essere riusabile sia dai segnali ESEGUITI
+    sia dai RIFIUTI significativi (prima esisteva solo inline nel
+    percorso eseguito -- i rifiuti non venivano mai registrati).
+    """
+    raw_snaps = _read_raw_snapshots(conn, asset)
+    try:
+        df_d1 = v3_db.get_v3_candles_df(conn, asset, "1D", limit=60)
+        last_price = float(df_m15.iloc[-1]["close"])
+        mfm = build_money_flow_map(df_h4, df_d1, last_price)
+    except Exception as e_mfm:
+        logger.debug("TRB [%s]: MFM non disponibile per il Ledger: %s", asset, e_mfm)
+        mfm = None
+    return ledger_link.build_snapshots_dict(
+        raw_snaps.get("structure"), raw_snaps.get("volatility"),
+        raw_snaps.get("order_block"), raw_snaps.get("fvg"),
+        raw_snaps.get("liquidity"), raw_snaps.get("session_sweep"),
+        raw_snaps.get("reaction_map"), raw_snaps.get("candlestick"),
+        raw_snaps.get("macro"), raw_snaps.get("market_state"), mfm,
+    )
 
 
 def _get_session(now: datetime) -> str:
@@ -168,10 +193,17 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
         diag   = result["diagnostics"]
 
         if signal is None:
-            logger.info(
-                "TRB [%s %s]: no signal — %s",
-                asset, direction, diag.get("rejection", "UNKNOWN"),
-            )
+            reason = diag.get("rejection", "UNKNOWN")
+            logger.info("TRB [%s %s]: no signal — %s", asset, direction, reason)
+            try:
+                snapshots = _build_ledger_snapshots(conn, asset, df_h4, df_m15)
+                ledger_link.capture_rejected(
+                    decision_id=str(uuid.uuid4()), asset=asset, direction=direction,
+                    reject_gate=reason, snapshots=snapshots,
+                )
+            except Exception as e:
+                logger.warning("TRB [%s %s]: ledger capture_rejected fallito (non-blocking): %s",
+                              asset, direction, e)
             continue
 
         # ══════════════════════════════════════════════════════
@@ -231,21 +263,7 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
         # segnale TRB (a differenza di LH), quindi lo calcoliamo qui al volo,
         # solo per il Ledger, senza toccare _prepare_dataframes.
         try:
-            raw_snaps = _read_raw_snapshots(conn, asset)
-            try:
-                df_d1 = v3_db.get_v3_candles_df(conn, asset, "1D", limit=60)
-                last_price = float(df_m15.iloc[-1]["close"])
-                mfm = build_money_flow_map(df_h4, df_d1, last_price)
-            except Exception as e_mfm:
-                logger.debug("TRB [%s]: MFM non disponibile per il Ledger: %s", asset, e_mfm)
-                mfm = None
-            snapshots = ledger_link.build_snapshots_dict(
-                raw_snaps.get("structure"), raw_snaps.get("volatility"),
-                raw_snaps.get("order_block"), raw_snaps.get("fvg"),
-                raw_snaps.get("liquidity"), raw_snaps.get("session_sweep"),
-                raw_snaps.get("reaction_map"), raw_snaps.get("candlestick"),
-                raw_snaps.get("macro"), raw_snaps.get("market_state"), mfm,
-            )
+            snapshots = _build_ledger_snapshots(conn, asset, df_h4, df_m15)
             ledger_link.capture_executed(signal_id, asset, signal, snapshots)
         except Exception as e:
             logger.warning("TRB [%s %s]: ledger capture fallito (non-blocking): %s", asset, direction, e)
