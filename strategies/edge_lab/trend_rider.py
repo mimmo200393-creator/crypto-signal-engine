@@ -29,6 +29,8 @@ EMA_LONG          = 50
 ADX_PERIOD        = 14
 ADX_MIN           = 20
 ADX_BONUS         = 25
+ADX_TOXIC_LOW     = 15
+ADX_TOXIC_HIGH    = 25
 BODY_MIN_PCT      = 0.50
 ATR_PULLBACK_MULT = 0.5
 SWING_LOOKBACK    = 2
@@ -364,6 +366,7 @@ def _check_new_24h_extreme(df_m15: pd.DataFrame, direction: str) -> bool:
 # Quality Score
 # ============================================================
 
+
 def _compute_quality(
     trend_h4: Optional[str],
     trend_h1: str,
@@ -389,7 +392,7 @@ def _compute_quality(
     if new_extreme:
         score += 10
 
-    score = min(score, 120)
+    score = max(0, min(score, 120))
 
     if score >= 90:   label = "PREMIUM"
     elif score >= 75: label = "HIGH"
@@ -567,6 +570,32 @@ def generate_trb_signal(
 
     trigger_idx = _find_trigger_candle(df_m15, direction, lookback=5)
     diag["flags"]["trigger_present"] = trigger_idx is not None
+
+    # GATE COMBINATO -- validato il 27/08: conta quanti fattori
+    # negativi si accumulano insieme (non basta uno solo). Gradiente
+    # pulito e monotono su tutto il registro TRB (0 fattori: 53.0% WR,
+    # 1: 40.4%, 2: 31.8%, 3: 21.4%, 4: 0.0%). Blocca solo da 2 in su --
+    # un singolo fattore debole non basta a giustificare il rifiuto,
+    # la combinazione si'. Preferito al gate ADX singolo (che da solo
+    # tagliava troppi segnali buoni): stessa qualita' quasi identica
+    # (45.6% vs 46.1%), ma il 25% di segnali e vincenti in piu'.
+    #
+    # ADX 15-25 conta solo per i BUY (per i SELL il pattern era troppo
+    # debole per essere trattato come un vero fattore negativo, 35.3%
+    # vs 38.3%, solo 3 punti -- quasi rumore).
+    fattori_negativi = 0
+    if direction == "BUY" and ADX_TOXIC_LOW <= adx < ADX_TOXIC_HIGH:
+        fattori_negativi += 1
+    if entry_zone_type == "ema":
+        fattori_negativi += 1
+    if trigger_idx is None:
+        fattori_negativi += 1
+    if liq_target is not None and liq_target.get("priority_label") == "HIGH":
+        fattori_negativi += 1
+    diag["flags"]["fattori_negativi"] = fattori_negativi
+
+    if fattori_negativi >= 2:
+        return reject(f"TOO_MANY_WEAK_FACTORS ({fattori_negativi})")
 
     if "PAXG" in asset:
         diag["flags"]["volatility_ok"] = _check_volatility_paxg(df_m15)
