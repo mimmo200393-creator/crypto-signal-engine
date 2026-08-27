@@ -11,6 +11,17 @@ differenza di LH/V41P1 che usano "TP"/"SL". Vedi _OUTCOME_MAP in
 link_outcome: e' proprio li' che il copy-paste da LH aveva introdotto
 un bug che azzerava tutti i TP di TRB nel Ledger.
 
+── AGGIORNATO 27/08 ──────────────────────────────────────────────
+capture_rejected ora confronta per PREFISSO, non per stringa esatta
+(fix analogo a quello di tt_integration.py). Trovato confrontando
+SIGNIFICANT_REJECT_GATES con le chiamate reali a reject() in
+trend_rider.py: TREND_NOT_ALIGNED e ZONE_ALREADY_SIGNALED includono
+SEMPRE dettagli tra parentesi (es. "TREND_NOT_ALIGNED (H1=BEARISH)"),
+quindi il confronto esatto non ha MAI fatto match per questi due,
+da quando esistono -- solo NO_ENTRY_ZONE (l'unico senza formattazione)
+e' sempre stato registrato. Aggiunto anche TOO_MANY_WEAK_FACTORS, il
+nuovo gate combinato (ADX+entry_zone+trigger+liquidity_priority).
+
 ── MODALITA' SOLO-REGISTRAZIONE ──────────────────────────────────
 TRB scrive nel Ledger i voti dei 13 engine MIE per ogni segnale, MA i
 dati NON vanno analizzati finche' non ce ne sono abbastanza. Con ~19
@@ -40,10 +51,15 @@ STRATEGY = "TRB"
 # Gate di TRB che vale la pena registrare come REJECTED (per l'analisi futura
 # "quali engine erano attivi quando TRB ha rifiutato"). I rifiuti banali
 # (dati insufficienti) non si salvano per non gonfiare il Ledger.
+#
+# Confronto per PREFISSO (fix 27/08): i motivi reali spesso includono
+# dettagli tra parentesi (es. "TREND_NOT_ALIGNED (H1=BEARISH)") -- un
+# confronto esatto contro questo set non farebbe mai match per quei casi.
 SIGNIFICANT_REJECT_GATES = {
     "NO_ENTRY_ZONE",            # prezzo non in nessuna zona (OB/FVG/EMA)
     "ZONE_ALREADY_SIGNALED",    # dedup: zona gia' segnalata
     "TREND_NOT_ALIGNED",        # trend H1 contro la direzione
+    "TOO_MANY_WEAK_FACTORS",    # gate combinato ADX+entry_zone+trigger+liquidity (27/08)
 }
 
 
@@ -120,9 +136,23 @@ def capture_rejected(decision_id: str, asset: str, direction: Optional[str],
                      reject_gate: str, snapshots: dict,
                      signal: Optional[dict] = None,
                      ledger_path: str = ledger_writer.DEFAULT_LEDGER_PATH) -> None:
-    """Registra un rifiuto TRB significativo (solo i gate rilevanti)."""
+    """
+    Registra un rifiuto TRB significativo (solo i gate rilevanti).
+
+    Confronto per PREFISSO, non per stringa esatta (fix 27/08): i motivi
+    di rifiuto reali (trend_rider.py) spesso includono dettagli tra
+    parentesi -- es. "TREND_NOT_ALIGNED (H1=BEARISH)",
+    "ZONE_ALREADY_SIGNALED (poi:xau:123)",
+    "TOO_MANY_WEAK_FACTORS (2)". Un confronto esatto contro
+    SIGNIFICANT_REJECT_GATES non avrebbe MAI fatto match per questi
+    casi, escludendoli in silenzio dal Ledger senza nessun errore
+    visibile -- confermato confrontando il set con le chiamate reali
+    a reject() nel codice: solo NO_ENTRY_ZONE (senza formattazione)
+    ha sempre funzionato, gli altri due erano rotti da sempre.
+    """
     try:
-        if reject_gate not in SIGNIFICANT_REJECT_GATES:
+        base_reason = reject_gate.split(" ")[0].split("(")[0]
+        if base_reason not in SIGNIFICANT_REJECT_GATES:
             return
         trade = _trade_dict(signal) if signal else None
         dc.collect_decision(
@@ -157,28 +187,13 @@ def link_outcome(decision_id: str, outcome: str, entry: float, stop_loss: float,
         risk = abs(entry - stop_loss) if (entry and stop_loss) else None
         be_moved = (risk is not None and risk < 1e-9)
 
-        # ── MAPPA OUTCOME TRB → LEDGER ────────────────────────────────
-        # BUG FIX (verificato su decision_ledger.db, 2026-07-14):
-        # questa mappa era stata copiata da lh_integration.py SENZA adattarla.
-        # LH usa gli outcome "TP"/"SL"; TRB usa il formato col suffisso
-        # "TP2_HIT"/"SL_HIT". Non essendo nel dict, cadevano tutti sul
-        # default silenzioso "EXPIRED":
-        #     trb_signals (verita'):  TP2_HIT 13 | SL_HIT 20 | EXPIRED 2
-        #     decision_ledger:        EXPIRED 14                ← tutto perso
-        # Con 0 TP il win rate era 0% in ogni gruppo → edge=0 per tutti i 13
-        # engine → TRB spariva dall'Engine Edge Lab.
-        # Se aggiungi un nuovo outcome a TRB, aggiungilo QUI.
         _OUTCOME_MAP = {
-            # formato TRB (con suffisso _HIT)
             "TP2_HIT": "TP", "TP1_HIT": "TP", "SL_HIT": "SL", "BE_HIT": "BE",
-            # formato generico/LH (senza suffisso) — retrocompatibilita'
             "TP": "TP", "TP2": "TP", "TP1": "TP", "SL": "SL", "BE": "BE",
             "EXPIRED": "EXPIRED",
         }
         ledger_outcome = _OUTCOME_MAP.get(outcome)
         if ledger_outcome is None:
-            # NON silenziare: un outcome sconosciuto e' un bug, non un EXPIRED.
-            # E' il default silenzioso che ha nascosto il problema per settimane.
             logger.warning(
                 "TRB link_outcome: outcome sconosciuto '%s' (decision %s) "
                 "→ registrato come EXPIRED. Aggiungerlo a _OUTCOME_MAP.",
