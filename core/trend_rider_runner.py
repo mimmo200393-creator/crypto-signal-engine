@@ -134,7 +134,7 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
     # ── Monitoraggio segnali aperti ──────────────────────────
     try:
         last_m15 = df_m15.iloc[-1]
-        updated  = trend_rider_db.monitor_open_trb_signals(
+        updated, spostamenti_stop = trend_rider_db.monitor_open_trb_signals(
             conn, asset,
             current_high=float(last_m15["high"]),
             current_low=float(last_m15["low"]),
@@ -162,6 +162,22 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
                     )
             except Exception as e:
                 logger.warning("TRB ledger link_outcome fallito (non-blocking): %s", e)
+
+        # ── Promemoria "sposta lo stop ORA" ──────────────────
+        # Il breakeven a due stadi aggiorna solo il database (per le
+        # statistiche e il Ledger) -- non uno stop reale piazzato sul
+        # broker. Questa notifica esiste perche' l'utente deve agire
+        # manualmente nel momento esatto in cui il livello protetto
+        # cambia.
+        for sp in spostamenti_stop:
+            logger.info(
+                "TRB Stop [%s]: %s → %s, nuovo stop=%.4f",
+                asset, sp["signal_id"][:8], sp["event"], sp["new_stop"],
+            )
+            try:
+                _notify_stop_move(sp, config)
+            except Exception as e:
+                logger.warning("TRB notify stop move fallito (non-blocking): %s", e)
     except Exception as e:
         logger.error("TRB Monitor [%s]: errore: %s", asset, e)
 
@@ -281,6 +297,55 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
         )
 
         _notify(signal, config)
+
+
+def _notify_stop_move(sp: dict, config: dict):
+    """
+    Invia il promemoria "sposta lo stop ORA" -- Telegram e ntfy, stesso
+    canale delle notifiche di nuovo segnale. A differenza di _notify,
+    questa non filtra per quality (l'utente deve sempre sapere quando
+    spostare lo stop, indipendentemente dalla qualita' del segnale
+    originale).
+    """
+    try:
+        from notifications import telegram_bot, ntfy_bot
+
+        asset     = sp["asset"]
+        direction = sp["direction"]
+        emoji     = "🟢" if direction == "BUY" else "🔴"
+
+        def fp(v):
+            if v is None: return "N/A"
+            return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
+
+        if sp["event"] == "TP1_REACHED":
+            titolo = "SPOSTA STOP A BREAKEVEN"
+            dettaglio = "TP1 raggiunto — metti lo stop a entry"
+        else:  # STAGE2_REACHED
+            titolo = "SPOSTA STOP A TP1"
+            dettaglio = "Il prezzo si sta avvicinando a TP2 — sposta lo stop al livello di TP1"
+
+        text = (
+            f"{emoji} *TREND RIDER — {titolo}*\n\n"
+            f"*{asset.replace('_',' ')}* — {direction}\n"
+            f"{dettaglio}\n\n"
+            f"Nuovo stop: `{fp(sp['new_stop'])}`"
+        )
+
+        bot_token  = config.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id    = config.get("TELEGRAM_CHAT_ID", "")
+        ntfy_topic = config.get("NTFY_TOPIC", "")
+
+        if bot_token and chat_id:
+            telegram_bot.send_message(bot_token, chat_id, text)
+
+        if ntfy_topic:
+            title = f"TRB {asset.replace('_',' ')} {direction} | {titolo}"
+            plain = text.replace("*","").replace("`","")
+            ntfy_bot.send_message(ntfy_topic, title, plain)
+
+    except Exception as e:
+        logger.warning("TRB _notify_stop_move: errore: %s", e)
 
 
 def _notify(signal: dict, config: dict):
