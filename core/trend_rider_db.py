@@ -22,6 +22,7 @@ non recuperabile).
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -79,13 +80,13 @@ CREATE TABLE IF NOT EXISTS trb_signals (
     quality_label        TEXT CHECK(quality_label IN ('LOW','MEDIUM','HIGH','PREMIUM')),
 
     final_outcome        TEXT DEFAULT 'OPEN'
-        CHECK(final_outcome IN ('OPEN','TP1_HIT','TP2_HIT','SL_HIT','EXPIRED')),
+        CHECK(final_outcome IN ('OPEN','TP1_HIT','TP2_HIT','SL_HIT','BE_HIT','EXPIRED')),
     tp1_hit              BOOLEAN DEFAULT 0,
     tp2_hit              BOOLEAN DEFAULT 0,
     mae                  REAL DEFAULT 0,
     mfe                  REAL DEFAULT 0,
     bars_open            INTEGER DEFAULT 0,
-    expiry_bars          INTEGER DEFAULT 96,
+    expiry_bars          INTEGER DEFAULT 32,
     timestamp_tp1        DATETIME,
     timestamp_tp2        DATETIME,
     timestamp_sl         DATETIME
@@ -100,9 +101,49 @@ CREATE INDEX IF NOT EXISTS idx_trb_quality
 """
 
 
+def _migrate_add_be_hit(conn: sqlite3.Connection):
+    """
+    Aggiunge 'BE_HIT' al vincolo CHECK su final_outcome -- SQLite non
+    permette di modificare un CHECK esistente con ALTER TABLE, serve
+    ricreare la tabella. Stessa tecnica di sicurezza gia' validata per
+    tt_signals: backup prima di ogni modifica, mai perdita dati.
+    Idempotente: verifica lo schema reale (non un flag), sicuro
+    richiamarlo ad ogni avvio.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='trb_signals'"
+    ).fetchone()
+    if row is None or "BE_HIT" in row[0]:
+        return  # tabella non esiste ancora (la crea init) o gia' aggiornata
+
+    logger_mig = logging.getLogger("trend_rider_db.migration")
+    logger_mig.warning("trb_signals: vincolo CHECK senza BE_HIT -- migrazione in corso.")
+
+    conn.execute("DROP TABLE IF EXISTS trb_signals_pre_migration")
+    conn.execute("ALTER TABLE trb_signals RENAME TO trb_signals_pre_migration")
+    conn.executescript(SCHEMA_SQL)
+
+    old_cols = {r[1] for r in conn.execute("PRAGMA table_info(trb_signals_pre_migration)")}
+    new_cols = {r[1] for r in conn.execute("PRAGMA table_info(trb_signals)")}
+    comuni = [c for c in old_cols if c in new_cols]
+    col_list = ", ".join(comuni)
+    try:
+        conn.execute(
+            f"INSERT INTO trb_signals ({col_list}) SELECT {col_list} FROM trb_signals_pre_migration"
+        )
+        n = conn.execute("SELECT COUNT(*) FROM trb_signals").fetchone()[0]
+        logger_mig.warning("Migrazione completata: %d righe ripristinate.", n)
+    except sqlite3.Error as e:
+        logger_mig.error(
+            "Ripristino dati fallito (%s) -- tabella nuova vuota ma funzionante, "
+            "dati vecchi intatti in trb_signals_pre_migration.", e)
+    conn.commit()
+
+
 def init_trb_schema(conn: sqlite3.Connection):
     conn.executescript(SCHEMA_SQL)
     _migrate_add_entry_zone(conn)
+    _migrate_add_be_hit(conn)
     conn.commit()
 
 
@@ -184,7 +225,7 @@ def insert_trb_signal(conn: sqlite3.Connection, signal: dict) -> str:
             signal.get("quality_score"),
             signal.get("quality_label"),
             "OPEN",
-            signal.get("expiry_bars", 96),
+            signal.get("expiry_bars", 32),
         ),
     )
     conn.commit()
@@ -210,7 +251,7 @@ def get_zone_statistics(conn: sqlite3.Connection,
     Le altre sono in raccolta: mostrarle serve a vedere l'accumulo, non
     a trarre conclusioni.
     """
-    where = "WHERE final_outcome IN ('TP1_HIT','TP2_HIT','SL_HIT','EXPIRED')"
+    where = "WHERE final_outcome IN ('TP1_HIT','TP2_HIT','SL_HIT','BE_HIT','EXPIRED')"
     params: list = []
     if asset:
         where += " AND asset = ?"
@@ -328,13 +369,37 @@ def has_open_trb_signal(
     return row is not None
 
 
+STAGE2_PCT = 40
+# Breakeven, poi TP1 come protezione avanzata -- validato il 27/08
+# fuori campione (sviluppo su meta' dati, applicato a meta' MAI vista):
+# +0.387R (solo breakeven) -> +0.587R (con stadio 2), stessa frequenza
+# di segnali, nessuno scartato. Stadio 1: appena TP1 e' confermato,
+# stop -> breakeven. Stadio 2: se il prezzo supera STAGE2_PCT% della
+# distanza rimanente da TP1 a TP2, stop -> TP1 stesso (non un valore
+# intermedio calcolato) -- se poi il prezzo torna indietro fino a
+# quel livello, l'esito e' TP1_HIT (guadagno vero di TP1), non un
+# semplice pareggio.
+
+
 def monitor_open_trb_signals(
     conn: sqlite3.Connection,
     asset: str,
     current_high: float,
     current_low: float,
     now_iso: str,
-) -> list[dict]:
+) -> tuple[list[dict], list[dict]]:
+    """
+    Ritorna (chiusi, spostamenti_stop).
+
+    chiusi: trade che hanno chiuso in questo ciclo (TP2_HIT/SL_HIT/
+    BE_HIT/EXPIRED) -- stesso formato di sempre.
+
+    spostamenti_stop: eventi "sposta lo stop ORA sul broker" -- il
+    breakeven a due stadi aggiorna solo il database (per le statistiche
+    e il Ledger), NON uno stop reale piazzato altrove. Questi eventi
+    esistono per poter notificare l'utente nel momento esatto in cui
+    deve agire manualmente.
+    """
     rows = conn.execute(
         """
         SELECT signal_id, direction, entry, stop_loss, tp1, tp2,
@@ -346,6 +411,7 @@ def monitor_open_trb_signals(
     ).fetchall()
 
     updated = []
+    spostamenti_stop = []
 
     for row in rows:
         sid, direction, entry, sl, tp1, tp2, mae, mfe, bars_open, expiry_bars, tp1_hit, tp2_hit = row
@@ -354,48 +420,104 @@ def monitor_open_trb_signals(
             continue
 
         bars_open = (bars_open or 0) + 1
+        entry_f, sl_f = float(entry), float(sl)
+        tp1_f = float(tp1) if tp1 is not None else None
+        tp2_f = float(tp2) if tp2 is not None else None
+        old_mfe = float(mfe or 0)
 
         if direction == "BUY":
-            adverse   = max(float(entry) - current_low,  0.0)
-            favorable = max(current_high - float(entry), 0.0)
+            adverse   = max(entry_f - current_low,  0.0)
+            favorable = max(current_high - entry_f, 0.0)
         else:
-            adverse   = max(current_high - float(entry), 0.0)
-            favorable = max(float(entry) - current_low,  0.0)
+            adverse   = max(current_high - entry_f, 0.0)
+            favorable = max(entry_f - current_low,  0.0)
 
         new_mae = max(float(mae or 0), adverse)
-        new_mfe = max(float(mfe or 0), favorable)
+        new_mfe = max(old_mfe, favorable)
+
+        # ── Stop EFFETTIVO: breakeven, poi TP1 come protezione avanzata ──
+        # Usa bool(tp1_hit) -- il valore GIA' salvato da un ciclo
+        # PRECEDENTE, non calcolato in questo stesso ciclo -- cosi' se
+        # una singola candela M15 tocca sia TP1 sia lo SL originale,
+        # resta valida la stessa convenzione "SL ha priorita'" gia'
+        # usata sotto, senza ambiguita' sull'ordine reale degli eventi
+        # dentro la candela.
+        effective_sl = sl_f
+        stage2_was_active = False
+        stage2_active_now = False
+        stage2_lock = None
+        if bool(tp1_hit) and tp1_f is not None and tp2_f is not None:
+            effective_sl = entry_f  # Stadio 1: breakeven
+            dist_tp1_tp2 = abs(tp2_f - tp1_f)
+            if dist_tp1_tp2 > 0:
+                extra = dist_tp1_tp2 * (STAGE2_PCT / 100)
+                # Soglia di attivazione: STAGE2_PCT% della distanza da
+                # TP1 verso TP2 (stessa logica di sempre). Il livello di
+                # blocco pero' ora e' TP1 stesso, non un valore
+                # intermedio calcolato -- se il prezzo si avvicina
+                # abbastanza a TP2 e poi torna indietro fino a TP1, il
+                # risultato riflette il guadagno vero di TP1, non un
+                # semplice pareggio.
+                stage2_lock = tp1_f
+                if direction == "BUY":
+                    stage2_trigger_mfe = (tp1_f + extra) - entry_f
+                else:
+                    stage2_trigger_mfe = entry_f - (tp1_f - extra)
+                stage2_was_active = old_mfe >= stage2_trigger_mfe
+                stage2_active_now = new_mfe >= stage2_trigger_mfe
+                if stage2_active_now:
+                    if direction == "BUY":
+                        effective_sl = max(effective_sl, stage2_lock)
+                    else:
+                        effective_sl = min(effective_sl, stage2_lock)
 
         if direction == "BUY":
-            sl_hit      = current_low  <= float(sl)
-            tp1_hit_now = tp1 is not None and current_high >= float(tp1)
-            tp2_hit_now = tp2 is not None and current_high >= float(tp2)
+            sl_hit      = current_low  <= effective_sl
+            tp1_hit_now = tp1_f is not None and current_high >= tp1_f
+            tp2_hit_now = tp2_f is not None and current_high >= tp2_f
         else:
-            sl_hit      = current_high >= float(sl)
-            tp1_hit_now = tp1 is not None and current_low  <= float(tp1)
-            tp2_hit_now = tp2 is not None and current_low  <= float(tp2)
+            sl_hit      = current_high >= effective_sl
+            tp1_hit_now = tp1_f is not None and current_low  <= tp1_f
+            tp2_hit_now = tp2_f is not None and current_low  <= tp2_f
 
         new_tp1_hit = bool(tp1_hit) or tp1_hit_now
         new_tp2_hit = bool(tp2_hit) or tp2_hit_now
 
-        # SL priorità su TP
+        # SL/BE/TP1-avanzato priorità su TP2, poi la scadenza
+        # (raggiungibile SEMPRE, anche con TP1 gia' toccato), infine il
+        # milestone TP1 (che non chiude mai il trade, solo lo registra
+        # la prima volta). Uso un flag esplicito 'chiude' invece di
+        # confrontare la stringa "TP1_HIT" -- ora puo' comparire sia
+        # come traguardo (non chiude) sia come esito vero quando lo
+        # Stadio 2 era attivo e il prezzo torna a TP1 (chiude).
         if sl_hit:
-            outcome = "SL_HIT"
+            if bool(tp1_hit) and (stage2_active_now or stage2_was_active):
+                outcome = "TP1_HIT"  # protetto oltre breakeven, torna a TP1: guadagno vero
+            elif bool(tp1_hit):
+                outcome = "BE_HIT"   # solo breakeven
+            else:
+                outcome = "SL_HIT"
+            chiude = True
         elif new_tp2_hit:
             outcome = "TP2_HIT"
-        elif new_tp1_hit:
-            outcome = "TP1_HIT"
-        elif bars_open >= (expiry_bars or 96):
+            chiude = True
+        elif bars_open >= (expiry_bars or 32):
             outcome = "EXPIRED"
+            chiude = True
+        elif new_tp1_hit:
+            outcome = "TP1_HIT"  # solo il traguardo, non chiude
+            chiude = False
         else:
             outcome = None
+            chiude = False
 
         updates = ["mae = ?", "mfe = ?", "bars_open = ?", "tp1_hit = ?", "tp2_hit = ?"]
         params  = [new_mae, new_mfe, bars_open, new_tp1_hit, new_tp2_hit]
 
-        if outcome and outcome != "TP1_HIT":
+        if outcome and chiude:
             updates += ["final_outcome = ?", "timestamp_closed = ?"]
             params  += [outcome, now_iso]
-        elif outcome == "TP1_HIT" and not bool(tp1_hit):
+        elif outcome == "TP1_HIT" and not chiude and not bool(tp1_hit):
             updates += ["timestamp_tp1 = ?"]
             params  += [now_iso]
 
@@ -404,6 +526,24 @@ def monitor_open_trb_signals(
             f"UPDATE trb_signals SET {', '.join(updates)} WHERE signal_id = ?",
             params,
         )
+
+        # ── Eventi "sposta lo stop ORA" -- solo se il trade non ha gia'
+        # chiuso in questo stesso ciclo (un trade appena chiuso non ha
+        # piu' bisogno che tu sposti nulla). Uso il flag esplicito
+        # 'chiude', non piu' un confronto sulla stringa "TP1_HIT" --
+        # quella stringa ora e' ambigua (puo' essere solo il traguardo,
+        # oppure una chiusura vera se lo Stadio 2 era attivo).
+        if not chiude:
+            if tp1_hit_now and not bool(tp1_hit):
+                spostamenti_stop.append({
+                    "signal_id": sid, "asset": asset, "direction": direction,
+                    "event": "TP1_REACHED", "new_stop": entry_f,
+                })
+            elif stage2_active_now and not stage2_was_active:
+                spostamenti_stop.append({
+                    "signal_id": sid, "asset": asset, "direction": direction,
+                    "event": "STAGE2_REACHED", "new_stop": stage2_lock,
+                })
 
     conn.commit()
 
@@ -422,4 +562,4 @@ def monitor_open_trb_signals(
                 "bars_open": updated_row[4],
             })
 
-    return updated
+    return updated, spostamenti_stop
