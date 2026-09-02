@@ -47,6 +47,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
 .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:600}
 .b-tp{background:rgba(79,255,176,.15);color:var(--buy)}
 .b-sl{background:rgba(255,107,107,.15);color:var(--sell)}
+.b-be{background:rgba(56,189,248,.15);color:var(--accent5)}
 .b-exp{background:rgba(90,100,120,.2);color:var(--dim)}
 .b-open{background:rgba(255,209,102,.15);color:var(--accent3)}
 .b-buy{background:rgba(79,255,176,.15);color:var(--buy)}
@@ -60,7 +61,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
 <body>
 <header>
   <h1>Crypto Signal Engine — Analytics Lab</h1>
-  <div class="meta">2026-09-02 17:45 UTC &nbsp;|&nbsp; <a href="unified_dashboard.html">&larr; Dashboard</a> &nbsp;|&nbsp; <a href="engine_edge_dashboard.html">Engine Edge Lab →</a></div>
+  <div class="meta">2026-09-02 17:50 UTC &nbsp;|&nbsp; <a href="unified_dashboard.html">&larr; Dashboard</a> &nbsp;|&nbsp; <a href="engine_edge_dashboard.html">Engine Edge Lab →</a></div>
 </header>
 <div class="container">
 
@@ -782,11 +783,12 @@ tr.hl td{background:rgba(79,255,176,.06)}
     <span class="fw-tag tag-active-purple">ATTIVO</span>
     <span style="color:var(--dim);font-size:11px;margin-left:auto">BTC · PAXG</span>
   </div>
-  <div class="summary-grid cols6" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
+  <div class="summary-grid cols7" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
   <div><span class="big">310</span><span class="lbl">Chiusi</span></div>
   <div><span class="big warn">33.5%</span><span class="lbl">Win Rate</span></div>
   <div><span class="big">33.5%</span><span class="lbl">TP2 Hit</span></div>
   <div><span class="big neg">51.0%</span><span class="lbl">SL Rate</span></div>
+  <div><span class="big" style="color:var(--accent5)">0.0%</span><span class="lbl">BE Rate</span></div>
   <div><span class="big pos">+0.16R</span><span class="lbl">Expectancy</span></div>
   <div><span class="big">30.7</span><span class="lbl">Avg ADX</span></div>
 </div>
@@ -940,7 +942,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
   <table><thead><tr>
     <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP1</th>
-    <th>ADX</th><th>H1</th><th>Target</th><th>Esito</th>
+    <th>TP1 in</th><th>ADX</th><th>H1</th><th>Target</th><th>Esito</th>
   </tr></thead><tbody><tr>
   <td class="mono" style="color:var(--dim);font-size:11px">02 Sep 16:45</td>
   <td><strong>BTC</strong></td>
@@ -948,6 +950,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">77,323.29</td>
   <td class="mono">77,651.74</td>
   <td class="mono">76,994.83</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
   <td class="mono" style="color:var(--dim)">21.9</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">Overlap Low</td>
@@ -959,6 +962,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">4,371.32</td>
   <td class="mono">4,396.18</td>
   <td class="mono">4,346.46</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
   <td class="mono" style="color:var(--dim)">35.8</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">—</td>
@@ -970,6 +974,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">77,042.26</td>
   <td class="mono">77,672.94</td>
   <td class="mono">76,411.57</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
   <td class="mono" style="color:var(--dim)">20.2</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">—</td>
@@ -981,6 +986,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">77,544.44</td>
   <td class="mono">77,729.79</td>
   <td class="mono">77,359.09</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
   <td class="mono" style="color:var(--dim)">24.1</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">Asia Low</td>
@@ -992,6 +998,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">4,312.72</td>
   <td class="mono">4,335.20</td>
   <td class="mono">4,290.24</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--accent5)">30m</span></td>
   <td class="mono" style="color:var(--dim)">46.9</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">—</td>
@@ -1003,21 +1010,11 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">77,371.45</td>
   <td class="mono">77,643.99</td>
   <td class="mono">77,098.91</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--accent5)">16m</span></td>
   <td class="mono" style="color:var(--dim)">26.5</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">Weekly Low</td>
   <td><span class="badge b-sl">SL_HIT</span></td>
-</tr><tr>
-  <td class="mono" style="color:var(--dim);font-size:11px">01 Sep 17:15</td>
-  <td><strong>XAU_USD</strong></td>
-  <td><span class="badge b-sell">SELL</span></td>
-  <td class="mono">4,350.90</td>
-  <td class="mono">4,373.93</td>
-  <td class="mono">4,327.87</td>
-  <td class="mono" style="color:var(--dim)">37.6</td>
-  <td style="font-size:12px;color:var(--dim)">BEARISH</td>
-  <td style="font-size:12px;color:var(--dim)">—</td>
-  <td><span class="badge b-tp">TP2_HIT</span></td>
 </tr><tr>
   <td class="mono" style="color:var(--dim);font-size:11px">01 Sep 17:15</td>
   <td><strong>BTC</strong></td>
@@ -1025,9 +1022,22 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">77,723.33</td>
   <td class="mono">78,015.14</td>
   <td class="mono">77,431.53</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
   <td class="mono" style="color:var(--dim)">22.5</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">NY Low</td>
+  <td><span class="badge b-tp">TP2_HIT</span></td>
+</tr><tr>
+  <td class="mono" style="color:var(--dim);font-size:11px">01 Sep 17:15</td>
+  <td><strong>XAU_USD</strong></td>
+  <td><span class="badge b-sell">SELL</span></td>
+  <td class="mono">4,350.90</td>
+  <td class="mono">4,373.93</td>
+  <td class="mono">4,327.87</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--accent5)">2.5h</span></td>
+  <td class="mono" style="color:var(--dim)">37.6</td>
+  <td style="font-size:12px;color:var(--dim)">BEARISH</td>
+  <td style="font-size:12px;color:var(--dim)">—</td>
   <td><span class="badge b-tp">TP2_HIT</span></td>
 </tr><tr>
   <td class="mono" style="color:var(--dim);font-size:11px">01 Sep 17:00</td>
@@ -1036,6 +1046,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">4,371.50</td>
   <td class="mono">4,383.68</td>
   <td class="mono">4,359.32</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
   <td class="mono" style="color:var(--dim)">35.8</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">NY Low</td>
@@ -1047,6 +1058,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">78,019.51</td>
   <td class="mono">77,813.61</td>
   <td class="mono">78,225.41</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
   <td class="mono" style="color:var(--dim)">20.0</td>
   <td style="font-size:12px;color:var(--dim)">BULLISH</td>
   <td style="font-size:12px;color:var(--dim)">Daily High</td>
@@ -1058,6 +1070,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">4,380.82</td>
   <td class="mono">4,438.81</td>
   <td class="mono">4,322.83</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
   <td class="mono" style="color:var(--dim)">22.4</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">—</td>
@@ -1069,6 +1082,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">4,418.52</td>
   <td class="mono">4,438.81</td>
   <td class="mono">4,398.23</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
   <td class="mono" style="color:var(--dim)">17.7</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">London Low</td>
@@ -1080,6 +1094,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">78,773.96</td>
   <td class="mono">78,216.03</td>
   <td class="mono">79,331.88</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
   <td class="mono" style="color:var(--dim)">16.5</td>
   <td style="font-size:12px;color:var(--dim)">BULLISH</td>
   <td style="font-size:12px;color:var(--dim)">—</td>
@@ -1091,6 +1106,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">4,443.86</td>
   <td class="mono">4,462.06</td>
   <td class="mono">4,425.66</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--accent5)">6.5h</span></td>
   <td class="mono" style="color:var(--dim)">29.1</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">—</td>
@@ -1102,6 +1118,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">78,502.17</td>
   <td class="mono">78,343.97</td>
   <td class="mono">78,660.36</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--accent5)">6m</span></td>
   <td class="mono" style="color:var(--dim)">20.9</td>
   <td style="font-size:12px;color:var(--dim)">BULLISH</td>
   <td style="font-size:12px;color:var(--dim)">Asia High</td>
@@ -1113,6 +1130,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">4,446.44</td>
   <td class="mono">4,456.13</td>
   <td class="mono">4,436.74</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
   <td class="mono" style="color:var(--dim)">27.5</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">—</td>
@@ -1124,6 +1142,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">78,966.11</td>
   <td class="mono">78,534.10</td>
   <td class="mono">79,398.12</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
   <td class="mono" style="color:var(--dim)">25.4</td>
   <td style="font-size:12px;color:var(--dim)">BULLISH</td>
   <td style="font-size:12px;color:var(--dim)">—</td>
@@ -1135,6 +1154,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">4,435.02</td>
   <td class="mono">4,443.95</td>
   <td class="mono">4,426.10</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
   <td class="mono" style="color:var(--dim)">23.9</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">—</td>
@@ -1146,6 +1166,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">78,179.29</td>
   <td class="mono">78,707.17</td>
   <td class="mono">77,651.40</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
   <td class="mono" style="color:var(--dim)">21.5</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">—</td>
@@ -1157,6 +1178,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono">78,467.46</td>
   <td class="mono">78,752.27</td>
   <td class="mono">78,182.64</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
   <td class="mono" style="color:var(--dim)">23.0</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">H4 Swing Low</td>
