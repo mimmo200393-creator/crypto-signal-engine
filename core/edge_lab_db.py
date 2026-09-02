@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS edge_lab_signals (
     tradeability_flags       TEXT,
     confirmation_candle_ts   INTEGER,
     final_outcome            TEXT DEFAULT 'OPEN'
-        CHECK(final_outcome IN ('OPEN','TP','SL','EXPIRED')),
+        CHECK(final_outcome IN ('OPEN','TP','SL','PARTIAL','EXPIRED')),
     mae                      REAL,
     mfe                      REAL,
     bars_open                INTEGER DEFAULT 0,
@@ -113,6 +113,44 @@ CREATE INDEX IF NOT EXISTS idx_el_signals_timestamp
 CREATE INDEX IF NOT EXISTS idx_el_signals_confirmation_ts
     ON edge_lab_signals(asset, direction, confirmation_candle_ts);
 """
+
+
+def _migrate_add_partial(conn: sqlite3.Connection):
+    """
+    Aggiunge 'PARTIAL' al vincolo CHECK su final_outcome -- SQLite non
+    permette ALTER su un CHECK esistente, serve ricreare la tabella.
+    Stessa tecnica di sicurezza usata per trb_signals: backup prima di
+    ogni modifica, mai perdita dati. Idempotente.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='edge_lab_signals'"
+    ).fetchone()
+    if row is None or "PARTIAL" in row[0]:
+        return
+
+    import logging
+    logger_mig = logging.getLogger("edge_lab_db.migration")
+    logger_mig.warning("edge_lab_signals: vincolo CHECK senza PARTIAL -- migrazione in corso.")
+
+    conn.execute("DROP TABLE IF EXISTS edge_lab_signals_pre_migration")
+    conn.execute("ALTER TABLE edge_lab_signals RENAME TO edge_lab_signals_pre_migration")
+    conn.executescript(SCHEMA_SQL)
+
+    old_cols = {r[1] for r in conn.execute("PRAGMA table_info(edge_lab_signals_pre_migration)")}
+    new_cols = {r[1] for r in conn.execute("PRAGMA table_info(edge_lab_signals)")}
+    comuni = [c for c in old_cols if c in new_cols]
+    col_list = ", ".join(comuni)
+    try:
+        conn.execute(
+            f"INSERT INTO edge_lab_signals ({col_list}) SELECT {col_list} FROM edge_lab_signals_pre_migration"
+        )
+        n = conn.execute("SELECT COUNT(*) FROM edge_lab_signals").fetchone()[0]
+        logger_mig.warning("Migrazione completata: %d righe ripristinate.", n)
+    except sqlite3.Error as e:
+        logger_mig.error(
+            "Ripristino dati fallito (%s) -- tabella nuova vuota ma funzionante, "
+            "dati vecchi intatti in edge_lab_signals_pre_migration.", e)
+    conn.commit()
 
 
 def init_edge_lab_schema(conn: sqlite3.Connection):
@@ -133,6 +171,9 @@ def init_edge_lab_schema(conn: sqlite3.Connection):
     # Step 2: crea tabelle e indici (IF NOT EXISTS — sicuro su DB esistenti)
     conn.executescript(SCHEMA_SQL)
     conn.commit()
+
+    # Step 3: migrazione vincolo CHECK per il nuovo esito PARTIAL
+    _migrate_add_partial(conn)
 
 
 # ============================================================
@@ -341,6 +382,16 @@ def update_el_signal_outcome(
     conn.commit()
 
 
+LOCK_TRIGGER_PCT = 20
+# Protezione progressiva a singolo stadio -- validata il 02/09 fuori
+# campione (sviluppo su meta' dati, applicato a meta' MAI vista):
+# -0.454R (nessuna protezione) -> +0.133R. A differenza di TRB (che ha
+# TP1 e TP2), qui c'e' un solo target: la soglia e il blocco sono la
+# stessa percentuale (LOCK_TRIGGER_PCT%) della distanza entry->tp.
+# Motivata dal 78% dei trade EXPIRED che risultavano in vantaggio reale
+# (MFE fino a +1.83R) quando il tempo scadeva, senza mai incassare nulla.
+
+
 def monitor_open_el_signals(
     conn: sqlite3.Connection,
     asset: str,
@@ -367,30 +418,55 @@ def monitor_open_el_signals(
             continue
 
         bars_open = (bars_open or 0) + 1
+        entry_f, sl_f = float(entry), float(sl)
+        tp_f = float(tp) if tp is not None else None
+        old_mfe = float(mfe or 0)
 
         if direction == "BUY":
-            adverse   = max(float(entry) - current_low,  0.0)
-            favorable = max(current_high - float(entry), 0.0)
+            adverse   = max(entry_f - current_low,  0.0)
+            favorable = max(current_high - entry_f, 0.0)
         else:
-            adverse   = max(current_high - float(entry), 0.0)
-            favorable = max(float(entry) - current_low,  0.0)
+            adverse   = max(current_high - entry_f, 0.0)
+            favorable = max(entry_f - current_low,  0.0)
 
         new_mae = max(float(mae or 0), adverse)
-        new_mfe = max(float(mfe or 0), favorable)
+        new_mfe = max(old_mfe, favorable)
+
+        # ── Stop EFFETTIVO: protezione progressiva ───────────────────
+        # Usa old_mfe (il progresso confermato PRIMA di questo ciclo,
+        # non new_mfe che include gia' questa candela) -- stessa
+        # convenzione "SL ha priorita'" gia' usata per TRB: se una
+        # singola candela larga attivasse la protezione E la
+        # riportasse indietro nello stesso istante, resta ambiguo
+        # sull'ordine reale degli eventi, quindi si preferisce il
+        # caso piu' conservativo (nessuna protezione ancora attiva).
+        effective_sl = sl_f
+        protetto = False
+        if tp_f is not None:
+            dist = abs(tp_f - entry_f)
+            if dist > 0:
+                extra = dist * (LOCK_TRIGGER_PCT / 100)
+                trigger_mfe = extra
+                protetto = old_mfe >= trigger_mfe
+                if protetto:
+                    if direction == "BUY":
+                        effective_sl = max(effective_sl, entry_f + extra)
+                    else:
+                        effective_sl = min(effective_sl, entry_f - extra)
 
         if direction == "BUY":
-            sl_hit = current_low  <= float(sl)
-            tp_hit = tp is not None and current_high >= float(tp)
+            sl_hit = current_low  <= effective_sl
+            tp_hit = tp_f is not None and current_high >= tp_f
         else:
-            sl_hit = current_high >= float(sl)
-            tp_hit = tp is not None and current_low  <= float(tp)
+            sl_hit = current_high >= effective_sl
+            tp_hit = tp_f is not None and current_low  <= tp_f
 
         if sl_hit:
-            outcome = "SL"
+            outcome = "PARTIAL" if protetto else "SL"
         elif tp_hit:
             outcome = "TP"
         elif bars_open >= (expiry_bars or 96):
-            outcome = "EXPIRED"
+            outcome = "PARTIAL" if protetto else "EXPIRED"
         else:
             outcome = None
 
