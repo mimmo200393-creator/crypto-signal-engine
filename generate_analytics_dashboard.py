@@ -195,7 +195,8 @@ def load_trb_recent(conn, limit=20):
         return q(conn, f"""
             SELECT signal_id, asset, direction, entry, stop_loss, tp1, tp2,
                    quality_score, quality_label, adx, trend_h1, trend_h4,
-                   liquidity_target, final_outcome, mae, mfe, bars_open, timestamp_setup
+                   liquidity_target, final_outcome, mae, mfe, bars_open, timestamp_setup,
+                   timestamp_tp1, tp1_hit
             FROM trb_signals ORDER BY timestamp_setup DESC LIMIT {limit}
         """)
     except sqlite3.OperationalError:
@@ -288,13 +289,15 @@ def stats_el(rows):
 
 def stats_trb(rows):
     n = len(rows)
-    if n == 0: return {"n":0,"win":0,"tp2":0,"sl":0,"exp_r":0,"avg_mae":0,"avg_mfe":0,"avg_adx":0}
+    if n == 0: return {"n":0,"win":0,"tp2":0,"sl":0,"be":0,"exp_r":0,"avg_mae":0,"avg_mfe":0,"avg_adx":0}
     wins = sum(1 for r in rows if r["outcome"] in ("TP1_HIT","TP2_HIT"))
     tp2  = sum(1 for r in rows if r["outcome"] == "TP2_HIT")
     sls  = sum(1 for r in rows if r["outcome"] == "SL_HIT")
+    bes  = sum(1 for r in rows if r["outcome"] == "BE_HIT")
     adxs = [r["adx"] for r in rows if r["adx"] > 0]
     return {"n":n,"win":round(wins/n*100,1),"tp2":round(tp2/n*100,1),
-            "sl":round(sls/n*100,1),"exp_r":round((wins*2-sls)/n,2),
+            "sl":round(sls/n*100,1),"be":round(bes/n*100,1),
+            "exp_r":round((wins*2-sls)/n,2),
             "avg_mae":round(sum(r["mae"] for r in rows)/n,1),
             "avg_mfe":round(sum(r["mfe"] for r in rows)/n,1),
             "avg_adx":round(sum(adxs)/len(adxs),1) if adxs else 0}
@@ -384,6 +387,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
 .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:600}
 .b-tp{background:rgba(79,255,176,.15);color:var(--buy)}
 .b-sl{background:rgba(255,107,107,.15);color:var(--sell)}
+.b-be{background:rgba(56,189,248,.15);color:var(--accent5)}
 .b-exp{background:rgba(90,100,120,.2);color:var(--dim)}
 .b-open{background:rgba(255,209,102,.15);color:var(--accent3)}
 .b-buy{background:rgba(79,255,176,.15);color:var(--buy)}
@@ -412,6 +416,21 @@ def outcome_badge(o):
 
 def direction_badge(d):
     return f'<span class="badge {"b-buy" if d=="BUY" else "b-sell"}">{d}</span>'
+
+def fmt_time_to_tp1(ts_setup, ts_tp1):
+    """Tempo trascorso da setup a TP1 -- '—' se TP1 non e' mai stato toccato."""
+    if not ts_tp1:
+        return '<span style="color:var(--dim)">—</span>'
+    try:
+        t1 = datetime.fromisoformat(ts_setup)
+        t2 = datetime.fromisoformat(ts_tp1)
+        ore = (t2 - t1).total_seconds() / 3600
+        if ore < 1:
+            return f'<span style="color:var(--accent5)">{int(ore*60)}m</span>'
+        return f'<span style="color:var(--accent5)">{ore:.1f}h</span>'
+    except (ValueError, TypeError):
+        return '<span style="color:var(--dim)">—</span>'
+
 
 def fmt_ts(ts):
     if not ts: return "—"
@@ -624,11 +643,12 @@ def section_trb(rows, recent):
     wc = "pos" if s["win"]>=40 else ("neg" if s["win"]<25 else "warn")
     ec = "pos" if s["exp_r"]>0 else "neg"
 
-    summary = f"""<div class="summary-grid cols6" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
+    summary = f"""<div class="summary-grid cols7" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
   <div><span class="big">{s['n']}</span><span class="lbl">Chiusi</span></div>
   <div><span class="big {wc}">{s['win']}%</span><span class="lbl">Win Rate</span></div>
   <div><span class="big">{s['tp2']}%</span><span class="lbl">TP2 Hit</span></div>
   <div><span class="big neg">{s['sl']}%</span><span class="lbl">SL Rate</span></div>
+  <div><span class="big" style="color:var(--accent5)">{s['be']}%</span><span class="lbl">BE Rate</span></div>
   <div><span class="big {ec}">{s['exp_r']:+.2f}R</span><span class="lbl">Expectancy</span></div>
   <div><span class="big">{s['avg_adx']:.1f}</span><span class="lbl">Avg ADX</span></div>
 </div>"""
@@ -658,8 +678,12 @@ def section_trb(rows, recent):
     else:
         body = ""
         for r in recent:
-            sid,asset,direction,entry,sl,tp1,tp2,qs,ql,adx,h1,h4,target,outcome,mae,mfe,bars,ts = r
-            oc = {"TP1_HIT":"b-tp","TP2_HIT":"b-tp","SL_HIT":"b-sl","EXPIRED":"b-exp","OPEN":"b-open"}.get(outcome,"b-exp")
+            sid,asset,direction,entry,sl,tp1,tp2,qs,ql,adx,h1,h4,target,outcome,mae,mfe,bars,ts,ts_tp1,tp1_hit = r
+            outcome_display = outcome
+            if outcome == "OPEN" and tp1_hit:
+                outcome_display = "OPEN·TP1"
+            oc = {"TP1_HIT":"b-tp","TP2_HIT":"b-tp","SL_HIT":"b-sl","BE_HIT":"b-be",
+                 "EXPIRED":"b-exp","OPEN":"b-open","OPEN·TP1":"b-be"}.get(outcome_display,"b-exp")
             body += f"""<tr>
   <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(ts)}</td>
   <td><strong>{asset.replace('_USDT','')}</strong></td>
@@ -667,16 +691,17 @@ def section_trb(rows, recent):
   <td class="mono">{fmt_p(entry)}</td>
   <td class="mono">{fmt_p(sl)}</td>
   <td class="mono">{fmt_p(tp1)}</td>
+  <td class="mono" style="font-size:11px">{fmt_time_to_tp1(ts, ts_tp1)}</td>
   <td class="mono" style="color:var(--dim)">{float(adx or 0):.1f}</td>
   <td style="font-size:12px;color:var(--dim)">{h1 or '—'}</td>
   <td style="font-size:12px;color:var(--dim)">{target or '—'}</td>
-  <td><span class="badge {oc}">{outcome}</span></td>
+  <td><span class="badge {oc}">{outcome_display}</span></td>
 </tr>"""
         rec_html = f"""<div class="card"><div class="ch">Segnali Recenti TRB</div>
   <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
   <table><thead><tr>
     <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP1</th>
-    <th>ADX</th><th>H1</th><th>Target</th><th>Esito</th>
+    <th>TP1 in</th><th>ADX</th><th>H1</th><th>Target</th><th>Esito</th>
   </tr></thead><tbody>{body}</tbody></table>
   </div></div>"""
 
