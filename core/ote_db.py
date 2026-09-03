@@ -25,6 +25,80 @@ logger = logging.getLogger("ote.db")
 STRATEGY_NAME = "OTE"
 
 
+def _migrate_add_partial(conn: sqlite3.Connection):
+    """
+    Aggiunge 'PARTIAL' al vincolo CHECK su status -- SQLite non permette
+    ALTER su un CHECK esistente, serve ricreare la tabella. Stessa
+    tecnica di sicurezza gia' usata per trb_signals/edge_lab_signals:
+    backup prima di ogni modifica, mai perdita dati. Idempotente.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='ote_signals'"
+    ).fetchone()
+    if row is None or "PARTIAL" in row[0]:
+        return
+
+    logger.warning("ote_signals: vincolo CHECK senza PARTIAL -- migrazione in corso.")
+
+    conn.execute("DROP TABLE IF EXISTS ote_signals_pre_migration")
+    conn.execute("ALTER TABLE ote_signals RENAME TO ote_signals_pre_migration")
+    conn.executescript("""
+    CREATE TABLE ote_signals (
+        signal_id       TEXT PRIMARY KEY,
+        candidate_id    TEXT NOT NULL,
+        asset           TEXT NOT NULL,
+        direction       TEXT NOT NULL CHECK(direction IN ('BUY','SELL')),
+        status          TEXT NOT NULL DEFAULT 'ENTRY'
+                        CHECK(status IN ('ENTRY','TP','SL','PARTIAL','EXPIRED','INVALIDATED')),
+        planned_entry   REAL NOT NULL,
+        planned_sl      REAL NOT NULL,
+        planned_tp      REAL NOT NULL,
+        planned_rr      REAL NOT NULL,
+        actual_entry    REAL,
+        actual_sl       REAL,
+        actual_tp       REAL,
+        actual_rr       REAL,
+        trigger_type    TEXT,
+        sweep_level     REAL,
+        reaction_type   TEXT,
+        zone_ref        TEXT,
+        zone_score      REAL,
+        zone_strength   TEXT,
+        quality_score   INTEGER,
+        quality_label   TEXT,
+        tp_type         TEXT,
+        tp_ref          TEXT,
+        result          TEXT CHECK(result IN ('WIN','LOSS',NULL)),
+        result_r        REAL,
+        closed_at       TEXT,
+        mae             REAL,
+        mfe             REAL,
+        bars_open       INTEGER DEFAULT 0,
+        expiry_bars     INTEGER DEFAULT 96,
+        signal_created_at TEXT NOT NULL,
+        entry_ts        TEXT,
+        context_snapshot TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ote_sig_asset_status ON ote_signals(asset, status);
+    """)
+
+    old_cols = {r[1] for r in conn.execute("PRAGMA table_info(ote_signals_pre_migration)")}
+    new_cols = {r[1] for r in conn.execute("PRAGMA table_info(ote_signals)")}
+    comuni = [c for c in old_cols if c in new_cols]
+    col_list = ", ".join(comuni)
+    try:
+        conn.execute(
+            f"INSERT INTO ote_signals ({col_list}) SELECT {col_list} FROM ote_signals_pre_migration"
+        )
+        n = conn.execute("SELECT COUNT(*) FROM ote_signals").fetchone()[0]
+        logger.warning("Migrazione completata: %d righe ripristinate.", n)
+    except sqlite3.Error as e:
+        logger.error(
+            "Ripristino dati fallito (%s) -- tabella nuova vuota ma funzionante, "
+            "dati vecchi intatti in ote_signals_pre_migration.", e)
+    conn.commit()
+
+
 def init_ote_schema(conn: sqlite3.Connection):
     conn.executescript("""
 
@@ -87,7 +161,7 @@ def init_ote_schema(conn: sqlite3.Connection):
         direction       TEXT NOT NULL CHECK(direction IN ('BUY','SELL')),
 
         status          TEXT NOT NULL DEFAULT 'ENTRY'
-                        CHECK(status IN ('ENTRY','TP','SL','EXPIRED','INVALIDATED')),
+                        CHECK(status IN ('ENTRY','TP','SL','PARTIAL','EXPIRED','INVALIDATED')),
 
         -- Planned (calcolati DOPO aver visto la direzione, mai sovrascritti)
         planned_entry   REAL NOT NULL,
@@ -143,6 +217,7 @@ def init_ote_schema(conn: sqlite3.Connection):
     CREATE INDEX IF NOT EXISTS idx_ote_sig_asset_status ON ote_signals(asset, status);
     """)
     conn.commit()
+    _migrate_add_partial(conn)
 
 
 # ============================================================
@@ -329,3 +404,4 @@ def get_open_signals(conn, asset: str) -> list:
     return [dict(zip([
         "signal_id","candidate_id","direction","planned_entry","planned_sl","planned_tp",
         "planned_rr","actual_entry","actual_sl","actual_tp","mae","mfe","bars_open","expiry_bars"], r)) for r in rows]
+    
