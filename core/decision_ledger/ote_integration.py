@@ -17,6 +17,21 @@ neutra) NON vanno in questo dict — userebbero lo stesso nome delle chiavi
 riservate e verrebbero letti dal reporter sbagliato producendo un
 falso "neutro" silenzioso invece del vero stato dell'engine MIE
 (bug trovato e corretto il 22/08).
+
+── AGGIORNATO 02/09 ──────────────────────────────────────────────
+link_outcome ora gestisce esplicitamente "PARTIAL" (il nuovo esito
+della protezione progressiva introdotta oggi in ote_runner.py).
+decision_ledger.db ha un vincolo CHECK sulla colonna outcome che
+OGGI non include 'PARTIAL' -- senza vedere ledger_writer.py (che
+gestisce lo schema di quella tabella CONDIVISA da tutte le strategie)
+non e' sicuro migrarla da qui. Finche' non si fa quella migrazione,
+un trade PARTIAL NON viene scritto nel Ledger condiviso -- meglio
+ometterlo (il comportamento "non-blocking" gia' previsto per ogni
+fallimento del Ledger) che scriverlo scorrettamente come EXPIRED,
+perdendo il vero R guadagnato. La tabella locale ote_signals registra
+comunque il PARTIAL correttamente, indipendentemente da questo --
+solo l'Engine Edge Lab condiviso non lo vedra' finche' non si
+completa la migrazione.
 """
 
 from __future__ import annotations
@@ -92,6 +107,19 @@ def link_outcome(decision_id: str, outcome: str, entry: float, stop_loss: float,
                  ledger_path: str = ledger_writer.DEFAULT_LEDGER_PATH) -> None:
     """Collega l'esito di un trade OTE chiuso al Ledger."""
     try:
+        # PARTIAL: decision_ledger.db non accetta ancora questo valore
+        # (vincolo CHECK, tabella condivisa -- serve ledger_writer.py
+        # per migrarla in sicurezza). Ometto la scrittura invece di
+        # scrivere un dato scorretto: il comportamento non-blocking
+        # gia' previsto per ogni altro fallimento del Ledger. La
+        # tabella locale ote_signals resta comunque corretta.
+        if outcome == "PARTIAL":
+            logger.info(
+                "OTE link_outcome: '%s' non ancora scritto nel Ledger condiviso "
+                "(decision_ledger.db non accetta PARTIAL, serve migrazione) -- "
+                "ote_signals locale resta comunque corretto.", decision_id)
+            return
+
         risk = abs(entry - stop_loss) if (entry and stop_loss) else None
         be_moved = (risk is not None and risk < 1e-9)
 
@@ -127,3 +155,4 @@ def link_outcome(decision_id: str, outcome: str, entry: float, stop_loss: float,
         )
     except Exception as e:
         logger.warning("OTE link_outcome fallito (non-blocking): %s", e)
+      
