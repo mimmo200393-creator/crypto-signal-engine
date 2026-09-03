@@ -441,35 +441,48 @@ def monitor_open_trb_signals(
         # una singola candela M15 tocca sia TP1 sia lo SL originale,
         # resta valida la stessa convenzione "SL ha priorita'" gia'
         # usata sotto, senza ambiguita' sull'ordine reale degli eventi
-        # dentro la candela.
-        effective_sl = sl_f
-        stage2_was_active = False
-        stage2_active_now = False
+        # dentro la candela. Questa parte (chiusura vera) NON cambia.
+        #
+        # Il calcolo della soglia stadio2 (trigger/lock) invece va
+        # fatto SEMPRE che tp1/tp2 esistano, non solo se tp1_hit era
+        # gia' vero -- serve anche a rilevare il caso "tutto nello
+        # stesso primo ciclo" (vedi sotto, sezione notifiche): un
+        # trade puo' toccare TP1 E superare la soglia stadio2 nella
+        # STESSA candela, prima ancora che tp1_hit venga registrato.
+        # Trovato il 03/09 analizzando un caso reale (XAU BUY, 2 soli
+        # cicli totali) dove la notifica "sposta a TP1" non e' mai
+        # partita per questo esatto motivo.
+        dist_tp1_tp2 = None
+        stage2_trigger_mfe = None
         stage2_lock = None
-        if bool(tp1_hit) and tp1_f is not None and tp2_f is not None:
-            effective_sl = entry_f  # Stadio 1: breakeven
+        if tp1_f is not None and tp2_f is not None:
             dist_tp1_tp2 = abs(tp2_f - tp1_f)
             if dist_tp1_tp2 > 0:
                 extra = dist_tp1_tp2 * (STAGE2_PCT / 100)
-                # Soglia di attivazione: STAGE2_PCT% della distanza da
-                # TP1 verso TP2 (stessa logica di sempre). Il livello di
-                # blocco pero' ora e' TP1 stesso, non un valore
-                # intermedio calcolato -- se il prezzo si avvicina
-                # abbastanza a TP2 e poi torna indietro fino a TP1, il
-                # risultato riflette il guadagno vero di TP1, non un
-                # semplice pareggio.
                 stage2_lock = tp1_f
                 if direction == "BUY":
                     stage2_trigger_mfe = (tp1_f + extra) - entry_f
                 else:
                     stage2_trigger_mfe = entry_f - (tp1_f - extra)
-                stage2_was_active = old_mfe >= stage2_trigger_mfe
-                stage2_active_now = new_mfe >= stage2_trigger_mfe
-                if stage2_active_now:
-                    if direction == "BUY":
-                        effective_sl = max(effective_sl, stage2_lock)
-                    else:
-                        effective_sl = min(effective_sl, stage2_lock)
+
+        effective_sl = sl_f
+        stage2_was_active = False
+        stage2_active_now = False
+        if bool(tp1_hit) and stage2_trigger_mfe is not None:
+            effective_sl = entry_f  # Stadio 1: breakeven
+            # Soglia di attivazione: STAGE2_PCT% della distanza da
+            # TP1 verso TP2. Il livello di blocco e' TP1 stesso, non
+            # un valore intermedio calcolato -- se il prezzo si
+            # avvicina abbastanza a TP2 e poi torna indietro fino a
+            # TP1, il risultato riflette il guadagno vero di TP1, non
+            # un semplice pareggio.
+            stage2_was_active = old_mfe >= stage2_trigger_mfe
+            stage2_active_now = new_mfe >= stage2_trigger_mfe
+            if stage2_active_now:
+                if direction == "BUY":
+                    effective_sl = max(effective_sl, stage2_lock)
+                else:
+                    effective_sl = min(effective_sl, stage2_lock)
 
         if direction == "BUY":
             sl_hit      = current_low  <= effective_sl
@@ -534,7 +547,25 @@ def monitor_open_trb_signals(
         # quella stringa ora e' ambigua (puo' essere solo il traguardo,
         # oppure una chiusura vera se lo Stadio 2 era attivo).
         if not chiude:
-            if tp1_hit_now and not bool(tp1_hit):
+            appena_tp1 = tp1_hit_now and not bool(tp1_hit)
+            # Caso "tutto nella stessa candela" -- trovato il 03/09:
+            # TP1 e la soglia stadio2 possono essere superati insieme
+            # nel PRIMO ciclo, prima che tp1_hit sia mai stato vero.
+            # In quel caso, stage2_active_now (sopra) resta False
+            # perche' l'intero blocco stadio2 e' gated da bool(tp1_hit)
+            # -- controllo qui, separatamente, usando new_mfe diretto,
+            # cosi' la notifica giusta (stadio2, non solo breakeven)
+            # parte comunque, invece di essere persa silenziosamente.
+            stage2_gia_nel_primo_ciclo = (
+                appena_tp1 and stage2_trigger_mfe is not None
+                and new_mfe >= stage2_trigger_mfe
+            )
+            if stage2_gia_nel_primo_ciclo:
+                spostamenti_stop.append({
+                    "signal_id": sid, "asset": asset, "direction": direction,
+                    "event": "STAGE2_REACHED", "new_stop": stage2_lock,
+                })
+            elif appena_tp1:
                 spostamenti_stop.append({
                     "signal_id": sid, "asset": asset, "direction": direction,
                     "event": "TP1_REACHED", "new_stop": entry_f,
