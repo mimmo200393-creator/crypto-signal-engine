@@ -467,8 +467,23 @@ def _notify_signal(asset: str, direction: str, trade_plan: dict, zone: dict, con
 
 
 # ============================================================
-# Monitoraggio segnali ENTRY (TP/SL/EXPIRED)
+# Monitoraggio segnali ENTRY (TP/SL/PARTIAL/EXPIRED)
 # ============================================================
+
+LOCK_TRIGGER_PCT = 80
+# Protezione progressiva -- validata il 02/09 fuori campione (sviluppo
+# su meta' dati, applicato a meta' MAI vista): -0.269R -> +0.056R.
+# Motivata dal 95% dei segnali EXPIRED che risultavano in vantaggio
+# reale (MFE fino a +3.22R) quando il tempo scadeva, senza mai
+# incassare nulla -- e dal 34% dei segnali SL con lo stesso pattern
+# prima di tornare a perdita piena. A differenza di TRB/OTE-SC, qui
+# la soglia e' espressa in unita' di R fisse (non % della distanza a
+# un singolo TP), perche' il planned_rr di OTE varia troppo da
+# segnale a segnale per una soglia relativa al TP di essere stabile.
+
+OTE_QUALITY_GATE_ZONE_SCORE = 80
+OTE_QUALITY_GATE_TP_TYPES = {"ASIAN_LOW", "PREV_DAY_LOW"}
+
 
 def _monitor_open_signals(conn, asset: str, df_m5):
     if df_m5 is None or len(df_m5) == 0:
@@ -482,40 +497,74 @@ def _monitor_open_signals(conn, asset: str, df_m5):
         entry = sig.get("actual_entry") or sig["planned_entry"]
         sl = sig.get("actual_sl") or sig["planned_sl"]
         tp = sig.get("actual_tp") or sig["planned_tp"]
-        mae = float(sig.get("mae") or 0)
-        mfe = float(sig.get("mfe") or 0)
+        old_mae = float(sig.get("mae") or 0)
+        old_mfe = float(sig.get("mfe") or 0)
         bars_open = (sig.get("bars_open") or 0) + 1
 
         if entry is None or sl is None:
             continue
 
+        risk = abs(entry - sl)
+
         if direction == "BUY":
-            adverse = max(entry - current_low, 0.0)
+            adverse   = max(entry - current_low, 0.0)
             favorable = max(current_high - entry, 0.0)
-            sl_hit = current_low <= sl
+        else:
+            adverse   = max(current_high - entry, 0.0)
+            favorable = max(entry - current_low, 0.0)
+
+        new_mae = max(old_mae, adverse)
+        new_mfe = max(old_mfe, favorable)
+
+        # ── Stop EFFETTIVO: protezione progressiva ────────────────
+        # Usa old_mfe (confermato nel ciclo PRECEDENTE, non new_mfe
+        # che include gia' questa candela) -- stessa convenzione
+        # "SL ha priorita'" gia' usata per TRB/OTE-SC: se una singola
+        # candela larga attivasse la protezione E la riportasse
+        # indietro nello stesso istante, resta ambiguo sull'ordine
+        # reale degli eventi, quindi si preferisce il caso piu'
+        # conservativo (nessuna protezione ancora attiva).
+        effective_sl = sl
+        protetto = False
+        if risk > 0:
+            lock_amount = risk * (LOCK_TRIGGER_PCT / 100)
+            protetto = old_mfe >= lock_amount
+            if protetto:
+                if direction == "BUY":
+                    effective_sl = max(effective_sl, entry + lock_amount)
+                else:
+                    effective_sl = min(effective_sl, entry - lock_amount)
+
+        if direction == "BUY":
+            sl_hit = current_low  <= effective_sl
             tp_hit = tp is not None and current_high >= tp
         else:
-            adverse = max(current_high - entry, 0.0)
-            favorable = max(entry - current_low, 0.0)
-            sl_hit = current_high >= sl
-            tp_hit = tp is not None and current_low <= tp
-
-        new_mae = max(mae, adverse)
-        new_mfe = max(mfe, favorable)
+            sl_hit = current_high >= effective_sl
+            tp_hit = tp is not None and current_low  <= tp
 
         if sl_hit:
-            risk = abs(entry - sl)
-            result_r = round(-risk / risk, 3) if risk > 0 else -1.0
-            ote_db.close_signal(conn, sid, "SL", result_r=result_r,
-                               mae=new_mae, mfe=new_mfe, bars_open=bars_open)
-            logger.info("OTE [%s]: %s -> SL", asset, sid[:8])
-            if ledger_link:
-                try:
-                    ledger_link.link_outcome(sid, "SL", entry, sl, mae=new_mae, mfe=new_mfe, duration_bars=bars_open)
-                except Exception as e:
-                    logger.warning("OTE ledger link_outcome: %s", e)
+            if protetto:
+                result_r = round(LOCK_TRIGGER_PCT / 100, 3)
+                ote_db.close_signal(conn, sid, "PARTIAL", result_r=result_r,
+                                   mae=new_mae, mfe=new_mfe, bars_open=bars_open)
+                logger.info("OTE [%s]: %s -> PARTIAL (+%.2fR)", asset, sid[:8], result_r)
+                if ledger_link:
+                    try:
+                        ledger_link.link_outcome(sid, "PARTIAL", entry, sl, mae=new_mae, mfe=new_mfe,
+                                                duration_bars=bars_open, rr_planned=result_r)
+                    except Exception as e:
+                        logger.warning("OTE ledger link_outcome: %s", e)
+            else:
+                result_r = -1.0
+                ote_db.close_signal(conn, sid, "SL", result_r=result_r,
+                                   mae=new_mae, mfe=new_mfe, bars_open=bars_open)
+                logger.info("OTE [%s]: %s -> SL", asset, sid[:8])
+                if ledger_link:
+                    try:
+                        ledger_link.link_outcome(sid, "SL", entry, sl, mae=new_mae, mfe=new_mfe, duration_bars=bars_open)
+                    except Exception as e:
+                        logger.warning("OTE ledger link_outcome: %s", e)
         elif tp_hit:
-            risk = abs(entry - sl)
             reward = abs(tp - entry)
             rr = round(reward / risk, 3) if risk > 0 else 0
             ote_db.close_signal(conn, sid, "TP", result_r=rr,
@@ -528,14 +577,26 @@ def _monitor_open_signals(conn, asset: str, df_m5):
                 except Exception as e:
                     logger.warning("OTE ledger link_outcome: %s", e)
         elif bars_open >= (sig.get("expiry_bars") or SIGNAL_EXPIRY_BARS):
-            ote_db.close_signal(conn, sid, "EXPIRED", result_r=0,
-                               mae=new_mae, mfe=new_mfe, bars_open=bars_open)
-            logger.info("OTE [%s]: %s -> EXPIRED", asset, sid[:8])
-            if ledger_link:
-                try:
-                    ledger_link.link_outcome(sid, "EXPIRED", entry, sl, mae=new_mae, mfe=new_mfe, duration_bars=bars_open)
-                except Exception as e:
-                    logger.warning("OTE ledger link_outcome: %s", e)
+            if protetto:
+                result_r = round(LOCK_TRIGGER_PCT / 100, 3)
+                ote_db.close_signal(conn, sid, "PARTIAL", result_r=result_r,
+                                   mae=new_mae, mfe=new_mfe, bars_open=bars_open)
+                logger.info("OTE [%s]: %s -> PARTIAL (scaduto ma protetto, +%.2fR)", asset, sid[:8], result_r)
+                if ledger_link:
+                    try:
+                        ledger_link.link_outcome(sid, "PARTIAL", entry, sl, mae=new_mae, mfe=new_mfe,
+                                                duration_bars=bars_open, rr_planned=result_r)
+                    except Exception as e:
+                        logger.warning("OTE ledger link_outcome: %s", e)
+            else:
+                ote_db.close_signal(conn, sid, "EXPIRED", result_r=0,
+                                   mae=new_mae, mfe=new_mfe, bars_open=bars_open)
+                logger.info("OTE [%s]: %s -> EXPIRED", asset, sid[:8])
+                if ledger_link:
+                    try:
+                        ledger_link.link_outcome(sid, "EXPIRED", entry, sl, mae=new_mae, mfe=new_mfe, duration_bars=bars_open)
+                    except Exception as e:
+                        logger.warning("OTE ledger link_outcome: %s", e)
         else:
             conn.execute(
                 "UPDATE ote_signals SET mae=?, mfe=?, bars_open=? WHERE signal_id=?",
@@ -707,6 +768,27 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
             }
             qs = signal_data["quality_score"]
             signal_data["quality_label"] = "HIGH" if qs >= 8 else ("MEDIUM" if qs >= 5 else "LOW")
+
+            # ── Filtro qualita' -- validato il 02/09 fuori campione ───
+            # (sviluppo su meta' dati, applicato a meta' MAI vista):
+            # +0.056R -> +0.224R su validazione, +0.106R -> +0.263R
+            # sull'intero campione (106 segnali). zone_score>=80: zone
+            # probabilmente "consumate" da troppi tocchi -- principio
+            # di trading tecnico, piu' un livello e' testato piu' e'
+            # probabile che ceda, non che tenga (spiega anche perche'
+            # quality_label=HIGH andava peggio di LOW: zone_score e' la
+            # sua componente dominante). ASIAN_LOW/PREV_DAY_LOW:
+            # sistematicamente peggiori degli altri tp_type, causa non
+            # ancora indagata a fondo.
+            zone_score_val = signal_data.get("zone_score")
+            tp_type_val = signal_data.get("tp_type")
+            if (zone_score_val is not None and zone_score_val >= OTE_QUALITY_GATE_ZONE_SCORE) \
+               or (tp_type_val in OTE_QUALITY_GATE_TP_TYPES):
+                logger.info(
+                    "OTE [%s %s]: REJECT QUALITY_GATE (zone_score=%s tp_type=%s)",
+                    asset, direction, zone_score_val, tp_type_val,
+                )
+                continue
 
             sid = ote_db.insert_signal(conn, cid, asset, direction, signal_data)
             ote_db.link_candidate_to_signal(conn, cid, sid)
