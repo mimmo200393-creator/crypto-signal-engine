@@ -372,62 +372,73 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         atr_m15 = mie_context.get("mie_volatility_atr_m15", 0) or 0
         be_threshold = 0.3 * atr_m15 if atr_m15 > 0 else 0
 
-        if be_threshold > 0:
-            open_rows = conn.execute(
-                "SELECT signal_id, direction, entry, stop_loss, mfe, sl_original "
-                "FROM lh_signals WHERE final_outcome='OPEN' AND asset=? "
-                "AND COALESCE(order_status, 'FILLED') = 'FILLED'",
-                (asset,)
-            ).fetchall()
-            for sid, d, entry_p, sl_p, mfe_p, sl_orig_p in open_rows:
-                if entry_p is None or sl_p is None:
-                    continue
-                fav = max(current_high_m - entry_p, 0) if d == "BUY" else max(entry_p - current_low_m, 0)
-                cur_mfe = max(float(mfe_p or 0), fav)
-                if cur_mfe >= be_threshold:
-                    if (d == "BUY" and float(sl_p) < float(entry_p)) or \
-                       (d == "SELL" and float(sl_p) > float(entry_p)):
-                        conn.execute(
-                            "UPDATE lh_signals SET stop_loss=? WHERE signal_id=?",
-                            (entry_p, sid)
-                        )
-                        conn.commit()
-                        sl_p = entry_p  # cosi' lo Stadio 2 sotto vede il valore aggiornato
-                        logger.info(
-                            "LH BE [%s]: %s SL spostato a breakeven (entry=%.4f, mfe=%.2f)",
-                            asset, sid[:8], entry_p, cur_mfe
-                        )
+        # ── Lettura segnali aperti: SEMPRE, non solo se be_threshold>0 ──
+        # BUG trovato il 07/09: lo Stadio 2 (sotto) era annidato dentro
+        # "if be_threshold > 0", ma lo Stadio 2 NON dipende dall'ATR --
+        # usa sl_original. Se in un ciclo atr_m15 risultava 0/mancante
+        # (mie_context temporaneamente senza quel dato), l'INTERO blocco
+        # -- Stadio 2 compreso -- veniva saltato, anche con mfe ben oltre
+        # la soglia. Trovato analizzando un trade reale (XAU SELL,
+        # mfe_r=1.56, mai protetto nonostante la soglia fosse 0.90).
+        open_rows = conn.execute(
+            "SELECT signal_id, direction, entry, stop_loss, mfe, sl_original "
+            "FROM lh_signals WHERE final_outcome='OPEN' AND asset=? "
+            "AND COALESCE(order_status, 'FILLED') = 'FILLED'",
+            (asset,)
+        ).fetchall()
+        for sid, d, entry_p, sl_p, mfe_p, sl_orig_p in open_rows:
+            if entry_p is None or sl_p is None:
+                continue
+            fav = max(current_high_m - entry_p, 0) if d == "BUY" else max(entry_p - current_low_m, 0)
+            cur_mfe = max(float(mfe_p or 0), fav)
 
-                # ── Stadio 2: oltre il semplice breakeven ────────────
-                # Validato fuori campione il 05/09 (sviluppo/validazione
-                # praticamente identici: +0.353R/+0.353R su dati puliti
-                # post-24/08): se il progresso raggiunge il 90% del
-                # rischio VERO originale (sl_original, non l'ATR usato
-                # sopra per il breakeven), blocca quel 90% invece del
-                # solo pareggio. sl_original e' necessario perche' una
-                # volta che il breakeven sposta stop_loss a entry,
-                # quest'ultimo non riflette piu' il rischio vero.
-                if sl_orig_p is not None:
-                    risk_vero = abs(float(entry_p) - float(sl_orig_p))
-                    if risk_vero > 0:
-                        stage2_trigger = 0.90 * risk_vero
-                        if cur_mfe >= stage2_trigger:
-                            if d == "BUY":
-                                stage2_sl = entry_p + 0.90 * risk_vero
-                                deve_muovere = stage2_sl > float(sl_p)
-                            else:
-                                stage2_sl = entry_p - 0.90 * risk_vero
-                                deve_muovere = stage2_sl < float(sl_p)
-                            if deve_muovere:
-                                conn.execute(
-                                    "UPDATE lh_signals SET stop_loss=? WHERE signal_id=?",
-                                    (stage2_sl, sid)
-                                )
-                                conn.commit()
-                                logger.info(
-                                    "LH Stadio2 [%s]: %s SL spostato a %.4f (90%% rischio vero, mfe=%.2f)",
-                                    asset, sid[:8], stage2_sl, cur_mfe
-                                )
+            # ── Stadio 1: breakeven semplice -- QUESTO si', dipende da ATR ──
+            if be_threshold > 0 and cur_mfe >= be_threshold:
+                if (d == "BUY" and float(sl_p) < float(entry_p)) or \
+                   (d == "SELL" and float(sl_p) > float(entry_p)):
+                    conn.execute(
+                        "UPDATE lh_signals SET stop_loss=? WHERE signal_id=?",
+                        (entry_p, sid)
+                    )
+                    conn.commit()
+                    sl_p = entry_p  # cosi' lo Stadio 2 sotto vede il valore aggiornato
+                    logger.info(
+                        "LH BE [%s]: %s SL spostato a breakeven (entry=%.4f, mfe=%.2f)",
+                        asset, sid[:8], entry_p, cur_mfe
+                    )
+
+            # ── Stadio 2: oltre il semplice breakeven ────────────
+            # Validato fuori campione il 05/09 (sviluppo/validazione
+            # praticamente identici: +0.353R/+0.353R su dati puliti
+            # post-24/08): se il progresso raggiunge il 90% del
+            # rischio VERO originale (sl_original, non l'ATR usato
+            # sopra per il breakeven), blocca quel 90% invece del
+            # solo pareggio. sl_original e' necessario perche' una
+            # volta che il breakeven sposta stop_loss a entry,
+            # quest'ultimo non riflette piu' il rischio vero.
+            # INDIPENDENTE da be_threshold/atr_m15 -- gira sempre.
+            if sl_orig_p is not None:
+                risk_vero = abs(float(entry_p) - float(sl_orig_p))
+                if risk_vero > 0:
+                    stage2_trigger = 0.90 * risk_vero
+                    if cur_mfe >= stage2_trigger:
+                        if d == "BUY":
+                            stage2_sl = entry_p + 0.90 * risk_vero
+                            deve_muovere = stage2_sl > float(sl_p)
+                        else:
+                            stage2_sl = entry_p - 0.90 * risk_vero
+                            deve_muovere = stage2_sl < float(sl_p)
+                        if deve_muovere:
+                            conn.execute(
+                                "UPDATE lh_signals SET stop_loss=? WHERE signal_id=?",
+                                (stage2_sl, sid)
+                            )
+                            conn.commit()
+                            logger.info(
+                                "LH Stadio2 [%s]: %s SL spostato a %.4f (90%% rischio vero, mfe=%.2f)",
+                                asset, sid[:8], stage2_sl, cur_mfe
+                            )
+
         try:
             filled = lh_db.monitor_pending_lh_signals(
                 conn, asset,
@@ -442,6 +453,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                 )
         except AttributeError:
             pass
+
         updated  = lh_db.monitor_open_lh_signals(
             conn, asset,
             current_high=current_high_m,
@@ -483,9 +495,15 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                             upd["signal_id"][:8], sl_v, entry_v,
                         )
                     else:
+                        # lh_integration.py si aspetta "BE" esatto (non
+                        # "BE_HIT", la nuova etichetta introdotta l'08/09
+                        # per distinguere il pareggio da una perdita vera
+                        # nella tabella locale) -- traduco qui, cosi'
+                        # nessun altro file deve cambiare.
+                        _outcome_per_ledger = "BE" if upd["outcome"] == "BE_HIT" else upd["outcome"]
                         ledger_link.link_outcome(
                             decision_id=upd["signal_id"],
-                            outcome=upd["outcome"],
+                            outcome=_outcome_per_ledger,
                             entry=entry_v, stop_loss=sl_v,
                             mae=upd.get("mae"), mfe=upd.get("mfe"),
                             duration_bars=upd.get("bars_open"),
@@ -495,6 +513,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                 logger.warning("LH ledger link_outcome fallito (non-blocking): %s", e)
     except Exception as e:
         logger.error("LH Monitor [%s]: errore: %s", asset, e)
+
     try:
         result = generate_lh_signal(asset, df_m15, now,
                                     mie_context=mie_context, df_m5=df_m5,
@@ -502,18 +521,23 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     except Exception as e:
         logger.error("LH [%s]: errore generazione: %s", asset, e)
         return
+
     signal = result["signal"]
     diag   = result["diagnostics"]
+
     if signal is None:
         logger.info("LH [%s]: no signal — %s", asset, diag.get("rejection", "UNKNOWN"))
         return
+
     direction = signal["direction"]
+
     if lh_db.has_open_lh_signal(conn, asset, direction):
         logger.info(
             "LH [%s %s]: segnale OPEN già presente, skip.",
             asset, direction,
         )
         return
+
     entry = signal.get("entry", 0)
     sl = signal.get("stop_loss", 0)
     if entry and sl:
@@ -533,6 +557,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                     asset, direction, abs(entry - sl) / entry,
                 )
                 return
+
     ob_ref = signal.get("swept_level_label", "")
     if ob_ref and lh_db.has_recent_lh_signal(
         conn, asset, direction, ob_ref, hours=4
@@ -542,6 +567,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
             asset, direction, ob_ref,
         )
         return
+
     # ══════════════════════════════════════════════════════════
     # ── Filtro di consenso: 5 engine MIE validati insieme ──────
     # ══════════════════════════════════════════════════════════
@@ -568,12 +594,15 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
             asset, direction, _consenso_stati,
         )
         return
+
     signal["market_snapshot"] = json.dumps(mie_context, default=str)
+
     try:
         signal_id = lh_db.insert_lh_signal(conn, signal)
     except Exception as e:
         logger.error("LH [%s]: errore inserimento: %s", asset, e)
         return
+
     if signal.get("setup_state") == "WATCHING":
         logger.info(
             "LH [%s %s]: ordine PENDENTE — non inviato al Decision Ledger "
@@ -591,6 +620,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         ledger_link.capture_executed(signal_id, asset, signal, snapshots)
       except Exception as e:
         logger.warning("LH [%s]: ledger capture fallito (non-blocking): %s", asset, e)
+
     logger.info(
         "LH [%s %s]: SEGNALE %s (%s) entry=%.4f sl=%.4f tp1=%.4f rr=%.2f "
         "ob=%s score=%.2f (%s) (id=%s)",
@@ -602,7 +632,10 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         float(signal["quality_score"]), signal["quality_label"],
         signal_id,
     )
+
     _notify(signal, config)
+
+
 def _notify_zone_near(asset: str, zone: dict, config: dict):
     """
     Secondo livello, piu' urgente del primo avviso "sorvegliala": il
@@ -613,13 +646,16 @@ def _notify_zone_near(asset: str, zone: dict, config: dict):
     """
     try:
         from notifications import telegram_bot, ntfy_bot
+
         kind = zone["zone_kind"]
         emoji = "\U0001f7e2" if kind == "BULLISH" else "\U0001f534"
         kind_it = "rialzista" if kind == "BULLISH" else "ribassista"
         precision_note = "" if zone.get("m5_refined") else " (non raffinata, M5 assente)"
+
         def fp(v):
             if v is None: return "N/A"
             return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
+
         trade = zone.get("suggested_trade")
         trade_line = ""
         if trade:
@@ -628,6 +664,7 @@ def _notify_zone_near(asset: str, zone: dict, config: dict):
                 f"Entry: `{fp(trade['entry'])}`  SL: `{fp(trade['stop_loss'])}`  "
                 f"TP: `{fp(trade['take_profit'])}`\n"
             )
+
         text = (
             f"{emoji} \U0001f6a8 *Restart Zone {kind_it} VICINISSIMA*\n"
             f"{asset.replace('_',' ')} — siamo dentro l'area, a {zone.get('distance_points',0):.1f} punti.\n\n"
@@ -641,29 +678,37 @@ def _notify_zone_near(asset: str, zone: dict, config: dict):
             f"_- Il movimento e' deciso o debole?_\n\n"
             f"_Informativo \u2014 non e' un segnale di trading._"
         )
+
         bot_token  = config.get("TELEGRAM_BOT_TOKEN", "")
         chat_id    = config.get("TELEGRAM_CHAT_ID", "")
         ntfy_topic = config.get("NTFY_TOPIC", "")
+
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
         if ntfy_topic:
             title = f"VICINISSIMA: Restart Zone {kind_it} {asset.replace('_',' ')}"
             ntfy_bot.send_message(ntfy_topic, title, text.replace("*","").replace("`","").replace("_",""))
+
     except Exception as e:
         logger.warning("LH _notify_zone_near: %s", e)
+
+
 def _notify_zone(asset: str, zone: dict, config: dict):
     """
     Notifica INFORMATIVA di Restart Zone — non un trade. Nessun
     entry/SL/TP operativo: solo "guarda qui", il resto lo decide il trader.
+
     Il messaggio guida con la frase in chiaro (zona interessante, da
     sorvegliare, ci si sta avvicinando) — i numeri tecnici restano come
     dettaglio di supporto sotto, non in testa.
     """
     try:
         from notifications import telegram_bot, ntfy_bot
+
         kind = zone["zone_kind"]  # BULLISH / BEARISH
         emoji = "\U0001f7e2" if kind == "BULLISH" else "\U0001f534"
         kind_it = "rialzista" if kind == "BULLISH" else "ribassista"
+
         strength = zone.get("zone_strength")
         if strength == "STRONG":
             headline = f"Restart Zone {kind_it} molto interessante — sorvegliala."
@@ -671,12 +716,15 @@ def _notify_zone(asset: str, zone: dict, config: dict):
             headline = f"Restart Zone {kind_it} da tenere d'occhio."
         else:  # WEAK
             headline = f"Restart Zone {kind_it} (impulso trovato, poche conferme)."
+
         confirmations = zone.get("confirmations") or []
         conf_line = ", ".join(confirmations) if confirmations else "nessuna conferma SMC"
         precision_note = "" if zone.get("m5_refined") else " \u26a0\ufe0f non raffinata (M5 assente)"
+
         def fp(v):
             if v is None: return "N/A"
             return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
+
         trade = zone.get("suggested_trade")
         trade_line = ""
         if trade:
@@ -685,6 +733,7 @@ def _notify_zone(asset: str, zone: dict, config: dict):
                 f"Entry: `{fp(trade['entry'])}`  SL: `{fp(trade['stop_loss'])}`  "
                 f"TP: `{fp(trade['take_profit'])}`\n"
             )
+
         text = (
             f"{emoji} *{headline}*\n"
             f"{asset.replace('_',' ')} — ci si sta avvicinando alla zona.\n\n"
@@ -695,30 +744,39 @@ def _notify_zone(asset: str, zone: dict, config: dict):
             + trade_line +
             f"\n_Informativo \u2014 non e' un segnale di trading._"
         )
+
         bot_token  = config.get("TELEGRAM_BOT_TOKEN", "")
         chat_id    = config.get("TELEGRAM_CHAT_ID", "")
         ntfy_topic = config.get("NTFY_TOPIC", "")
+
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
         if ntfy_topic:
             title = f"{headline} {asset.replace('_',' ')}"
             ntfy_bot.send_message(ntfy_topic, title, text.replace("*","").replace("`",""))
+
     except Exception as e:
         logger.warning("LH _notify_zone: %s", e)
+
+
 def _notify(signal: dict, config: dict):
     try:
         from notifications import telegram_bot, ntfy_bot
+
         direction = signal["direction"]
         asset     = signal["asset"]
         emoji     = "\U0001f7e2" if direction == "BUY" else "\U0001f534"
         dir_it    = "LONG" if direction == "BUY" else "SHORT"
+
         def fp(v):
             if v is None: return "N/A"
             return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
+
         # Stelle dal restart_score
         score = signal.get("quality_score", 0)
         n_stars = 5 if score >= 90 else (4 if score >= 70 else (3 if score >= 50 else (2 if score >= 30 else 1)))
         stars = "\u2605" * n_stars + "\u2606" * (5 - n_stars)
+
         # Tag brevi dalle conferme
         confs = signal.get("confirmations", [])
         tag_map = {"ORDER_BLOCK":"OB","FVG":"FVG","BOS":"BOS","SWEEP":"LIQ",
@@ -732,6 +790,7 @@ def _notify(signal: dict, config: dict):
             if len(tags) >= 3:
                 break
         tags_str = " + ".join(tags) if tags else "impulso puro"
+
         text = (
             f"{emoji} *{dir_it} — Restart Zone*\n"
             f"*{asset.replace('_',' ')}*\n\n"
@@ -743,20 +802,26 @@ def _notify(signal: dict, config: dict):
             f"RR: {signal['rr']:.1f}\n\n"
             f"Sessione: {signal.get('session','?')}"
         )
+
         bot_token  = config.get("TELEGRAM_BOT_TOKEN", "")
         chat_id    = config.get("TELEGRAM_CHAT_ID", "")
         ntfy_topic = config.get("NTFY_TOPIC", "")
+
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
         if ntfy_topic:
             title = (f"LH {dir_it} {asset.replace('_',' ')} | "
                      f"{stars} {tags_str}")
             ntfy_bot.send_message(ntfy_topic, title, text.replace("*","").replace("`",""))
+
     except Exception as e:
         logger.warning("LH _notify: %s", e)
+
+
 def run_lh_scan(config: dict):
     conn = core_db.get_connection(config["DB_PATH"])
     lh_db.init_lh_schema(conn)
+
     now    = datetime.now(timezone.utc)
     assets = config.get("LH_SCANNER", {}).get("assets", LH_ASSETS)
 
@@ -785,9 +850,11 @@ def run_lh_scan(config: dict):
 #   - Orario di invio: pensato per le 20:00 UTC (prima della chiusura
 #     europea/apertura Asia) -- il trigger orario va nello scan.yml,
 #     stesso pattern gia' usato per il Daily Brief (vedi sotto).
+
 def _format_digest_message(asset: str, digest: dict) -> str:
     """Compone il testo del messaggio nello stile esatto del mockup fornito."""
     lines = [f"*{asset.replace('_',' ')}*", ""]
+
     if digest["buy_lines"]:
         lines.append("\U0001f7e2 *BUY WATCH*")
         lines.append("")
@@ -796,6 +863,7 @@ def _format_digest_message(asset: str, digest: dict) -> str:
             lines.append(l["stars"])
             lines.append(l["tags"])
             lines.append("")
+
     if digest["sell_lines"]:
         lines.append("\U0001f534 *SELL WATCH*")
         lines.append("")
@@ -804,12 +872,17 @@ def _format_digest_message(asset: str, digest: dict) -> str:
             lines.append(l["stars"])
             lines.append(l["tags"])
             lines.append("")
+
     if not digest["buy_lines"] and not digest["sell_lines"]:
         lines.append("_Nessuna Restart Zone di qualita' sufficiente oggi._")
         lines.append("")
+
     lines.append("\U0001f3af *Focus di domani*")
     lines.append(digest["focus"])
+
     return "\n".join(lines)
+
+
 def _get_macro_events_for_tomorrow() -> list:
     """
     Variante di _get_macro_events() (core/daily_brief.py) per il digest
@@ -818,6 +891,7 @@ def _get_macro_events_for_tomorrow() -> list:
     "gli eventi di oggi" a quell'ora significa mostrare eventi delle
     14:30 gia' passati da 4h e mezza, inutili per chi deve decidere se
     lasciare ordini pendenti overnight.
+
     Stessa fonte dati (Forex Factory, nessuna API key), stessa mappa
     valute/paesi e stesso filtro "solo impatto alto" del Daily Brief --
     cambia solo la data target del confronto.
@@ -834,10 +908,12 @@ def _get_macro_events_for_tomorrow() -> list:
         events = resp.json()
         if not isinstance(events, list):
             return []
+
         currency_map = {
             "USD": "US", "EUR": "EU", "GBP": "UK", "JPY": "JP",
             "CNY": "CN", "CHF": "CH", "AUD": "AU", "CAD": "CA",
         }
+
         filtered = []
         for ev in events:
             if ev.get("impact") not in ("High",):
@@ -846,6 +922,7 @@ def _get_macro_events_for_tomorrow() -> list:
             country = currency_map.get(currency, currency)
             if country not in MACRO_COUNTRIES:
                 continue
+
             date_str = ev.get("date", "")
             if not date_str:
                 continue
@@ -859,14 +936,18 @@ def _get_macro_events_for_tomorrow() -> list:
                 time_local = f"{h_local:02d}:{dt_utc.minute:02d}"
             except Exception:
                 continue
+
             filtered.append({
                 "time": time_local, "event": ev.get("title", "?"),
                 "country": country, "impact": "High",
             })
+
         filtered.sort(key=lambda e: e["time"])
         return filtered
     except Exception:
         return []
+
+
 def send_zone_digest(config: dict):
     """
     Riepilogo serale delle Restart Zone ancora valide -- "Overnight
@@ -875,8 +956,10 @@ def send_zone_digest(config: dict):
     """
     conn = core_db.get_connection(config["DB_PATH"])
     lh_db.init_lh_schema(conn)
+
     now = datetime.now(timezone.utc)
     assets = config.get("LH_SCANNER", {}).get("assets", LH_ASSETS)
+
     parts = []
     for asset in assets:
         try:
@@ -884,20 +967,27 @@ def send_zone_digest(config: dict):
         except Exception as e:
             logger.error("LH Digest [%s]: errore lettura zone: %s", asset, e)
             continue
+
         buy_zones  = [z for z in zones if z["zone_kind"] == "BULLISH"]
         sell_zones = [z for z in zones if z["zone_kind"] == "BEARISH"]
+
         if not buy_zones and not sell_zones:
             logger.info("LH Digest [%s]: nessuna zona valida, skip.", asset)
             continue
+
         digest = format_zone_digest(asset, buy_zones, sell_zones)
         parts.append(_format_digest_message(asset, digest))
+
     conn.close()
+
     if not parts:
         logger.info("LH Digest: nessuna zona valida su nessun asset, nessun invio.")
         return
+
     header = "\U0001f319 *GOLD EDGE AI*\nOvernight Trading Plan\n\n"
     body = "\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n".join(parts)
     full_message = header + body
+
     # ── Eventi macro -- FIX (13/08, bug trovato dall'utente): il digest
     # serale girava a 19:00 UTC e riusava _get_macro_events() del Daily
     # Brief, che filtra per "oggi". Alle 19:00 un evento delle 14:30 e'
