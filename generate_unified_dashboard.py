@@ -288,11 +288,31 @@ def load_lh_open(conn):
 
 def load_lh_stats(conn):
     try:
-        rows = q(conn,"SELECT final_outcome, COUNT(*) FROM lh_signals WHERE final_outcome!='OPEN' AND timestamp_setup > ? GROUP BY final_outcome", (LH_EPOCH_DATE,))
-        d = {r[0]:r[1] for r in rows}; n = sum(d.values())
-        wins = d.get("TP",0); sls = d.get("SL",0)
+        rows = q(conn,
+            "SELECT final_outcome, rr FROM lh_signals "
+            "WHERE final_outcome!='OPEN' AND timestamp_setup > ?",
+            (LH_EPOCH_DATE,))
+        n = len(rows)
+        if n == 0:
+            opn = q(conn,"SELECT COUNT(*) FROM lh_signals WHERE final_outcome='OPEN' AND timestamp_setup > ?", (LH_EPOCH_DATE,))[0][0]
+            return {"n":0,"open":opn,"win":0,"exp_r":0}
+        wins = sum(1 for outcome, rr in rows if outcome == "TP")
+        # R vero per ciascun trade -- non piu' (wins*2-sls)/n, che
+        # trattava silenziosamente STAGE2_HIT come 0R invece del vero
+        # +0.90R (stesso fix applicato in generate_analytics_dashboard.py
+        # l'08/09).
+        vals = []
+        for outcome, rr in rows:
+            if outcome == "TP":
+                vals.append(rr if rr else 2.0)
+            elif outcome == "STAGE2_HIT":
+                vals.append(0.90)
+            elif outcome == "SL":
+                vals.append(-1.0)
+            else:  # BE_HIT, EXPIRED, altro
+                vals.append(0.0)
         opn = q(conn,"SELECT COUNT(*) FROM lh_signals WHERE final_outcome='OPEN' AND timestamp_setup > ?", (LH_EPOCH_DATE,))[0][0]
-        return {"n":n,"open":opn,"win":round(wins/n*100,1) if n>0 else 0,"exp_r":round((wins*2-sls)/n,2) if n>0 else 0}
+        return {"n":n,"open":opn,"win":round(wins/n*100,1),"exp_r":round(sum(vals)/n,2)}
     except sqlite3.OperationalError:
         return {"n":0,"open":0,"win":0,"exp_r":0}
 
@@ -315,7 +335,8 @@ def fmt_ts(ts):
 
 def outcome_badge(o):
     cls = {"TP":"b-tp","SL":"b-sl","EXPIRED":"b-exp",
-           "TP1_HIT":"b-tp","TP2_HIT":"b-tp","SL_HIT":"b-sl"}.get(o,"b-exp")
+           "TP1_HIT":"b-tp","TP2_HIT":"b-tp","SL_HIT":"b-sl",
+           "BE_HIT":"b-be","STAGE2_HIT":"b-stage2"}.get(o,"b-exp")
     return f'<span class="badge {cls}">{o}</span>'
 
 def direction_badge(d):
@@ -379,6 +400,8 @@ tr:last-child td{border-bottom:none} tr:hover td{background:rgba(255,255,255,.02
 .b-sell{background:rgba(255,107,107,.15);color:var(--sell)}
 .b-tp{background:rgba(79,255,176,.15);color:var(--buy)}
 .b-sl{background:rgba(255,107,107,.15);color:var(--sell)}
+.b-be{background:rgba(56,189,248,.15);color:var(--accent5)}
+.b-stage2{background:rgba(167,139,250,.15);color:var(--accent4)}
 .b-exp{background:rgba(90,100,120,.2);color:var(--dim)}
 .b-high{background:rgba(79,255,176,.15);color:var(--buy)}
 .b-med{background:rgba(255,209,102,.15);color:var(--accent3)}
