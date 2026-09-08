@@ -8,6 +8,7 @@ Tabella: lh_signals
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -59,7 +60,7 @@ CREATE TABLE IF NOT EXISTS lh_signals (
     quality_label            TEXT CHECK(quality_label IN ('LOW','MEDIUM','HIGH')),
 
     final_outcome            TEXT DEFAULT 'OPEN'
-        CHECK(final_outcome IN ('OPEN','TP','SL','EXPIRED')),
+        CHECK(final_outcome IN ('OPEN','TP','SL','BE_HIT','STAGE2_HIT','EXPIRED')),
     mae                      REAL DEFAULT 0,
     mfe                      REAL DEFAULT 0,
     bars_open                INTEGER DEFAULT 0,
@@ -259,11 +260,57 @@ def _migrate_zone_recurrence(conn: sqlite3.Connection):
     conn.commit()
 
 
+def _migrate_add_be_stage2(conn: sqlite3.Connection):
+    """
+    Aggiunge 'BE_HIT' e 'STAGE2_HIT' al vincolo CHECK su final_outcome --
+    SQLite non permette ALTER su un CHECK esistente, serve ricreare la
+    tabella. Stessa tecnica di sicurezza gia' usata per trb_signals:
+    backup prima di ogni modifica, mai perdita dati. Idempotente:
+    verifica lo schema reale (non un flag), sicuro richiamarlo ad ogni
+    avvio.
+
+    Trovato l'08/09 controllando i trade LH reali: dal fix dello
+    Stadio2, su 21 trade recenti 12 su 21 (57%) erano in realta'
+    protetti (pareggio o guadagno vero) ma etichettati "SL" come
+    qualunque perdita piena -- non distinguibile guardando solo
+    final_outcome, serviva leggere stop_loss/sl_original a mano.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='lh_signals'"
+    ).fetchone()
+    if row is None or "STAGE2_HIT" in row[0]:
+        return
+
+    logger_mig = logging.getLogger("lh_db.migration")
+    logger_mig.warning("lh_signals: vincolo CHECK senza BE_HIT/STAGE2_HIT -- migrazione in corso.")
+
+    conn.execute("DROP TABLE IF EXISTS lh_signals_pre_migration")
+    conn.execute("ALTER TABLE lh_signals RENAME TO lh_signals_pre_migration")
+    conn.executescript(SCHEMA_SQL)
+
+    old_cols = {r[1] for r in conn.execute("PRAGMA table_info(lh_signals_pre_migration)")}
+    new_cols = {r[1] for r in conn.execute("PRAGMA table_info(lh_signals)")}
+    comuni = [c for c in old_cols if c in new_cols]
+    col_list = ", ".join(comuni)
+    try:
+        conn.execute(
+            f"INSERT INTO lh_signals ({col_list}) SELECT {col_list} FROM lh_signals_pre_migration"
+        )
+        n = conn.execute("SELECT COUNT(*) FROM lh_signals").fetchone()[0]
+        logger_mig.warning("Migrazione completata: %d righe ripristinate.", n)
+    except sqlite3.Error as e:
+        logger_mig.error(
+            "Ripristino dati fallito (%s) -- tabella nuova vuota ma funzionante, "
+            "dati vecchi intatti in lh_signals_pre_migration.", e)
+    conn.commit()
+
+
 def init_lh_schema(conn: sqlite3.Connection):
     conn.executescript(SCHEMA_SQL)
     _migrate_lh_flags(conn)
     _migrate_zone_alerts(conn)
     _migrate_zone_recurrence(conn)
+    _migrate_add_be_stage2(conn)
     conn.commit()
 
 
@@ -474,7 +521,7 @@ def monitor_open_lh_signals(
     rows = conn.execute(
         """
         SELECT signal_id, direction, entry, stop_loss, tp,
-               mae, mfe, bars_open, expiry_bars
+               mae, mfe, bars_open, expiry_bars, sl_original
         FROM lh_signals
         WHERE final_outcome = 'OPEN' AND asset = ?
           AND COALESCE(order_status, 'FILLED') = 'FILLED' 
@@ -485,7 +532,7 @@ def monitor_open_lh_signals(
     updated = []
 
     for row in rows:
-        sid, direction, entry, sl, tp, mae, mfe, bars_open, expiry_bars = row
+        sid, direction, entry, sl, tp, mae, mfe, bars_open, expiry_bars, sl_original = row
         if entry is None or sl is None:
             continue
 
@@ -506,7 +553,32 @@ def monitor_open_lh_signals(
         new_mfe = max(float(mfe or 0), favorable)
 
         if sl_hit:
+            # Distingue perdita piena / pareggio / protezione Stadio2 --
+            # trovato l'08/09: senza questo, 12 trade su 21 (57%)
+            # risultavano etichettati "SL" pur essendo in realta'
+            # protetti (breakeven o guadagno vero al 90% del rischio).
+            # Confronta lo stop EFFETTIVO (sl, gia' eventualmente
+            # spostato dal breakeven/Stadio2 nel runner) con entry,
+            # come FRAZIONE del rischio VERO originale (sl_original,
+            # non sl -- che dopo uno spostamento non lo riflette piu').
             outcome = "SL"
+            if sl_original is not None:
+                risk_vero = abs(float(entry) - float(sl_original))
+                if risk_vero > 1e-9:
+                    dist_da_entry = (
+                        (float(sl) - float(entry)) if direction == "BUY"
+                        else (float(entry) - float(sl))
+                    )
+                    frazione_protetta = dist_da_entry / risk_vero
+                    if frazione_protetta >= 0.5:
+                        # Ben oltre il pareggio -- solo lo Stadio2 (0.90)
+                        # arriva a questi livelli, il breakeven si ferma a 0.
+                        outcome = "STAGE2_HIT"
+                    elif frazione_protetta >= -1e-6:
+                        # Intorno allo zero -- pareggio (Stadio1), non perdita.
+                        outcome = "BE_HIT"
+                    # altrimenti resta "SL": frazione negativa, lo stop
+                    # effettivo non e' mai stato spostato in vantaggio.
         elif tp_hit:
             outcome = "TP"
         elif bars_open >= (expiry_bars or 96):
