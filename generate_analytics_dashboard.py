@@ -304,11 +304,30 @@ def stats_trb(rows):
 
 def stats_lh(rows):
     n = len(rows)
-    if n == 0: return {"n":0,"win":0,"sl":0,"exp_r":0,"avg_mae":0,"avg_mfe":0,"avg_rr":0}
-    wins = sum(1 for r in rows if r["outcome"] == "TP")
-    sls  = sum(1 for r in rows if r["outcome"] == "SL")
+    if n == 0: return {"n":0,"win":0,"sl":0,"be":0,"stage2":0,"exp_r":0,"avg_mae":0,"avg_mfe":0,"avg_rr":0}
+    wins    = sum(1 for r in rows if r["outcome"] == "TP")
+    sls     = sum(1 for r in rows if r["outcome"] == "SL")
+    bes     = sum(1 for r in rows if r["outcome"] == "BE_HIT")
+    stage2s = sum(1 for r in rows if r["outcome"] == "STAGE2_HIT")
+
+    # R vero per ciascun trade -- non piu' l'approssimazione (wins*2-sls)/n,
+    # che trattava silenziosamente STAGE2_HIT come 0R invece del vero
+    # +0.90R (bug trovato l'08/09: la protezione oltre il breakeven
+    # esisteva gia' nei dati, ma l'expectancy calcolata la ignorava).
+    vals = []
+    for r in rows:
+        if r["outcome"] == "TP":
+            vals.append(r["rr"] if r["rr"] else 2.0)
+        elif r["outcome"] == "STAGE2_HIT":
+            vals.append(0.90)
+        elif r["outcome"] == "SL":
+            vals.append(-1.0)
+        else:  # BE_HIT, EXPIRED, altro
+            vals.append(0.0)
+
     return {"n":n,"win":round(wins/n*100,1),"sl":round(sls/n*100,1),
-            "exp_r":round((wins*2-sls)/n,2),
+            "be":round(bes/n*100,1), "stage2":round(stage2s/n*100,1),
+            "exp_r":round(sum(vals)/n,3),
             "avg_mae":round(sum(r["mae"] for r in rows)/n,1),
             "avg_mfe":round(sum(r["mfe"] for r in rows)/n,1),
             "avg_rr":round(sum(r["rr"] for r in rows)/n,2)}
@@ -388,6 +407,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
 .b-tp{background:rgba(79,255,176,.15);color:var(--buy)}
 .b-sl{background:rgba(255,107,107,.15);color:var(--sell)}
 .b-be{background:rgba(56,189,248,.15);color:var(--accent5)}
+.b-stage2{background:rgba(167,139,250,.15);color:var(--accent4)}
 .b-exp{background:rgba(90,100,120,.2);color:var(--dim)}
 .b-open{background:rgba(255,209,102,.15);color:var(--accent3)}
 .b-buy{background:rgba(79,255,176,.15);color:var(--buy)}
@@ -738,9 +758,11 @@ def section_lh(rows, recent):
     wc = "pos" if s["win"]>=40 else ("neg" if s["win"]<25 else "warn")
     ec = "pos" if s["exp_r"]>0 else "neg"
 
-    summary = f"""<div class="summary-grid cols7" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
+    summary = f"""<div class="summary-grid cols9" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
   <div><span class="big">{s['n']}</span><span class="lbl">Chiusi</span></div>
   <div><span class="big {wc}">{s['win']}%</span><span class="lbl">Win Rate</span></div>
+  <div><span class="big" style="color:var(--accent4)">{s['stage2']}%</span><span class="lbl">Stadio2 Rate</span></div>
+  <div><span class="big" style="color:var(--accent5)">{s['be']}%</span><span class="lbl">BE Rate</span></div>
   <div><span class="big neg">{s['sl']}%</span><span class="lbl">SL Rate</span></div>
   <div><span class="big {ec}">{s['exp_r']:+.2f}R</span><span class="lbl">Expectancy</span></div>
   <div><span class="big">{s['avg_rr']:.2f}</span><span class="lbl">Avg R/R</span></div>
@@ -767,7 +789,7 @@ def section_lh(rows, recent):
         for r in recent:
             sid,asset,direction,entry,sl,tp,rr,qs,ql,level,lvl_pri,sweep,trigger,tp_label,outcome,mae,mfe,bars,ts,sl_orig = r
             sl_display = sl_orig if sl_orig is not None else sl
-            oc = {"TP":"b-tp","SL":"b-sl","EXPIRED":"b-exp","OPEN":"b-open"}.get(outcome,"b-exp")
+            oc = {"TP":"b-tp","SL":"b-sl","BE_HIT":"b-be","STAGE2_HIT":"b-stage2","EXPIRED":"b-exp","OPEN":"b-open"}.get(outcome,"b-exp")
             body += f"""<tr>
   <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(ts)}</td>
   <td><strong>{asset.replace('_USDT','')}</strong></td>
