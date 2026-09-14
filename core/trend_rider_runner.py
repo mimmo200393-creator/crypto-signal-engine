@@ -321,6 +321,9 @@ def _notify_stop_move(sp: dict, config: dict):
         if sp["event"] == "TP1_REACHED":
             titolo = "SPOSTA STOP A BREAKEVEN"
             dettaglio = "TP1 raggiunto — metti lo stop a entry"
+        elif sp["event"] == "TRAIL_ACTIVATED":
+            titolo = "TRAILING STOP ATTIVATO"
+            dettaglio = "Il prezzo ha raggiunto +0.7R — sposta lo stop al livello indicato e seguilo"
         else:  # STAGE2_REACHED
             titolo = "SPOSTA STOP A TP1"
             dettaglio = "Il prezzo si sta avvicinando a TP2 — sposta lo stop al livello di TP1"
