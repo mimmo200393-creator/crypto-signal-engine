@@ -370,6 +370,14 @@ def has_open_trb_signal(
 
 
 STAGE2_PCT = 40
+TRAIL_R = 0.7
+# Trailing stop a TRAIL_R dal massimo raggiunto -- validato il 10/09
+# su 372 trade: il 75% ha direzione giusta (MFE>=0.5R), ma 102 SL
+# tornano da profitto a -1R pieno. Il trailing a 0.7R dal picco salva
+# 86 di questi (47% degli SL) senza danneggiare nessun TP2 (0% dei
+# vincenti ha MAE>0.7R dal picco). Trail 1.0R: +94R netto; 0.7R: +131R.
+# Coesiste con stage1/stage2: vince lo stop piu' stretto tra i tre.
+#
 # Breakeven, poi TP1 come protezione avanzata -- validato il 27/08
 # fuori campione (sviluppo su meta' dati, applicato a meta' MAI vista):
 # +0.387R (solo breakeven) -> +0.587R (con stadio 2), stessa frequenza
@@ -484,6 +492,23 @@ def monitor_open_trb_signals(
                 else:
                     effective_sl = min(effective_sl, stage2_lock)
 
+        # ── Trailing stop a TRAIL_R dal massimo raggiunto ──────────
+        # Si attiva quando new_mfe >= trail_dist (il prezzo ha raggiunto
+        # almeno TRAIL_R di profitto). Da quel momento, lo stop segue il
+        # picco a distanza trail_dist. Coesiste con stage1/stage2: vince
+        # lo stop piu' stretto (max per BUY, min per SELL).
+        risk_dist = abs(entry_f - sl_f)
+        trail_dist = TRAIL_R * risk_dist
+        old_trail_active = old_mfe >= trail_dist
+        trail_active_now = new_mfe >= trail_dist
+        if trail_active_now:
+            if direction == "BUY":
+                trail_sl = entry_f + (new_mfe - trail_dist)
+                effective_sl = max(effective_sl, trail_sl)
+            else:
+                trail_sl = entry_f - (new_mfe - trail_dist)
+                effective_sl = min(effective_sl, trail_sl)
+
         if direction == "BUY":
             sl_hit      = current_low  <= effective_sl
             tp1_hit_now = tp1_f is not None and current_high >= tp1_f
@@ -506,8 +531,10 @@ def monitor_open_trb_signals(
         if sl_hit:
             if bool(tp1_hit) and (stage2_active_now or stage2_was_active):
                 outcome = "TP1_HIT"  # protetto oltre breakeven, torna a TP1: guadagno vero
+            elif trail_active_now:
+                outcome = "TRAIL_HIT"  # trailing stop ha protetto il profitto
             elif bool(tp1_hit):
-                outcome = "BE_HIT"   # solo breakeven
+                outcome = "BE_HIT"   # solo breakeven (trailing non attivo)
             else:
                 outcome = "SL_HIT"
             chiude = True
@@ -530,6 +557,12 @@ def monitor_open_trb_signals(
         if outcome and chiude:
             updates += ["final_outcome = ?", "timestamp_closed = ?"]
             params  += [outcome, now_iso]
+            # Per TRAIL_HIT, salva il profitto realizzato in rr1
+            # cosi' la dashboard lo legge senza dover ricalcolare
+            if outcome == "TRAIL_HIT" and risk_dist > 0:
+                trail_r_realized = round((new_mfe - trail_dist) / risk_dist, 2)
+                updates += ["rr1 = ?"]
+                params  += [max(trail_r_realized, 0.0)]
         elif outcome == "TP1_HIT" and not chiude and not bool(tp1_hit):
             updates += ["timestamp_tp1 = ?"]
             params  += [now_iso]
@@ -574,6 +607,16 @@ def monitor_open_trb_signals(
                 spostamenti_stop.append({
                     "signal_id": sid, "asset": asset, "direction": direction,
                     "event": "STAGE2_REACHED", "new_stop": stage2_lock,
+                })
+            # ── Trailing stop: notifica quando si attiva per la prima
+            # volta o quando il livello sale significativamente ──
+            if trail_active_now and not old_trail_active:
+                trail_level = (entry_f + (new_mfe - trail_dist)
+                               if direction == "BUY"
+                               else entry_f - (new_mfe - trail_dist))
+                spostamenti_stop.append({
+                    "signal_id": sid, "asset": asset, "direction": direction,
+                    "event": "TRAIL_ACTIVATED", "new_stop": trail_level,
                 })
 
     conn.commit()
