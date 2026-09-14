@@ -52,6 +52,12 @@ MAX_ADVERSE_MOVE_ATR = 1.0
 # risolto per LH/OTE.
 COOLDOWN_HOURS = 2
 
+# Trailing stop: distanza (in multipli di R) tra il massimo raggiunto
+# e lo stop trascinato. Si attiva quando il trade raggiunge TRAIL_R di
+# profitto. Validato l'11/09 su 75 trade: TT da -0.09R a +0.52R di
+# expectancy, nessun segnale in meno.
+TRAIL_R = 0.7
+
 
 def _prepare_dataframes(conn, asset: str, config: dict):
     limit = config.get("BOOTSTRAP_TARGET_CANDLES", 300)
@@ -101,8 +107,8 @@ def _has_recent_invalidated_poi(conn, asset: str, direction: str,
     return False
 
 
-def _monitor_open_signals(conn, asset: str, df_m5, now):
-    """TP/SL/EXPIRED per i segnali gia' in ENTRY -- stesso pattern gia' visto altrove."""
+def _monitor_open_signals(conn, asset: str, df_m5, now, config=None):
+    """TP/SL/TRAIL/EXPIRED per i segnali gia' in ENTRY -- stesso pattern gia' visto altrove."""
     if df_m5 is None or len(df_m5) == 0:
         return
     current_high = float(df_m5.iloc[-1]["high"])
@@ -134,7 +140,38 @@ def _monitor_open_signals(conn, asset: str, df_m5, now):
         new_mae = max(float(mae or 0), adverse)
         new_mfe = max(float(mfe or 0), favorable)
 
-        if sl_hit:
+        # ── Trailing stop a TRAIL_R dal massimo raggiunto ──────────
+        # Validato il 11/09 su 75 trade TT: il 41% dei LOSS ha
+        # direzione giusta (MFE +1.87R medio) poi torna a SL pieno.
+        # Trailing 0.7R dal picco li chiude in profitto: TT passa da
+        # -0.09R a +0.52R di expectancy, stessa frequenza di segnali.
+        # risk = distanza entry-SL originale; il trailing si attiva
+        # quando new_mfe >= TRAIL_R*risk e segue il picco a quella
+        # distanza. Se il prezzo torna al livello trascinato -> TRAIL.
+        risk_dist = abs(entry - sl)
+        trail_dist = TRAIL_R * risk_dist
+        old_trail_active = (float(mfe or 0) >= trail_dist) and risk_dist > 0
+        trail_active = new_mfe >= trail_dist and risk_dist > 0
+        trail_hit = False
+        trail_sl = None
+        if trail_active:
+            if direction == "BUY":
+                trail_sl = entry + (new_mfe - trail_dist)
+                trail_hit = current_low <= trail_sl
+            else:
+                trail_sl = entry - (new_mfe - trail_dist)
+                trail_hit = current_high >= trail_sl
+            # Notifica solo alla PRIMA attivazione (non a ogni ciclo)
+            if not old_trail_active and not trail_hit:
+                _notify_trail(asset, direction, sid, trail_sl, config)
+
+        # Priorita': se il trailing e' attivo, lo stop effettivo e' il
+        # livello trascinato (piu' vicino al prezzo dello SL originale).
+        # Scendendo dal picco, il prezzo tocca PRIMA trail_sl e solo dopo
+        # lo SL originale -- quindi con trailing attivo lo SL originale
+        # non chiude mai a -1R un trade che il trailing protegge in
+        # profitto. Il TRAIL ha priorita' sullo SL originale.
+        if sl_hit and not trail_active:
             result_r = round(-(abs(entry-sl))/abs(entry-sl), 3) if entry != sl else 0
             tt_db.close_signal(conn, sid, "SL", result_r=result_r,
                               mae=new_mae, mfe=new_mfe, bars_open=bars_open)
@@ -142,6 +179,19 @@ def _monitor_open_signals(conn, asset: str, df_m5, now):
             if ledger_link:
                 try:
                     ledger_link.link_outcome(sid, "SL", entry, sl, mae=new_mae, mfe=new_mfe, duration_bars=bars_open)
+                except Exception as e:
+                    logger.warning("TT [%s]: ledger link_outcome fallito (non-blocking): %s", asset, e)
+        elif trail_hit and not tp_hit:
+            # Trailing stop colpito prima del TP: profitto parziale protetto
+            trail_r = round((new_mfe - trail_dist) / risk_dist, 3)
+            trail_r = max(trail_r, 0.0)
+            tt_db.close_signal(conn, sid, "TRAIL", result_r=trail_r,
+                              mae=new_mae, mfe=new_mfe, bars_open=bars_open)
+            logger.info("TT [%s]: %s -> TRAIL (+%.2fR)", asset, sid[:8], trail_r)
+            if ledger_link:
+                try:
+                    ledger_link.link_outcome(sid, "TP", entry, sl, mae=new_mae, mfe=new_mfe,
+                                            duration_bars=bars_open, rr_planned=trail_r)
                 except Exception as e:
                     logger.warning("TT [%s]: ledger link_outcome fallito (non-blocking): %s", asset, e)
         elif tp_hit:
@@ -197,6 +247,36 @@ def _notify_entry(asset, direction, signal, entry, sl, tp, config):
             ntfy_bot.send_message(ntfy_topic, title, text.replace("*", "").replace("`", ""))
     except Exception as e:
         logger.warning("TT _notify_entry: %s", e)
+
+
+def _notify_trail(asset, direction, sid, trail_sl, config):
+    """Notifica una sola volta, quando il trailing si attiva (+0.7R)."""
+    if not config:
+        return
+    try:
+        from notifications import telegram_bot, ntfy_bot
+        emoji = "\U0001f7e2" if direction == "BUY" else "\U0001f534"
+
+        def fp(v):
+            return f"{v:,.2f}" if abs(v) > 1000 else f"{v:.4f}"
+
+        text = (
+            f"{emoji} *TT — TRAILING STOP ATTIVATO*\n"
+            f"*{asset.replace('_',' ')}* — {direction}\n\n"
+            f"Il prezzo ha raggiunto +0.7R — sposta lo stop al livello "
+            f"indicato e seguilo verso il target.\n"
+            f"Nuovo stop: `{fp(trail_sl)}`\n"
+        )
+        bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = config.get("TELEGRAM_CHAT_ID", "")
+        ntfy_topic = config.get("NTFY_TOPIC", "")
+        if bot_token and chat_id:
+            telegram_bot.send_message(bot_token, chat_id, text)
+        if ntfy_topic:
+            title = f"TT TRAIL {asset.replace('_',' ')} {direction}"
+            ntfy_bot.send_message(ntfy_topic, title, text.replace("*", "").replace("`", ""))
+    except Exception as e:
+        logger.warning("TT _notify_trail: %s", e)
 
 
 def _read_reaction_map_score(conn, asset: str) -> float:
@@ -369,7 +449,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
 
     # ── Monitoraggio segnali ENTRY (aperti) ──────────────────
     try:
-        _monitor_open_signals(conn, asset, df_m5, now)
+        _monitor_open_signals(conn, asset, df_m5, now, config)
     except Exception as e:
         logger.error("TT [%s]: errore monitoraggio ENTRY: %s", asset, e)
 
