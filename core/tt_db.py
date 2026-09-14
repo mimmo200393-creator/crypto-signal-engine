@@ -396,7 +396,7 @@ def close_signal(conn: sqlite3.Connection, signal_id: str, result: str,
                bars_open=COALESCE(?,bars_open)
         WHERE signal_id=?
         """,
-        (result, "WIN" if result == "TP" else ("LOSS" if result == "SL" else result),
+        (result, "WIN" if result in ("TP", "TRAIL") else ("LOSS" if result == "SL" else result),
          result_r, datetime.now(timezone.utc).isoformat(), mae, mfe, bars_open, signal_id),
     )
     conn.commit()
