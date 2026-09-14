@@ -79,23 +79,32 @@ def load_tt_open(conn):
 
 def load_tt_stats(conn):
     """
-    Win rate/expectancy SOLO su esiti decisi (TP/SL/EXPIRED). INVALIDATED
-    escluso di proposito (spec TT: non e' una loss, gonfierebbe/
-    sgonfierebbe il win rate in modo scorretto se mischiato).
+    Win rate/expectancy SOLO su esiti decisi (TP/SL/TRAIL/EXPIRED).
+    INVALIDATED escluso di proposito (spec TT: non e' una loss,
+    gonfierebbe/sgonfierebbe il win rate in modo scorretto se mischiato).
+    TRAIL = chiusura via trailing stop in profitto parziale, conta come win.
     """
     try:
-        rows = q(conn, "SELECT status, COUNT(*) FROM tt_signals WHERE status IN ('TP','SL','EXPIRED') AND signal_created_at > ? GROUP BY status", (TT_EPOCH_DATE,))
+        rows = q(conn, "SELECT status, COUNT(*) FROM tt_signals WHERE status IN ('TP','SL','TRAIL','EXPIRED') AND signal_created_at > ? GROUP BY status", (TT_EPOCH_DATE,))
         d = {r[0]: r[1] for r in rows}
-        n = sum(d.values()); wins = d.get("TP",0); sls = d.get("SL",0)
+        n = sum(d.values())
+        wins = d.get("TP",0) + d.get("TRAIL",0)
+        sls = d.get("SL",0)
+        trails = d.get("TRAIL",0)
+        # Expectancy dai result_r reali (TP e TRAIL hanno R diversi),
+        # SL = -1R, EXPIRED = 0R. Molto piu' accurato della formula fissa.
+        r_rows = q(conn, "SELECT result_r FROM tt_signals WHERE status IN ('TP','SL','TRAIL') AND result_r IS NOT NULL AND signal_created_at > ?", (TT_EPOCH_DATE,))
+        total_r = sum(float(r[0]) for r in r_rows if r[0] is not None)
         waiting = q(conn, "SELECT COUNT(*) FROM tt_signals WHERE status='SETUP' AND signal_created_at > ?", (TT_EPOCH_DATE,))[0][0]
         entry_open = q(conn, "SELECT COUNT(*) FROM tt_signals WHERE status='ENTRY' AND signal_created_at > ?", (TT_EPOCH_DATE,))[0][0]
         invalidated = q(conn, "SELECT COUNT(*) FROM tt_signals WHERE status='INVALIDATED' AND signal_created_at > ?", (TT_EPOCH_DATE,))[0][0]
         return {"n":n, "open": waiting + entry_open,
                 "win":round(wins/n*100,1) if n>0 else 0,
-                "exp_r":round((wins*2-sls)/n,2) if n>0 else 0,
+                "trail": trails,
+                "exp_r":round(total_r/n,2) if n>0 else 0,
                 "invalidated": invalidated}
     except sqlite3.OperationalError:
-        return {"n":0,"open":0,"win":0,"exp_r":0,"invalidated":0}
+        return {"n":0,"open":0,"win":0,"trail":0,"exp_r":0,"invalidated":0}
 
 
 # ============================================================
@@ -244,9 +253,20 @@ def load_trb_stats(conn):
     try:
         rows = q(conn,"SELECT final_outcome, COUNT(*) FROM trb_signals WHERE final_outcome!='OPEN' GROUP BY final_outcome")
         d = {r[0]:r[1] for r in rows}; n = sum(d.values())
-        wins = d.get("TP2_HIT",0)+d.get("TP1_HIT",0); sls = d.get("SL_HIT",0)
+        # TRAIL_HIT = chiusura via trailing stop in profitto (conta come win).
+        wins = d.get("TP2_HIT",0)+d.get("TP1_HIT",0)+d.get("TRAIL_HIT",0)
+        # Expectancy dai R reali: TP2 usa rr2, TP1 e TRAIL_HIT usano rr1
+        # (per TRAIL_HIT il profitto parziale e' salvato in rr1 dal runner),
+        # SL=-1, BE/EXPIRED=0.
+        r_rows = q(conn,"SELECT final_outcome, rr1, rr2 FROM trb_signals WHERE final_outcome IN ('TP1_HIT','TP2_HIT','TRAIL_HIT','SL_HIT')")
+        total_r = 0.0
+        for o, rr1, rr2 in r_rows:
+            if o == "TP2_HIT":    total_r += rr2 if rr2 else 2.0
+            elif o == "TP1_HIT":  total_r += rr1 if rr1 else 1.0
+            elif o == "TRAIL_HIT": total_r += rr1 if rr1 else 0.0
+            elif o == "SL_HIT":   total_r -= 1.0
         opn = q(conn,"SELECT COUNT(*) FROM trb_signals WHERE final_outcome='OPEN'")[0][0]
-        return {"n":n,"open":opn,"win":round(wins/n*100,1) if n>0 else 0,"exp_r":round((wins*2-sls)/n,2) if n>0 else 0}
+        return {"n":n,"open":opn,"win":round(wins/n*100,1) if n>0 else 0,"exp_r":round(total_r/n,2) if n>0 else 0}
     except sqlite3.OperationalError:
         return {"n":0,"open":0,"win":0,"exp_r":0}
 
@@ -296,7 +316,11 @@ def load_lh_stats(conn):
         if n == 0:
             opn = q(conn,"SELECT COUNT(*) FROM lh_signals WHERE final_outcome='OPEN' AND timestamp_setup > ?", (LH_EPOCH_DATE,))[0][0]
             return {"n":0,"open":opn,"win":0,"exp_r":0}
-        wins = sum(1 for outcome, rr in rows if outcome == "TP")
+        # STAGE2_HIT e' una VITTORIA (stop spostato al 90% del rischio
+        # in profitto = +0.90R), va contato nel win rate. Escluderlo
+        # teneva il win rate artificialmente basso mentre l'expectancy
+        # gia' lo premiava -- incoerenza visibile in dashboard.
+        wins = sum(1 for outcome, rr in rows if outcome in ("TP", "STAGE2_HIT"))
         # R vero per ciascun trade -- non piu' (wins*2-sls)/n, che
         # trattava silenziosamente STAGE2_HIT come 0R invece del vero
         # +0.90R (stesso fix applicato in generate_analytics_dashboard.py
