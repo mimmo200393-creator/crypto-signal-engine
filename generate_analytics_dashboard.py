@@ -45,12 +45,13 @@ def q(conn, sql, params=()):
 
 def load_tt_signals(conn):
     """
-    Segnali TT con esito DECISO (TP/SL/EXPIRED) -- per le statistiche
+    Segnali TT con esito DECISO (TP/SL/TRAIL/EXPIRED) -- per le statistiche
     standard (win rate/expectancy). INVALIDATED e' escluso di proposito:
     la spec di TT lo distingue esplicitamente da una loss (sezione 26,
     "non deve essere considerato automaticamente una LOSS") -- mischiarlo
     qui abbasserebbe il win rate in modo scorretto. Ha il suo box
     separato (vedi load_tt_invalidated_count).
+    TRAIL = chiusura via trailing stop in profitto parziale (conta come win).
     """
     try:
         rows = q(conn, """
@@ -58,7 +59,7 @@ def load_tt_signals(conn):
                    quality_label, quality_score, planned_tp_type,
                    status, mae, mfe, planned_rr, actual_rr, bars_open,
                    signal_created_at
-            FROM tt_signals WHERE status IN ('TP','SL','EXPIRED') AND signal_created_at > ?
+            FROM tt_signals WHERE status IN ('TP','SL','TRAIL','EXPIRED') AND signal_created_at > ?
             ORDER BY signal_created_at DESC
         """, (TT_EPOCH_DATE,))
     except sqlite3.OperationalError:
@@ -277,11 +278,22 @@ def load_v41p1_signals(conn):
 
 def stats_el(rows):
     n = len(rows)
-    if n == 0: return {"n":0,"win":0,"sl":0,"exp_r":0,"avg_mae":0,"avg_mfe":0,"avg_rr":0,"avg_bars":0}
-    wins = sum(1 for r in rows if r["outcome"] == "TP")
-    sls  = sum(1 for r in rows if r["outcome"] == "SL")
+    if n == 0: return {"n":0,"win":0,"sl":0,"trail":0,"exp_r":0,"avg_mae":0,"avg_mfe":0,"avg_rr":0,"avg_bars":0}
+    wins   = sum(1 for r in rows if r["outcome"] in ("TP", "TRAIL"))
+    sls    = sum(1 for r in rows if r["outcome"] == "SL")
+    trails = sum(1 for r in rows if r["outcome"] == "TRAIL")
+    # Expectancy dai R reali: TP/TRAIL usano rr salvato, SL=-1, resto=0.
+    # (TRAIL ha rr parziale, TP rr pieno -- la vecchia wins*2-sls li
+    #  avrebbe contati entrambi come +2R, sovrastimando.)
+    total_r = 0.0
+    for r in rows:
+        if r["outcome"] in ("TP", "TRAIL"):
+            total_r += r["rr"] if r["rr"] else 0.0
+        elif r["outcome"] == "SL":
+            total_r -= 1.0
     return {"n":n,"win":round(wins/n*100,1),"sl":round(sls/n*100,1),
-            "exp_r":round((wins*2-sls)/n,2),
+            "trail":round(trails/n*100,1),
+            "exp_r":round(total_r/n,2),
             "avg_mae":round(sum(r["mae"] for r in rows)/n,1),
             "avg_mfe":round(sum(r["mfe"] for r in rows)/n,1),
             "avg_rr":round(sum(r["rr"] for r in rows)/n,2),
@@ -289,15 +301,27 @@ def stats_el(rows):
 
 def stats_trb(rows):
     n = len(rows)
-    if n == 0: return {"n":0,"win":0,"tp2":0,"sl":0,"be":0,"exp_r":0,"avg_mae":0,"avg_mfe":0,"avg_adx":0}
-    wins = sum(1 for r in rows if r["outcome"] in ("TP1_HIT","TP2_HIT"))
-    tp2  = sum(1 for r in rows if r["outcome"] == "TP2_HIT")
-    sls  = sum(1 for r in rows if r["outcome"] == "SL_HIT")
-    bes  = sum(1 for r in rows if r["outcome"] == "BE_HIT")
-    adxs = [r["adx"] for r in rows if r["adx"] > 0]
+    if n == 0: return {"n":0,"win":0,"tp2":0,"sl":0,"be":0,"trail":0,"exp_r":0,"avg_mae":0,"avg_mfe":0,"avg_adx":0}
+    wins   = sum(1 for r in rows if r["outcome"] in ("TP1_HIT","TP2_HIT","TRAIL_HIT"))
+    tp2    = sum(1 for r in rows if r["outcome"] == "TP2_HIT")
+    sls    = sum(1 for r in rows if r["outcome"] == "SL_HIT")
+    bes    = sum(1 for r in rows if r["outcome"] == "BE_HIT")
+    trails = sum(1 for r in rows if r["outcome"] == "TRAIL_HIT")
+    adxs   = [r["adx"] for r in rows if r["adx"] > 0]
+    # Expectancy dai R reali: TP2 usa rr2, TP1 e TRAIL_HIT usano rr1
+    # (per TRAIL_HIT il profitto parziale e' salvato in rr1 dal runner),
+    # SL=-1, BE/EXPIRED=0.
+    total_r = 0.0
+    for r in rows:
+        o = r["outcome"]
+        if o == "TP2_HIT":    total_r += r["rr2"] if r["rr2"] else 2.0
+        elif o == "TP1_HIT":  total_r += r["rr1"] if r["rr1"] else 1.0
+        elif o == "TRAIL_HIT": total_r += r["rr1"] if r["rr1"] else 0.0
+        elif o == "SL_HIT":   total_r -= 1.0
     return {"n":n,"win":round(wins/n*100,1),"tp2":round(tp2/n*100,1),
             "sl":round(sls/n*100,1),"be":round(bes/n*100,1),
-            "exp_r":round((wins*2-sls)/n,2),
+            "trail":round(trails/n*100,1),
+            "exp_r":round(total_r/n,2),
             "avg_mae":round(sum(r["mae"] for r in rows)/n,1),
             "avg_mfe":round(sum(r["mfe"] for r in rows)/n,1),
             "avg_adx":round(sum(adxs)/len(adxs),1) if adxs else 0}
@@ -305,7 +329,13 @@ def stats_trb(rows):
 def stats_lh(rows):
     n = len(rows)
     if n == 0: return {"n":0,"win":0,"sl":0,"be":0,"stage2":0,"exp_r":0,"avg_mae":0,"avg_mfe":0,"avg_rr":0}
-    wins    = sum(1 for r in rows if r["outcome"] == "TP")
+    # STAGE2_HIT e' una VITTORIA: lo stop viene spostato al 90% del
+    # rischio IN PROFITTO, quindi il trade chiude a +0.90R (non uno
+    # zero, non una perdita). Contarlo fuori dal win rate lo teneva
+    # artificialmente basso: l'expectancy lo premiava (+0.90R) ma il
+    # win rate lo ignorava -- da qui il "16.6% win con expectancy in
+    # pari" incoerente. BE_HIT resta neutro (pareggio, non win).
+    wins    = sum(1 for r in rows if r["outcome"] in ("TP", "STAGE2_HIT"))
     sls     = sum(1 for r in rows if r["outcome"] == "SL")
     bes     = sum(1 for r in rows if r["outcome"] == "BE_HIT")
     stage2s = sum(1 for r in rows if r["outcome"] == "STAGE2_HIT")
@@ -430,6 +460,7 @@ def _empty_row(cols):
 
 def outcome_badge(o):
     cls = {"TP":"b-tp","SL":"b-sl","EXPIRED":"b-exp","OPEN":"b-open",
+           "TRAIL":"b-tp",
            "TP1_HIT":"b-tp","TP2_HIT":"b-tp","SL_HIT":"b-sl",
            "SETUP":"b-open","ENTRY":"b-open",
            "INVALIDATED":"b-invalid"}.get(o,"b-exp")
@@ -664,12 +695,13 @@ def section_trb(rows, recent):
     wc = "pos" if s["win"]>=40 else ("neg" if s["win"]<25 else "warn")
     ec = "pos" if s["exp_r"]>0 else "neg"
 
-    summary = f"""<div class="summary-grid cols7" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
+    summary = f"""<div class="summary-grid cols8" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
   <div><span class="big">{s['n']}</span><span class="lbl">Chiusi</span></div>
   <div><span class="big {wc}">{s['win']}%</span><span class="lbl">Win Rate</span></div>
   <div><span class="big">{s['tp2']}%</span><span class="lbl">TP2 Hit</span></div>
   <div><span class="big neg">{s['sl']}%</span><span class="lbl">SL Rate</span></div>
   <div><span class="big" style="color:var(--accent5)">{s['be']}%</span><span class="lbl">BE Rate</span></div>
+  <div><span class="big" style="color:var(--accent3)">{s['trail']}%</span><span class="lbl">Trail</span></div>
   <div><span class="big {ec}">{s['exp_r']:+.2f}R</span><span class="lbl">Expectancy</span></div>
   <div><span class="big">{s['avg_adx']:.1f}</span><span class="lbl">Avg ADX</span></div>
 </div>"""
@@ -704,6 +736,7 @@ def section_trb(rows, recent):
             if outcome == "OPEN" and tp1_hit:
                 outcome_display = "OPEN·TP1"
             oc = {"TP1_HIT":"b-tp","TP2_HIT":"b-tp","SL_HIT":"b-sl","BE_HIT":"b-be",
+                 "TRAIL_HIT":"b-tp",
                  "EXPIRED":"b-exp","OPEN":"b-open","OPEN·TP1":"b-be"}.get(outcome_display,"b-exp")
             body += f"""<tr>
   <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(ts)}</td>
