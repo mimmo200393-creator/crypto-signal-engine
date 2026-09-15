@@ -215,6 +215,45 @@ def _migrate_tt_signals_if_needed(conn: sqlite3.Connection):
 def init_tt_schema(conn: sqlite3.Connection):
     _migrate_tt_signals_if_needed(conn)
     conn.executescript(SCHEMA_SQL)
+    _migrate_add_trail_status(conn)
+    conn.commit()
+
+
+def _migrate_add_trail_status(conn: sqlite3.Connection):
+    """
+    Allinea il CHECK di status per accettare 'TRAIL'.
+    I DB creati prima del trailing hanno un CHECK che NON include
+    'TRAIL': ogni tentativo di chiudere via trailing fallisce con
+    "CHECK constraint failed" e il trade resta in ENTRY. Ricostruisce
+    la tabella col CHECK aggiornato preservando dati e indici.
+    Idempotente: se gia' aggiornato non fa nulla. Sicuro ad ogni avvio.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='tt_signals'"
+    ).fetchone()
+    if not row or "'TRAIL'" in row[0]:
+        return
+
+    old = row[0]
+    new = old.replace(
+        "'TP', 'SL', 'EXPIRED'\n    ))",
+        "'TP', 'SL', 'EXPIRED', 'TRAIL'\n    ))",
+    )
+    if new == old:
+        new = old.replace(
+            "'TP', 'SL', 'EXPIRED'))",
+            "'TP', 'SL', 'EXPIRED', 'TRAIL'))",
+        )
+    if new == old:
+        return  # pattern non trovato: non tocco nulla
+    new = new.replace("CREATE TABLE tt_signals", "CREATE TABLE tt_signals_new")
+
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(tt_signals)")]
+    collist = ",".join(cols)
+    conn.execute(new)
+    conn.execute(f"INSERT INTO tt_signals_new ({collist}) SELECT {collist} FROM tt_signals")
+    conn.execute("DROP TABLE tt_signals")
+    conn.execute("ALTER TABLE tt_signals_new RENAME TO tt_signals")
     conn.commit()
 
 
