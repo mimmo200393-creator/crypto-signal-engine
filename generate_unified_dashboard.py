@@ -631,12 +631,6 @@ def generate():
 
   <div class="divider"></div>
 
-  <div class="section-title el">⚡ OTE — Zona prima, direzione dopo</div>
-  {kpi_row(ote_stats, "var(--accent)")}
-  {ote_open_table(ote_open)}
-
-  <div class="divider"></div>
-
   <div class="section-title trb">🎯 NMC Trend Rider Balanced v1.0</div>
   {kpi_row(trb_stats, "var(--accent4)")}
   {trb_open_table(trb_open)}
@@ -652,6 +646,12 @@ def generate():
   <div class="section-title v41p1">V4.1 Phase 1 — Money Flow Benchmark</div>
   {kpi_row(v41p1_stats, "var(--accent3)")}
   {v41p1_open_table(v41p1_open)}
+
+  <div class="divider"></div>
+
+  <div class="section-title el">⚡ OTE — Zona prima, direzione dopo (in osservazione)</div>
+  {kpi_row(ote_stats, "var(--accent)")}
+  {ote_open_table(ote_open)}
 
 </div>
 </body>
