@@ -144,6 +144,41 @@ def init_trb_schema(conn: sqlite3.Connection):
     conn.executescript(SCHEMA_SQL)
     _migrate_add_entry_zone(conn)
     _migrate_add_be_hit(conn)
+    _migrate_add_trail_hit(conn)
+    conn.commit()
+
+
+def _migrate_add_trail_hit(conn: sqlite3.Connection):
+    """
+    Allinea il CHECK di final_outcome per accettare 'TRAIL_HIT'.
+    I DB creati prima del trailing hanno un CHECK che NON include
+    TRAIL_HIT: ogni tentativo di chiudere un trade via trailing
+    fallisce con "CHECK constraint failed" e il trade resta OPEN.
+    Questa migrazione ricostruisce la tabella col CHECK aggiornato,
+    preservando tutti i dati e gli indici. Idempotente: se il CHECK
+    e' gia' aggiornato non fa nulla. Sicuro ad ogni avvio.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='trb_signals'"
+    ).fetchone()
+    if not row or "TRAIL_HIT" in row[0]:
+        return  # gia' aggiornato o tabella non ancora creata
+
+    old = row[0]
+    new = old.replace(
+        "CHECK(final_outcome IN ('OPEN','TP1_HIT','TP2_HIT','SL_HIT','BE_HIT','EXPIRED'))",
+        "CHECK(final_outcome IN ('OPEN','TP1_HIT','TP2_HIT','SL_HIT','BE_HIT','EXPIRED','TRAIL_HIT'))",
+    )
+    if new == old:
+        return  # pattern non trovato: non tocco nulla per sicurezza
+    new = new.replace("CREATE TABLE trb_signals", "CREATE TABLE trb_signals_new")
+
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(trb_signals)")]
+    collist = ",".join(cols)
+    conn.execute(new)
+    conn.execute(f"INSERT INTO trb_signals_new ({collist}) SELECT {collist} FROM trb_signals")
+    conn.execute("DROP TABLE trb_signals")
+    conn.execute("ALTER TABLE trb_signals_new RENAME TO trb_signals")
     conn.commit()
 
 
