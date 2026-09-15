@@ -670,7 +670,7 @@ def section_ote(rows, recent, cand_stats):
 <div class="card" style="border-top:2px solid var(--accent)">
   <div class="fw-header" style="color:var(--accent)">
     ⚡ OTE — Zona prima, direzione dopo
-    <span class="fw-tag tag-active">ATTIVO</span>
+    <span class="fw-tag tag-benchmark">IN OSSERVAZIONE</span>
     <span style="color:var(--dim);font-size:11px;margin-left:auto">Sweep+Reaction · BTC · XAU</span>
   </div>
   {summary}{no_data}
@@ -965,8 +965,6 @@ def generate():
 
   <div class="section-divider"><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">Strategie Attive</span></div>
 
-  {section_ote(ote_rows, ote_recent, ote_cand_stats)}
-
   {section_trb(trb_rows, trb_recent)}
 
   <div class="section-divider"><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">Nuove Strategie</span></div>
@@ -976,6 +974,8 @@ def generate():
   <div class="section-divider"><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">Benchmark Storico</span></div>
 
   {section_v41p1(v41p1_rows)}
+
+  {section_ote(ote_rows, ote_recent, ote_cand_stats)}
 
 </div>
 </body>
