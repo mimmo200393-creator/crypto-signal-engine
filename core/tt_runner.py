@@ -491,6 +491,44 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                        asset, signal["direction"])
             return
 
+        # ── FILTRI QUALITÀ TT — validati il 16/09 su 122 trade ──────
+        # Due categorie di setup si sono dimostrate strutturalmente
+        # perdenti e vengono scartate qui (il segnale esiste gia',
+        # ma non lo eseguiamo):
+        #  1. TACTICAL_COUNTERTREND_BULLISH: comprare contro il trend
+        #     macro -> -0.24R su 27 trade (unica combo mtf negativa).
+        #  2. ctx_15m_momentum == FLAT: mercato piatto, nessuno sweep
+        #     da catturare -> -0.08R su 35 trade.
+        # Escludendole: expectancy TT da +0.13R a +0.27R, win 38%->41%,
+        # ~24 segnali/settimana (volume ancora buono). Filtri per
+        # QUALITÀ del setup, validi su entrambi gli asset.
+        mtf = signal.get("mtf_combination")
+        mom = signal.get("ctx_15m_momentum")
+        if mtf == "TACTICAL_COUNTERTREND_BULLISH":
+            logger.info("TT [%s %s]: scartato — COUNTERTREND_BULLISH (filtro qualità).",
+                       asset, signal["direction"])
+            if ledger_link:
+                try:
+                    import uuid
+                    ledger_link.capture_rejected(
+                        str(uuid.uuid4()), asset, signal["direction"],
+                        "FILTER_COUNTERTREND_BULLISH", signal={"direction": signal["direction"]})
+                except Exception as e:
+                    logger.warning("TT [%s]: ledger capture_rejected fallito: %s", asset, e)
+            return
+        if mom == "FLAT":
+            logger.info("TT [%s %s]: scartato — momentum FLAT (filtro qualità).",
+                       asset, signal["direction"])
+            if ledger_link:
+                try:
+                    import uuid
+                    ledger_link.capture_rejected(
+                        str(uuid.uuid4()), asset, signal["direction"],
+                        "FILTER_FLAT_MOMENTUM", signal={"direction": signal["direction"]})
+                except Exception as e:
+                    logger.warning("TT [%s]: ledger capture_rejected fallito: %s", asset, e)
+            return
+
         # Tolleranza di sovrapposizione: 1x ATR M15 (stessa scala della
         # location, che ora e' su M15). Ricavo l'ATR dall'ampiezza
         # dell'Expansion (prezzo) diviso il suo multiplo in ATR --
