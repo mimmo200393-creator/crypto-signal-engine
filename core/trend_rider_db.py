@@ -406,6 +406,14 @@ def has_open_trb_signal(
 
 STAGE2_PCT = 40
 TRAIL_R = 0.7
+
+# Cuscinetto del breakeven (in frazione di R). Invece di mettere lo
+# stop esattamente a entry (0R) -- che a conti fatti e' una micro-
+# perdita perche' spread + commissioni si pagano comunque -- lo si
+# porta a entry + BE_BUFFER_R (in profitto quel tanto che copre i
+# costi). 0.10R e' una stima prudente; va tarata sullo spread reale
+# del broker (idealmente ~2x il costo tondo entrata+uscita).
+BE_BUFFER_R = 0.10
 # Trailing stop a TRAIL_R dal massimo raggiunto -- validato il 10/09
 # su 372 trade: il 75% ha direzione giusta (MFE>=0.5R), ma 102 SL
 # tornano da profitto a -1R pieno. Il trailing a 0.7R dal picco salva
@@ -508,11 +516,17 @@ def monitor_open_trb_signals(
                 else:
                     stage2_trigger_mfe = entry_f - (tp1_f - extra)
 
+        # Breakeven+ : entry piu' un cuscinetto che copre spread e
+        # commissioni, cosi' un "pareggio" e' davvero >= 0 e non una
+        # micro-perdita. Per BUY lo stop sta sopra entry, per SELL sotto.
+        be_buffer = BE_BUFFER_R * abs(entry_f - sl_f)
+        be_level = entry_f + be_buffer if direction == "BUY" else entry_f - be_buffer
+
         effective_sl = sl_f
         stage2_was_active = False
         stage2_active_now = False
         if bool(tp1_hit) and stage2_trigger_mfe is not None:
-            effective_sl = entry_f  # Stadio 1: breakeven
+            effective_sl = be_level  # Stadio 1: breakeven+ (copre i costi)
             # Soglia di attivazione: STAGE2_PCT% della distanza da
             # TP1 verso TP2. Il livello di blocco e' TP1 stesso, non
             # un valore intermedio calcolato -- se il prezzo si
@@ -628,31 +642,36 @@ def monitor_open_trb_signals(
                 appena_tp1 and stage2_trigger_mfe is not None
                 and new_mfe >= stage2_trigger_mfe
             )
+            # ── NOTIFICHE COORDINATE ────────────────────────────────
+            # Regola d'oro: lo stop notificato non torna MAI indietro.
+            # Tutte le notifiche comunicano il livello REALE effective_sl
+            # (gia' calcolato sopra come il piu' protettivo tra breakeven+,
+            # stage2 e trailing), non un valore fisso. Cosi' non capita
+            # piu' di ricevere "vai a breakeven" (entry) dopo che il
+            # trailing aveva gia' portato lo stop in profitto -- il bug
+            # osservato il 17/09 su BTC SELL (trailing a +0.17R poi
+            # TP1_REACHED che diceva di tornare a entry).
+            #
+            # Una sola notifica per ciclo, con l'etichetta dell'evento
+            # piu' avanzato scattato, ma sempre il livello effettivo.
+            def _emit(event):
+                spostamenti_stop.append({
+                    "signal_id": sid, "asset": asset, "direction": direction,
+                    "event": event, "new_stop": effective_sl,
+                })
+
             if stage2_gia_nel_primo_ciclo:
-                spostamenti_stop.append({
-                    "signal_id": sid, "asset": asset, "direction": direction,
-                    "event": "STAGE2_REACHED", "new_stop": stage2_lock,
-                })
-            elif appena_tp1:
-                spostamenti_stop.append({
-                    "signal_id": sid, "asset": asset, "direction": direction,
-                    "event": "TP1_REACHED", "new_stop": entry_f,
-                })
+                _emit("STAGE2_REACHED")
             elif stage2_active_now and not stage2_was_active:
-                spostamenti_stop.append({
-                    "signal_id": sid, "asset": asset, "direction": direction,
-                    "event": "STAGE2_REACHED", "new_stop": stage2_lock,
-                })
-            # ── Trailing stop: notifica quando si attiva per la prima
-            # volta o quando il livello sale significativamente ──
-            if trail_active_now and not old_trail_active:
-                trail_level = (entry_f + (new_mfe - trail_dist)
-                               if direction == "BUY"
-                               else entry_f - (new_mfe - trail_dist))
-                spostamenti_stop.append({
-                    "signal_id": sid, "asset": asset, "direction": direction,
-                    "event": "TRAIL_ACTIVATED", "new_stop": trail_level,
-                })
+                _emit("STAGE2_REACHED")
+            elif trail_active_now and not old_trail_active:
+                # Il trailing si attiva a 0.7R, PRIMA del breakeven (TP1
+                # a 1R): e' il primo spostamento in profitto e va notificato.
+                _emit("TRAIL_ACTIVATED")
+            elif appena_tp1:
+                # TP1 raggiunto ma trailing non ancora attivo (raro):
+                # breakeven+ classico.
+                _emit("TP1_REACHED")
 
     conn.commit()
 
