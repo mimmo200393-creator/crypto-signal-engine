@@ -58,6 +58,21 @@ COOLDOWN_HOURS = 2
 # expectancy, nessun segnale in meno.
 TRAIL_R = 0.7
 
+# Filtro qualita' XAU: rischio strutturale (SL) minimo in punti.
+# Validato il 18/09 su 43 trade XAU chiusi: sotto 8 punti l'expectancy
+# e' negativa (avgR -0.21R, n=35), sopra e' positiva (avgR +0.22R,
+# n=11). Testato anche l'allargamento dello SL sotto floor (invece di
+# scartare il segnale): PEGGIORA i risultati in replay reale con
+# candele 5M (ritarda l'attivazione del trailing) -- quindi si SCARTA
+# il segnale, non si allarga lo SL. Rischio strutturale stretto e'
+# probabile proxy di setup debole (range di consolidamento piccolo),
+# non un difetto correggibile allargando lo stop. Solo XAU: BTC non
+# mostra lo stesso effetto (0/85 trade sotto la mediana della candela
+# H1, nessuna correlazione rischio/risultato osservata).
+# Costo: taglia ~74% del volume segnali XAU (da ~9.3 a ~2.4/settimana
+# nel campione di validazione). Da confermare su volume nuovo (shadow).
+MIN_STRUCTURAL_RISK_XAU = 8.0
+
 
 def _prepare_dataframes(conn, asset: str, config: dict):
     limit = config.get("BOOTSTRAP_TARGET_CANDLES", 300)
@@ -84,17 +99,23 @@ def _price_touched_poi(df_m5, poi_low: float, poi_high: float) -> bool:
 def _has_recent_invalidated_poi(conn, asset: str, direction: str,
                                 poi_low: float, poi_high: float) -> bool:
     """
-    Cooldown: una POI invalidata di recente (stesso poi_ref O area di
-    prezzo sovrapposta) non genera un nuovo Early Signal per
-    COOLDOWN_HOURS. Controlla sia il match esatto (poi_ref uguale) sia
-    la sovrapposizione di prezzo, per coprire entrambe le classi di bug
-    gia' viste su LH/OTE.
+    Cooldown: una POI invalidata O con un trade gia' chiuso di recente
+    (stesso poi_ref O area di prezzo sovrapposta) non genera un nuovo
+    Early Signal per COOLDOWN_HOURS. Controlla sia il match esatto
+    (poi_ref uguale) sia la sovrapposizione di prezzo, per coprire
+    entrambe le classi di bug gia' viste su LH/OTE.
+
+    Fix 18/09: il controllo copriva solo status='INVALIDATED' (setup
+    mai entrati), non i trade chiusi con risultato (SL/TP/TRAIL). Gap
+    confermato sul DB: la stessa POI XAU ha generato 3 segnali in 45
+    minuti, l'ultimo creato 13ms dopo la chiusura in TRAIL del
+    precedente -- nessuno dei controlli esistenti lo bloccava.
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=COOLDOWN_HOURS)).isoformat()
     rows = conn.execute(
         """
         SELECT poi_low, poi_high FROM tt_signals
-        WHERE asset=? AND direction=? AND status='INVALIDATED' AND closed_at > ?
+        WHERE asset=? AND direction=? AND status IN ('INVALIDATED','SL','TP','TRAIL') AND closed_at > ?
         """,
         (asset, direction, cutoff),
     ).fetchall()
@@ -529,6 +550,28 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                     logger.warning("TT [%s]: ledger capture_rejected fallito: %s", asset, e)
             return
 
+        # 3. MIN_STRUCTURAL_RISK_XAU: rischio SL strutturale troppo
+        #    stretto su XAU -> -0.11R medio su 43 trade, concentrato
+        #    sotto gli 8 punti (avgR -0.21R, n=35) vs sopra (avgR
+        #    +0.22R, n=11). Si SCARTA il segnale, non si allarga lo
+        #    SL: allargare peggiora (ritarda il trailing, validato
+        #    via replay 5M reale). Solo XAU, BTC non mostra l'effetto.
+        if asset == "XAU_USD":
+            structural_risk = abs(signal["planned_entry"] - signal["planned_sl"])
+            if structural_risk < MIN_STRUCTURAL_RISK_XAU:
+                logger.info("TT [%s %s]: scartato — rischio strutturale %.2f < %.1f pt (filtro qualità XAU).",
+                           asset, signal["direction"], structural_risk, MIN_STRUCTURAL_RISK_XAU)
+                if ledger_link:
+                    try:
+                        import uuid
+                        ledger_link.capture_rejected(
+                            str(uuid.uuid4()), asset, signal["direction"],
+                            f"FILTER_MIN_STRUCTURAL_RISK_XAU ({structural_risk:.2f} < {MIN_STRUCTURAL_RISK_XAU})",
+                            signal={"direction": signal["direction"]})
+                    except Exception as e:
+                        logger.warning("TT [%s]: ledger capture_rejected fallito: %s", asset, e)
+                return
+
         # Tolleranza di sovrapposizione: 1x ATR M15 (stessa scala della
         # location, che ora e' su M15). Ricavo l'ATR dall'ampiezza
         # dell'Expansion (prezzo) diviso il suo multiplo in ATR --
@@ -603,6 +646,23 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
                    signal["planned_sl"], signal["planned_tp"], real_rr, signal["planned_rr"])
         _notify_entry(asset, signal["direction"], signal, current_price,
                      signal["planned_sl"], signal["planned_tp"], config)
+
+        # Fix 18/09: mancava la chiamata a capture_executed nel path
+        # di entry attivo (l'unico usato dal 25/08 in poi) -- il
+        # ledger vedeva solo capture_rejected, mai un'esecuzione
+        # riuscita. Confermato sul DB: 970 REJECTED / 0 EXECUTED per
+        # TT nonostante 160 segnali reali in tt_signals. Stesso
+        # pattern gia' presente (ma inutilizzato) nel vecchio path
+        # di Confirmation, rimosso il 25/08.
+        if ledger_link:
+            try:
+                sig_for_ledger = dict(signal)
+                raw_snap = sig_for_ledger.get("context_snapshot")
+                if isinstance(raw_snap, str):
+                    sig_for_ledger["context_snapshot"] = json.loads(raw_snap)
+                ledger_link.capture_executed(sid, asset, sig_for_ledger)
+            except Exception as e:
+                logger.warning("TT [%s]: ledger capture_executed fallito (non-blocking): %s", asset, e)
     except Exception as e:
         logger.error("TT [%s]: errore generazione segnale: %s", asset, e)
 
