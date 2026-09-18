@@ -249,6 +249,47 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
                 )
                 continue
 
+        # Risk cap XAU: SL troppo largo -> stringe SL e ricalcola TP
+        # Validato il 18/09 su 27 trade XAU con risk >= 25pt:
+        #   originale  W=4  L=9  EXP=14  sumR=-2.7
+        #   cap 25pt   W=9  L=9  EXP=9   sumR=+3.5
+        # Il problema non e' la direzione (MAE spesso bassa) ma il TP
+        # irraggiungibile: risk 30-58pt genera target che il prezzo non
+        # copre nel tempo disponibile -> EXPIRED. Con cap 25pt e TP
+        # proporzionale, 5 EXPIRED diventano vittorie (MFE sufficiente
+        # per il TP piu' vicino). Le perdite restano identiche (MAE > 25
+        # = direzione sbagliata comunque). Solo XAU: BTC non ha trade
+        # con risk equivalentemente fuori scala.
+        MAX_RISK_XAU = 25.0
+        if asset in ("XAU_USD", "PAXG_USDT") and entry and sl:
+            orig_risk = abs(entry - sl)
+            if orig_risk > MAX_RISK_XAU:
+                # Conserva gli RR originali
+                rr1 = signal.get("rr1", 1.0)
+                rr2 = signal.get("rr2", 2.0)
+
+                # Stringe lo SL a MAX_RISK_XAU dalla entry
+                if direction == "BUY":
+                    signal["stop_loss"] = entry - MAX_RISK_XAU
+                    signal["tp1"] = entry + MAX_RISK_XAU * rr1
+                    signal["tp2"] = entry + MAX_RISK_XAU * rr2
+                else:
+                    signal["stop_loss"] = entry + MAX_RISK_XAU
+                    signal["tp1"] = entry - MAX_RISK_XAU * rr1
+                    signal["tp2"] = entry - MAX_RISK_XAU * rr2
+
+                signal["risk"] = MAX_RISK_XAU
+                signal["flag_sl_widened"] = False
+                signal["flag_sl_capped"] = True
+
+                logger.info(
+                    "TRB [%s %s]: SL cappato da %.1f a %.1f pt "
+                    "(entry=%.4f sl=%.4f->%.4f tp1=%.4f tp2=%.4f)",
+                    asset, direction, orig_risk, MAX_RISK_XAU,
+                    entry, sl, signal["stop_loss"],
+                    signal["tp1"], signal["tp2"],
+                )
+
         # ══════════════════════════════════════════════════════
 
         # Check 2: duplicato
