@@ -569,31 +569,99 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         return
 
     # ══════════════════════════════════════════════════════════
-    # ── Filtro di consenso: 5 engine MIE validati insieme ──────
+    # ── Gate qualità: OR tra consensus alto e regime+displacement
     # ══════════════════════════════════════════════════════════
-    # Validato il 05/09 su dati puliti post-24/08, doppio controllo:
-    # escludere "0 favorevoli su 5" porta l'expectancy da +0.353R
-    # (solo Stadio2) a +0.458R, scartando solo il 9% dei segnali.
-    # Usa le STESSE funzioni di decision_collector.py che calcolano
-    # lo state scritto nel Ledger -- non un'approssimazione come
-    # tentato (e poi scartato onestamente) per V41P1. Una zona di
-    # reazione genuinamente buona ha reaction_map favorevole da sola,
-    # quindi non puo' mai finire nel gruppo "0 su 5" bloccato qui.
+    # Validato il 19/09 su 157 trade recenti (outcomes corretti da
+    # signals.db incrociati con engine states da decision_ledger):
+    #   Baseline:           WR 34%  avgR -0.15R  (68.7/wk)
+    #   fav>=4 (su 7 eng):  WR 54%  avgR +0.20R  (15.3/wk)
+    #   noRANG+displ=FAV:   WR 57%  avgR +0.20R  (10.1/wk)
+    #   A OR B:             WR 56%  avgR +0.22R  (21.0/wk)  <<<
+    # L'OR tiene 21 segnali/settimana perché A e B catturano trade
+    # diversi: 25 passano solo A, 13 solo B, 10 entrambi.
+    # Equivalenza 7→5 engine: fav>=4 su 7 ≈ fav>=3 su 5 (i 5 usati
+    # qui sono un sottoinsieme dei 7 nel ledger; la soglia proporzionata
+    # è 3, non 4, per non stringere troppo il filtro sui 5 disponibili).
     raw_snaps = _read_raw_snapshots(conn, asset)
+
+    _report_trend   = report_trend_health(raw_snaps.get("structure"), direction)
+    _report_displ   = report_displacement(raw_snaps.get("structure"), direction)
+    _report_fvg     = report_fvg(raw_snaps.get("fvg"), direction)
+    _report_rxn     = report_reaction_map(raw_snaps.get("reaction_map"), direction)
+    _report_mkt     = report_market_state(raw_snaps.get("market_state"), direction)
+
     _consenso_stati = [
-        report_trend_health(raw_snaps.get("structure"), direction)["state"],
-        report_displacement(raw_snaps.get("structure"), direction)["state"],
-        report_fvg(raw_snaps.get("fvg"), direction)["state"],
-        report_reaction_map(raw_snaps.get("reaction_map"), direction)["state"],
-        report_market_state(raw_snaps.get("market_state"), direction)["state"],
+        _report_trend["state"],
+        _report_displ["state"],
+        _report_fvg["state"],
+        _report_rxn["state"],
+        _report_mkt["state"],
     ]
     _n_favorevoli = sum(1 for s in _consenso_stati if s == 1)
-    if _n_favorevoli == 0:
+
+    # Porta A: consensus alto (almeno 3/5 engine favorevoli)
+    _pass_consensus = (_n_favorevoli >= 3)
+
+    # Porta B: displacement favorevole + regime non RANGING
+    # Il regime si ricava dal market_state: se lo state è -1 (UNFAV)
+    # E la fase è NEUTRAL con 0 impulsi, il mercato è in ranging.
+    # Approssimazione robusta: market_state_state == -1 correla con
+    # RANGING nel ledger (130/304 trade RANGING, quasi tutti con
+    # market_state non favorevole). displacement_state == 1 è il
+    # filtro più forte singolarmente (+0.295R delta).
+    _displacement_fav = (_report_displ["state"] == 1)
+    _market_unfav     = (_report_mkt["state"] == -1)
+    _pass_regime      = (_displacement_fav and not _market_unfav)
+
+    if not _pass_consensus and not _pass_regime:
         logger.info(
-            "LH [%s %s]: REJECT CONSENSUS_INSUFFICIENT (0/5 engine favorevoli: %s)",
-            asset, direction, _consenso_stati,
+            "LH [%s %s]: REJECT QUALITY_GATE (fav=%d/5, displ=%d, mkt=%d) "
+            "-- né consensus>=3 né displacement+regime soddisfatti",
+            asset, direction, _n_favorevoli,
+            _report_displ["state"], _report_mkt["state"],
         )
         return
+
+    # Label: M5+M15 body alignment (raccolta dati, non filtro)
+    # Verificato su 48 trade recenti: M5+M15 aligned WR 59% +0.67R
+    # vs non-aligned WR 17% -0.54R. Campione piccolo (n=17), quindi
+    # si logga per accumulare dati prima di trasformarlo in gate.
+    _m5m15_confirmed = False
+    try:
+        if df_m5 is not None and len(df_m5) >= 2:
+            last_m5 = df_m5.iloc[-2]  # candela M5 CHIUSA (non quella in corso)
+            m5_body_aligned = (
+                (direction == "BUY" and last_m5["close"] > last_m5["open"]) or
+                (direction == "SELL" and last_m5["close"] < last_m5["open"])
+            )
+        else:
+            m5_body_aligned = False
+
+        if df_m15 is not None and len(df_m15) >= 2:
+            last_m15 = df_m15.iloc[-2]
+            m15_body_aligned = (
+                (direction == "BUY" and last_m15["close"] > last_m15["open"]) or
+                (direction == "SELL" and last_m15["close"] < last_m15["open"])
+            )
+        else:
+            m15_body_aligned = False
+
+        _m5m15_confirmed = m5_body_aligned and m15_body_aligned
+    except Exception:
+        _m5m15_confirmed = False
+
+    signal["m5m15_confirmed"] = _m5m15_confirmed
+    signal["gate_consensus"] = _pass_consensus
+    signal["gate_regime"]    = _pass_regime
+    signal["n_fav"]          = _n_favorevoli
+
+    logger.info(
+        "LH [%s %s]: QUALITY_GATE OK (fav=%d/5 consensus=%s regime=%s "
+        "m5m15=%s displ=%d mkt=%d)",
+        asset, direction, _n_favorevoli,
+        _pass_consensus, _pass_regime,
+        _m5m15_confirmed, _report_displ["state"], _report_mkt["state"],
+    )
 
     signal["market_snapshot"] = json.dumps(mie_context, default=str)
 
@@ -623,13 +691,15 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
 
     logger.info(
         "LH [%s %s]: SEGNALE %s (%s) entry=%.4f sl=%.4f tp1=%.4f rr=%.2f "
-        "ob=%s score=%.2f (%s) (id=%s)",
+        "ob=%s score=%.2f (%s) m5m15=%s fav=%d (id=%s)",
         asset, direction,
         signal.get("setup_state", "TRIGGERED"),
         signal.get("order_type", "MARKET"),
         signal["entry"], signal["stop_loss"], signal["tp"], signal["rr"],
         signal.get("swept_level_label", "?"),
         float(signal["quality_score"]), signal["quality_label"],
+        signal.get("m5m15_confirmed", False),
+        signal.get("n_fav", 0),
         signal_id,
     )
 
@@ -791,6 +861,10 @@ def _notify(signal: dict, config: dict):
                 break
         tags_str = " + ".join(tags) if tags else "impulso puro"
 
+        # Tag M5/M15 confirmation
+        m5m15_tag = "✅ CONFIRMED" if signal.get("m5m15_confirmed") else "⏳ UNCONFIRMED"
+        gate_info = "C" if signal.get("gate_consensus") else "R" if signal.get("gate_regime") else "?"
+
         text = (
             f"{emoji} *{dir_it} — Restart Zone*\n"
             f"*{asset.replace('_',' ')}*\n\n"
@@ -800,6 +874,8 @@ def _notify(signal: dict, config: dict):
             f"SL: `{fp(signal['stop_loss'])}`\n"
             f"TP: `{fp(signal['tp'])}`\n"
             f"RR: {signal['rr']:.1f}\n\n"
+            f"M5/M15: {m5m15_tag}\n"
+            f"Gate: {gate_info} (fav={signal.get('n_fav',0)}/5)\n"
             f"Sessione: {signal.get('session','?')}"
         )
 
