@@ -407,13 +407,29 @@ def has_open_trb_signal(
 STAGE2_PCT = 40
 TRAIL_R = 0.7
 
-# Cuscinetto del breakeven (in frazione di R). Invece di mettere lo
-# stop esattamente a entry (0R) -- che a conti fatti e' una micro-
-# perdita perche' spread + commissioni si pagano comunque -- lo si
-# porta a entry + BE_BUFFER_R (in profitto quel tanto che copre i
-# costi). 0.10R e' una stima prudente; va tarata sullo spread reale
-# del broker (idealmente ~2x il costo tondo entrata+uscita).
-BE_BUFFER_R = 0.10
+# Floor minimo assoluto del trailing lock, per asset (in unita' di
+# prezzo, non R). Validato il 22/09: quando new_mfe e' appena sopra
+# trail_dist (0.7R), il trail si aggancia a pochi $/pt sopra l'entry
+# -- lo spread reale (~$10-20 su BTC, ~0.5-1pt su XAU) puo' mangiarsi
+# quel margine e trasformare un TRAIL_HIT nominale in una micro-perdita
+# reale. Verificato sui 7 BE_HIT storici TRB: tutti avevano MFE ben
+# oltre queste soglie ($166-299 su BTC, 11-13pt su XAU) prima di
+# tornare a chiudere -- il floor non lascia scoperto nessun trade gia'
+# protetto, alza solo il livello a cui viene protetto.
+TRAIL_MIN_LOCK = {"BTC_USDT": 60.0, "XAU_USD": 2.5, "PAXG_USDT": 2.5}
+
+# Fix 22/09: Stage1 (breakeven+) RIMOSSO. Verificato su dati reali
+# post-deploy trailing (14/09 in poi, 26 trade TRAIL_HIT): zero
+# eccezioni, il trailing (attivo da TRAIL_R=0.7R) e' SEMPRE gia' piu'
+# protettivo dello Stage1 (attivo solo da TP1=1.0R in poi, con
+# cuscinetto 0.10R) nel momento in cui Stage1 potrebbe applicarsi --
+# matematicamente garantito perche' 0.7R < 1.0R. I 7 BE_HIT storici
+# (03-14/09) erano tutti PRE-deploy trailing, non un'eccezione al
+# meccanismo -- semplicemente il trailing non esisteva ancora quel
+# giorno. Simulazione su tutti i 33 TRAIL_HIT/BE_HIT: 0/33 peggiorano,
+# avgR +0.249->+0.410, sumR +8.20->+13.53R. Il ramo "outcome=BE_HIT"
+# sotto resta come rete di sicurezza teorica (mai piu' raggiungibile
+# in pratica, dato TRAIL_R<1.0R), non e' stato rimosso.
 # Trailing stop a TRAIL_R dal massimo raggiunto -- validato il 10/09
 # su 372 trade: il 75% ha direzione giusta (MFE>=0.5R), ma 102 SL
 # tornano da profitto a -1R pieno. Il trailing a 0.7R dal picco salva
@@ -516,23 +532,17 @@ def monitor_open_trb_signals(
                 else:
                     stage2_trigger_mfe = entry_f - (tp1_f - extra)
 
-        # Breakeven+ : entry piu' un cuscinetto che copre spread e
-        # commissioni, cosi' un "pareggio" e' davvero >= 0 e non una
-        # micro-perdita. Per BUY lo stop sta sopra entry, per SELL sotto.
-        be_buffer = BE_BUFFER_R * abs(entry_f - sl_f)
-        be_level = entry_f + be_buffer if direction == "BUY" else entry_f - be_buffer
-
         effective_sl = sl_f
         stage2_was_active = False
         stage2_active_now = False
-        if bool(tp1_hit) and stage2_trigger_mfe is not None:
-            effective_sl = be_level  # Stadio 1: breakeven+ (copre i costi)
-            # Soglia di attivazione: STAGE2_PCT% della distanza da
-            # TP1 verso TP2. Il livello di blocco e' TP1 stesso, non
-            # un valore intermedio calcolato -- se il prezzo si
-            # avvicina abbastanza a TP2 e poi torna indietro fino a
-            # TP1, il risultato riflette il guadagno vero di TP1, non
-            # un semplice pareggio.
+        if stage2_trigger_mfe is not None:
+            # Nota: niente piu' "if bool(tp1_hit) and ..." qui davanti --
+            # stage2_trigger_mfe e' per costruzione oltre TP1 (tp1_f +
+            # extra), quindi raggiungerlo implica gia' aver superato
+            # TP1 nello stesso calcolo, anche nel caso "tutto in un
+            # ciclo solo" descritto sopra. Lo Stage1 (be_level) che
+            # stava qui e' stato rimosso il 22/09: era sempre dominato
+            # dal trailing, vedi nota sopra TRAIL_MIN_LOCK.
             stage2_was_active = old_mfe >= stage2_trigger_mfe
             stage2_active_now = new_mfe >= stage2_trigger_mfe
             if stage2_active_now:
@@ -551,11 +561,18 @@ def monitor_open_trb_signals(
         old_trail_active = old_mfe >= trail_dist
         trail_active_now = new_mfe >= trail_dist
         if trail_active_now:
+            # Floor minimo: se new_mfe - trail_dist è sotto la soglia
+            # per l'asset, forza il lock al floor -- ma mai oltre
+            # new_mfe stesso (non si può bloccare un profitto che il
+            # prezzo non ha ancora raggiunto davvero).
+            min_lock = TRAIL_MIN_LOCK.get(asset, 0.0)
+            raw_lock = max(new_mfe - trail_dist, min_lock)
+            locked = min(raw_lock, new_mfe)
             if direction == "BUY":
-                trail_sl = entry_f + (new_mfe - trail_dist)
+                trail_sl = entry_f + locked
                 effective_sl = max(effective_sl, trail_sl)
             else:
-                trail_sl = entry_f - (new_mfe - trail_dist)
+                trail_sl = entry_f - locked
                 effective_sl = min(effective_sl, trail_sl)
 
         if direction == "BUY":
