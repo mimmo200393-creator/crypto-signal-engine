@@ -292,6 +292,28 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
 
         # ══════════════════════════════════════════════════════
 
+        # Filtro entry_zone_type: solo order_block e fvg.
+        # Validato il 22/09 su 466 trade storici (tutta la vita TRB):
+        #   order_block: n=112 WR 54% avgR +0.39R  <- ok
+        #   fvg:         n=238 WR 50% avgR +0.30R  <- ok
+        #   ema:         n=90  WR 30% avgR -0.11R  <- ESCLUSO
+        # ema scomposto per ADX: BTC non e' MAI positivo a nessun
+        # livello di ADX testato (0/21 fasce). XAU diventa positivo
+        # solo ad ADX>=40 (+0.63R) ma su soli 9 trade, 5 concentrati
+        # in 2 giorni soli (30-31/08, 14/09) -- troppo fragile per
+        # tenerlo anche solo condizionato. Rimosso del tutto, non
+        # filtrato per ADX: piu' semplice, piu' robusto.
+        # "nessuna zona" (entry_zone_type IS NULL) non serve escluderlo
+        # a parte: ultimo caso storico 12/07, il generatore di segnali
+        # non lo produce piu' da mesi -- gia' estinto da solo.
+        zone_type = signal.get("entry_zone_type")
+        if zone_type == "ema":
+            logger.info(
+                "TRB [%s %s]: REJECT ENTRY_TYPE_EMA (adx=%.1f)",
+                asset, direction, signal.get("adx", 0),
+            )
+            continue
+
         # Check 2: duplicato
         if trend_rider_db.has_recent_trb_signal(
             conn, asset, direction, signal["entry"], hours=4
