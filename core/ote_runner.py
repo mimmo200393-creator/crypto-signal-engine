@@ -80,7 +80,19 @@ CREATE TABLE IF NOT EXISTS ote_lab_signals (
 );"""
 
 def _ensure(conn):
-    conn.execute(_CREATE); conn.commit()
+    conn.execute(_CREATE)
+    # Reset one-time: cancella dati contaminati dal bug machine-gun
+    # del 28/09 (5 segnali nella stessa zona in 70min, pre-cooldown).
+    # Questa riga si puo' rimuovere dopo il primo ciclo pulito.
+    try:
+        n = conn.execute("SELECT COUNT(*) FROM ote_lab_signals").fetchone()[0]
+        if n > 0 and n <= 20:  # solo se pochi segnali (quelli contaminati)
+            conn.execute("DELETE FROM ote_lab_signals")
+            conn.commit()
+            logger.info("OTE-LAB: reset %d segnali contaminati (pre-cooldown fix)", n)
+    except Exception:
+        pass
+    conn.commit()
 
 def _insert(conn, s):
     conn.execute("""INSERT INTO ote_lab_signals (
