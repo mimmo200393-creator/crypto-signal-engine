@@ -364,13 +364,26 @@ def _generate_recurring_zone_signals(conn, asset, df_h1, df_h4, df_m5, config):
     for zone in zones:
         direction = zone["expected_direction"]
 
-        # Dedup: non duplicare
+        # Dedup: non duplicare segnali aperti
         existing = conn.execute(
             "SELECT 1 FROM ote_lab_signals WHERE asset=? AND direction=? "
             "AND final_outcome='OPEN' AND signal_type='RECURRING_ZONE'",
             (asset, direction)
         ).fetchone()
         if existing:
+            continue
+
+        # Cooldown 2h: non rientrare nella stessa fascia dopo una chiusura
+        recent_close = conn.execute(
+            "SELECT 1 FROM ote_lab_signals WHERE asset=? AND direction=? "
+            "AND signal_type='RECURRING_ZONE' AND zone_price_bucket=? "
+            "AND final_outcome != 'OPEN' "
+            "AND timestamp_closed > datetime('now', '-2 hours')",
+            (asset, direction, zone["bucket_price"])
+        ).fetchone()
+        if recent_close:
+            logger.info("OTE-LAB [%s %s]: SKIP cooldown zona %.0f",
+                        asset, direction, zone["bucket_price"])
             continue
 
         # Aspetta conferma M5 (non entrare al buio)
@@ -605,8 +618,14 @@ def _run_for_asset(conn, asset, config):
                     rz_used = True
                     logger.info("OTE-LAB [%s %s]: RZ target %s RR=%.2f", asset, direction, rz["label"], rz["rr"])
 
-        # Dedup
+        # Dedup + cooldown 2h
         if conn.execute("SELECT 1 FROM ote_lab_signals WHERE asset=? AND direction=? AND final_outcome='OPEN'", (asset, direction)).fetchone():
+            continue
+        if conn.execute(
+            "SELECT 1 FROM ote_lab_signals WHERE asset=? AND direction=? "
+            "AND signal_type='TRB_CLONE' AND final_outcome != 'OPEN' "
+            "AND timestamp_closed > datetime('now', '-2 hours')",
+            (asset, direction)).fetchone():
             continue
 
         sig["signal_id"] = str(uuid.uuid4())
