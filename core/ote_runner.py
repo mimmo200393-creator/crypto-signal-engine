@@ -509,12 +509,53 @@ def _run_for_asset(conn, asset, config):
     except Exception as e:
         logger.error("OTE-LAB [%s]: monitor error: %s", asset, e)
 
-    # 2. Build market context (same as TRB)
+    # 2. Build market context — COMPLETO, come edge_lab_runner
+    #    Bug fix 28/09: la versione precedente passava solo liquidity
+    #    e session, mancando i dati MIE (order_block, fvg, structure).
+    #    generate_trb_signal senza questi dati rifiuta sempre con
+    #    NO_ENTRY_ZONE perche' non trova OB/FVG.
     ctx = {"asset": asset}
+
+    # MIE context: stessa logica di edge_lab_runner._read_mie_context
+    MIE_TABLES = [
+        ("structure",    "structure_snapshots"),
+        ("volatility",   "volatility_snapshots"),
+        ("order_block",  "order_block_snapshots"),
+        ("fvg",          "fvg_snapshots"),
+        ("liquidity",    "liquidity_snapshots"),
+        ("session_sweep","session_sweep_snapshots"),
+        ("reaction_map", "reaction_map_snapshots"),
+        ("candlestick",  "candlestick_snapshots"),
+        ("macro",        "macro_snapshots"),
+        ("market_state", "market_state_snapshots"),
+    ]
+    mie = {}
+    for prefix, table in MIE_TABLES:
+        try:
+            row = conn.execute(
+                f"SELECT snapshot_json FROM {table} "
+                f"WHERE asset = ? ORDER BY timestamp_snapshot DESC LIMIT 1",
+                (asset,)
+            ).fetchone()
+            if row:
+                snapshot = json.loads(row[0])
+                if isinstance(snapshot, dict):
+                    for key, value in snapshot.items():
+                        mie[f"mie_{prefix}_{key}"] = value
+                mie[f"mie_{prefix}_available"] = True
+            else:
+                mie[f"mie_{prefix}_available"] = False
+        except Exception:
+            mie[f"mie_{prefix}_available"] = False
+    ctx["mie"] = mie
+
+    # Liquidity map (separata, generate_trb_signal la legge come market_ctx["liquidity"])
     try:
         row = conn.execute("SELECT snapshot_json FROM liquidity_snapshots WHERE asset=? ORDER BY timestamp_snapshot DESC LIMIT 1", (asset,)).fetchone()
         if row: ctx["liquidity"] = json.loads(row[0])
     except Exception: pass
+
+    # Session
     try:
         row = conn.execute("SELECT current_session FROM market_context_snapshots WHERE asset=? ORDER BY timestamp_snapshot DESC LIMIT 1", (asset,)).fetchone()
         if row: ctx["session"] = {"current_session": row[0]}
