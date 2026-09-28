@@ -105,62 +105,66 @@ def load_tt_recent(conn, limit=20):
 
 
 # ============================================================
-# Data loaders — OTE (nuovo, sostituisce Edge Lab OTE-SC)
+# Data loaders — OTE-LAB (sostituisce Edge Lab OTE-SC)
 # ============================================================
 
 def load_ote_signals(conn):
-    """Segnali OTE con esito deciso (TP/SL/EXPIRED)."""
+    """Segnali OTE-LAB con esito deciso."""
     try:
         rows = q(conn, """
-            SELECT asset, direction, zone_ref, zone_score, zone_strength,
-                   quality_label, quality_score, tp_type,
-                   status, mae, mfe, planned_rr, actual_rr, bars_open,
-                   signal_created_at, trigger_type
-            FROM ote_signals WHERE status IN ('TP','SL','EXPIRED')
-            ORDER BY signal_created_at DESC
+            SELECT asset, direction, entry_zone_type, quality_score,
+                   signal_type, quality_label, rz_target_used,
+                   liquidity_target, final_outcome,
+                   mae, mfe, rr2, result_r, bars_open,
+                   timestamp_setup, zone_visits
+            FROM ote_lab_signals WHERE final_outcome NOT IN ('OPEN','')
+            ORDER BY timestamp_setup DESC
         """)
     except sqlite3.OperationalError:
         return []
     result = []
     for r in rows:
         rr = r[12] if r[12] is not None else r[11]
+        sig_type = r[4] or "TRB_CLONE"
+        zone_info = r[2] or "N/A"
+        if r[15]:  # zone_visits
+            zone_info = f"{zone_info} ({r[15]}x)"
         result.append({
             "asset": r[0], "direction": r[1],
-            "zone_ref": r[2] or "N/A", "zone_score": r[3] or 0,
-            "zone_strength": r[4] or "N/A",
-            "quality_label": r[5] or "N/A", "quality_score": r[6] or 0,
+            "zone_ref": zone_info, "zone_score": r[3] or 0,
+            "zone_strength": sig_type,
+            "quality_label": r[5] or "N/A", "quality_score": r[3] or 0,
             "tp_type": r[7] or "N/A",
             "outcome": r[8],
             "mae": float(r[9] or 0), "mfe": float(r[10] or 0),
             "rr": float(rr or 0), "bars_open": int(r[13] or 0),
-            "ts": r[14] or "", "trigger_type": r[15] or "N/A",
+            "ts": r[14] or "", "trigger_type": sig_type,
         })
     return result
 
 def load_ote_candidates_stats(conn):
-    """Statistiche sui candidate (neutri) per visibilita'."""
+    """Statistiche OTE-LAB — non usa piu' candidate neutri."""
     try:
-        rows = q(conn, """
-            SELECT status, COUNT(*) FROM ote_candidates GROUP BY status
-        """)
-        d = {r[0]: r[1] for r in rows}
+        open_n = q(conn, "SELECT COUNT(*) FROM ote_lab_signals WHERE final_outcome='OPEN'")[0][0]
+        closed_n = q(conn, "SELECT COUNT(*) FROM ote_lab_signals WHERE final_outcome NOT IN ('OPEN','')")[0][0]
         return {
-            "watching": d.get("WATCHING", 0) + d.get("TOUCHED", 0),
-            "expired": d.get("EXPIRED", 0),
-            "signal_created": d.get("SIGNAL_CREATED", 0),
-            "total": sum(d.values()),
+            "watching": open_n,
+            "expired": 0,
+            "signal_created": closed_n,
+            "total": open_n + closed_n,
         }
     except sqlite3.OperationalError:
         return {"watching": 0, "expired": 0, "signal_created": 0, "total": 0}
 
 def load_ote_recent(conn, limit=20):
-    """Ultimi segnali OTE (tutti gli stati)."""
+    """Ultimi segnali OTE-LAB (tutti gli stati)."""
     try:
         return q(conn, f"""
-            SELECT signal_id, asset, direction, planned_entry, planned_sl, planned_tp,
-                   planned_rr, quality_score, quality_label, zone_strength, trigger_type,
-                   tp_type, status, signal_created_at
-            FROM ote_signals ORDER BY signal_created_at DESC LIMIT {limit}
+            SELECT signal_id, asset, direction, entry, stop_loss, tp2,
+                   rr2, quality_score, quality_label, signal_type,
+                   entry_zone_type, liquidity_target, final_outcome,
+                   timestamp_setup
+            FROM ote_lab_signals ORDER BY timestamp_setup DESC LIMIT {limit}
         """)
     except sqlite3.OperationalError:
         return []
@@ -608,7 +612,7 @@ def section_tt(rows, recent, invalidated_count):
 
 
 # ============================================================
-# SEZIONE 1 — OTE "Zona prima, direzione dopo" (sostituisce Edge Lab OTE-SC)
+# SEZIONE 1 — OTE-LAB (Clone TRB + Reaction Zones + Recurring Zones)
 # ============================================================
 
 def section_ote(rows, recent, cand_stats):
@@ -669,7 +673,7 @@ def section_ote(rows, recent, cand_stats):
     return f"""
 <div class="card" style="border-top:2px solid var(--accent)">
   <div class="fw-header" style="color:var(--accent)">
-    ⚡ OTE — Zona prima, direzione dopo
+    🧪 OTE-LAB — Clone TRB + Reaction Zones + Recurring Zones
     <span class="fw-tag tag-benchmark">IN OSSERVAZIONE</span>
     <span style="color:var(--dim);font-size:11px;margin-left:auto">Sweep+Reaction · BTC · XAU</span>
   </div>
