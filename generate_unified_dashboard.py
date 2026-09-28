@@ -108,69 +108,64 @@ def load_tt_stats(conn):
 
 
 # ============================================================
-# Data loading — OTE (sostituisce Edge Lab OTE-SC)
+# Data loading — OTE-LAB (sostituisce il vecchio OTE)
 # ============================================================
 
 
 def load_ote_open_unified(conn):
-    """Candidate WATCHING/TOUCHED + Signal ENTRY — tutti visibili."""
+    """Segnali OTE-LAB aperti (TRB_CLONE + RECURRING_ZONE)."""
     try:
-        # Candidate attivi (neutri)
-        cand_rows = q(conn, """
-            SELECT 'CAND' as src, candidate_id, asset, 'NEUTRAL' as direction, status,
-                   zone_high, zone_low, zone_score, zone_strength,
-                   proximity_points, created_at, NULL, NULL, NULL
-            FROM ote_candidates WHERE status IN ('WATCHING','TOUCHED')
-            ORDER BY created_at DESC
-        """)
-        # Signal attivi (direzionali)
-        sig_rows = q(conn, """
-            SELECT 'SIG' as src, signal_id, asset, direction, status,
-                   planned_entry, planned_sl, planned_tp, zone_strength,
-                   planned_rr, signal_created_at, mae, mfe, bars_open
-            FROM ote_signals WHERE status='ENTRY'
-            ORDER BY signal_created_at DESC
+        rows = q(conn, """
+            SELECT signal_id, asset, direction, signal_type,
+                   entry, stop_loss, tp2, rr2,
+                   entry_zone_type, rz_target_used, zone_visits,
+                   timestamp_setup, mae, mfe, bars_open
+            FROM ote_lab_signals WHERE final_outcome='OPEN'
+            ORDER BY timestamp_setup DESC
         """)
     except sqlite3.OperationalError:
         return []
     now = datetime.now(timezone.utc)
     result = []
-    for r in list(cand_rows) + list(sig_rows):
-        src = r[0]
-        ts = r[10]
+    for r in rows:
+        ts = r[11]
         try:
             setup_dt = datetime.fromisoformat(ts)
             if setup_dt.tzinfo is None: setup_dt = setup_dt.replace(tzinfo=timezone.utc)
             elapsed_h = round((now - setup_dt).total_seconds() / 3600, 1)
         except: elapsed_h = 0
-        if src == 'CAND':
-            result.append({
-                "asset": r[2], "direction": "—", "status": r[4],
-                "entry": f"{r[5]:.2f}-{r[6]:.2f}" if r[5] else "—",
-                "sl": "—", "tp": "—", "rr": "—",
-                "zone_strength": r[8] or "—", "elapsed_h": elapsed_h, "ts": ts,
-            })
-        else:
-            result.append({
-                "asset": r[2], "direction": r[3], "status": r[4],
-                "entry": r[5], "sl": r[6], "tp": r[7],
-                "rr": r[9], "zone_strength": r[8] or "—",
-                "elapsed_h": elapsed_h, "ts": ts,
-            })
+        sig_type = r[3] or "TRB_CLONE"
+        status = "🏦 RZ" if sig_type == "RECURRING_ZONE" else "🧪 LAB"
+        zone_info = r[8] or "—"
+        if r[10]:  # zone_visits
+            zone_info = f"{zone_info} ({r[10]}x)"
+        result.append({
+            "asset": r[1], "direction": r[2] or "—",
+            "status": status,
+            "entry": r[4], "sl": r[5], "tp": r[6],
+            "rr": r[7], "zone_strength": zone_info,
+            "elapsed_h": elapsed_h, "ts": ts,
+        })
     return result
 
 def load_ote_stats_unified(conn):
     try:
-        sig_rows = q(conn, "SELECT status, COUNT(*) FROM ote_signals WHERE status IN ('TP','SL','EXPIRED') GROUP BY status")
-        d = {r[0]: r[1] for r in sig_rows}
-        n = sum(d.values()); wins = d.get("TP",0); sls = d.get("SL",0)
-        cand_active = q(conn, "SELECT COUNT(*) FROM ote_candidates WHERE status IN ('WATCHING','TOUCHED')")[0][0]
-        sig_active = q(conn, "SELECT COUNT(*) FROM ote_signals WHERE status='ENTRY'")[0][0]
-        return {"n":n, "open": cand_active + sig_active,
-                "win":round(wins/n*100,1) if n>0 else 0,
-                "exp_r":round((wins*2-sls)/n,2) if n>0 else 0}
+        rows = q(conn, """
+            SELECT final_outcome, COUNT(*), COALESCE(SUM(result_r), 0)
+            FROM ote_lab_signals
+            WHERE final_outcome NOT IN ('OPEN', '')
+            GROUP BY final_outcome
+        """)
+        d = {r[0]: {"n": r[1], "sum_r": r[2]} for r in rows}
+        n = sum(v["n"] for v in d.values())
+        wins = sum(v["n"] for k, v in d.items() if k in ("TP2_HIT", "TRAIL_HIT"))
+        total_r = sum(v["sum_r"] for v in d.values())
+        open_n = q(conn, "SELECT COUNT(*) FROM ote_lab_signals WHERE final_outcome='OPEN'")[0][0]
+        return {"n": n, "open": open_n,
+                "win": round(wins / n * 100, 1) if n > 0 else 0,
+                "exp_r": round(total_r / n, 2) if n > 0 else 0}
     except sqlite3.OperationalError:
-        return {"n":0,"open":0,"win":0,"exp_r":0}
+        return {"n": 0, "open": 0, "win": 0, "exp_r": 0}
 
 
 # ============================================================
@@ -475,18 +470,17 @@ def tt_open_table(rows):
 
 def ote_open_table(rows):
     if not rows:
-        return """<div class="card"><div class="ch"><span class="pulse"></span>Segnali Attivi — OTE</div>
-  <table><tbody><tr class="empty-row"><td colspan="9">Nessun segnale attivo. In attesa di zone calde.</td></tr></tbody></table></div>"""
+        return """<div class="card"><div class="ch"><span class="pulse"></span>Segnali Attivi — OTE-LAB</div>
+  <table><tbody><tr class="empty-row"><td colspan="9">Nessun segnale attivo. In attesa di zone e segnali LAB.</td></tr></tbody></table></div>"""
     body = ""
     for r in rows:
-        asset = r["asset"].replace("_USDT","")
+        asset = r["asset"].replace("_USDT","").replace("_USD","")
         status = r["status"]
-        if status in ("WATCHING","TOUCHED"):
-            status_badge = '<span class="badge b-waiting">WATCHING</span>' if status=="WATCHING" else '<span class="badge b-open">TOUCHED</span>'
-            dir_show = "—"
+        if "🏦" in str(status):
+            status_badge = '<span class="badge b-open">🏦 RZ</span>'
         else:
-            status_badge = outcome_badge(status)
-            dir_show = direction_badge(r["direction"])
+            status_badge = '<span class="badge b-waiting">🧪 LAB</span>'
+        dir_show = direction_badge(r["direction"]) if r["direction"] != "—" else "—"
         body += f"""<tr>
   <td class="mono" style="color:var(--dim);font-size:11px">{fmt_ts(r['ts'])}</td>
   <td><strong>{asset}</strong></td>
@@ -498,9 +492,9 @@ def ote_open_table(rows):
   <td style="font-size:12px;color:var(--dim)">{r.get('zone_strength','—')}</td>
   <td class="mono" style="color:var(--dim)">{r['elapsed_h']}h</td>
 </tr>"""
-    return f"""<div class="card"><div class="ch"><span class="pulse"></span>Segnali Attivi — OTE ({len(rows)})</div>
+    return f"""<div class="card"><div class="ch"><span class="pulse"></span>Segnali Attivi — OTE-LAB ({len(rows)})</div>
   <div style="overflow-x:auto"><table><thead><tr>
-    <th>Data</th><th>Asset</th><th>Dir</th><th>Stato</th><th>Entry</th><th>SL</th><th>TP</th>
+    <th>Data</th><th>Asset</th><th>Dir</th><th>Tipo</th><th>Entry</th><th>SL</th><th>TP</th>
     <th>Zona</th><th>Tempo</th>
   </tr></thead><tbody>{body}</tbody></table></div></div>"""
 
@@ -649,7 +643,7 @@ def generate():
 
   <div class="divider"></div>
 
-  <div class="section-title el">⚡ OTE — Zona prima, direzione dopo (in osservazione)</div>
+  <div class="section-title el">🧪 OTE-LAB — Clone TRB + Reaction Zones + Recurring Zones</div>
   {kpi_row(ote_stats, "var(--accent)")}
   {ote_open_table(ote_open)}
 
