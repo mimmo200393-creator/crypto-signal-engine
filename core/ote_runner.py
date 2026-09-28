@@ -205,7 +205,7 @@ def _monitor(conn, asset, df_m5):
 
 def _notify(asset, direction, sig, config, rz_used=False):
     try:
-        from core.notifications import telegram_bot
+        from notifications import telegram_bot
         tk = config.get("TELEGRAM_BOT_TOKEN", "")
         ch = config.get("TELEGRAM_CHAT_ID", "")
         if not tk or not ch: return
@@ -465,7 +465,7 @@ def _generate_recurring_zone_signals(conn, asset, df_h1, df_h4, df_m5, config):
             zone.get("visits_h1",0), zone.get("score",0))
 
         try:
-            from core.notifications import telegram_bot
+            from notifications import telegram_bot
             tk = config.get("TELEGRAM_BOT_TOKEN", "")
             ch = config.get("TELEGRAM_CHAT_ID", "")
             if tk and ch:
