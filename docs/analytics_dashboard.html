@@ -63,7 +63,7 @@ tr.hl td{background:rgba(79,255,176,.06)}
 <body>
 <header>
   <h1>Crypto Signal Engine — Analytics Lab</h1>
-  <div class="meta">2026-09-28 19:55 UTC &nbsp;|&nbsp; <a href="unified_dashboard.html">&larr; Dashboard</a> &nbsp;|&nbsp; <a href="engine_edge_dashboard.html">Engine Edge Lab →</a></div>
+  <div class="meta">2026-09-28 20:01 UTC &nbsp;|&nbsp; <a href="unified_dashboard.html">&larr; Dashboard</a> &nbsp;|&nbsp; <a href="engine_edge_dashboard.html">Engine Edge Lab →</a></div>
 </header>
 <div class="container">
 
@@ -606,6 +606,18 @@ tr.hl td{background:rgba(79,255,176,.06)}
     <th>Data</th><th>Asset</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP1</th>
     <th>TP1 in</th><th>ADX</th><th>H1</th><th>Target</th><th>Esito</th>
   </tr></thead><tbody><tr>
+  <td class="mono" style="color:var(--dim);font-size:11px">28 Sep 19:45</td>
+  <td><strong>XAU_USD</strong></td>
+  <td><span class="badge b-sell">SELL</span></td>
+  <td class="mono">4,130.94</td>
+  <td class="mono">4,141.73</td>
+  <td class="mono">4,120.14</td>
+  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
+  <td class="mono" style="color:var(--dim)">47.9</td>
+  <td style="font-size:12px;color:var(--dim)">BEARISH</td>
+  <td style="font-size:12px;color:var(--dim)">—</td>
+  <td><span class="badge b-open">OPEN</span></td>
+</tr><tr>
   <td class="mono" style="color:var(--dim);font-size:11px">28 Sep 19:15</td>
   <td><strong>XAU_USD</strong></td>
   <td><span class="badge b-sell">SELL</span></td>
@@ -832,18 +844,6 @@ tr.hl td{background:rgba(79,255,176,.06)}
   <td class="mono" style="color:var(--dim)">23.2</td>
   <td style="font-size:12px;color:var(--dim)">BEARISH</td>
   <td style="font-size:12px;color:var(--dim)">—</td>
-  <td><span class="badge b-tp">TRAIL_HIT</span></td>
-</tr><tr>
-  <td class="mono" style="color:var(--dim);font-size:11px">25 Sep 12:00</td>
-  <td><strong>XAU_USD</strong></td>
-  <td><span class="badge b-sell">SELL</span></td>
-  <td class="mono">4,306.23</td>
-  <td class="mono">4,315.82</td>
-  <td class="mono">4,296.64</td>
-  <td class="mono" style="font-size:11px"><span style="color:var(--dim)">—</span></td>
-  <td class="mono" style="color:var(--dim)">20.5</td>
-  <td style="font-size:12px;color:var(--dim)">BEARISH</td>
-  <td style="font-size:12px;color:var(--dim)">Daily Low (prev)</td>
   <td><span class="badge b-tp">TRAIL_HIT</span></td>
 </tr></tbody></table>
   </div></div>
@@ -1254,14 +1254,14 @@ tr.hl td{background:rgba(79,255,176,.06)}
   </div>
   <div class="summary-grid cols8" style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
   <div><span class="big">0</span><span class="lbl">Chiusi (TP/SL/EXP)</span></div>
-  <div><span class="big warn">0</span><span class="lbl">Candidate totali</span></div>
+  <div><span class="big warn">1</span><span class="lbl">Candidate totali</span></div>
   <div><span class="big neg">0%</span><span class="lbl">Win Rate</span></div>
   <div><span class="big neg">0%</span><span class="lbl">SL Rate</span></div>
   <div><span class="big neg">+0.00R</span><span class="lbl">Expectancy</span></div>
   <div><span class="big">0.00</span><span class="lbl">Avg R/R</span></div>
   <div><span class="big neg">0.0</span><span class="lbl">Avg MAE</span></div>
   <div><span class="big pos">0.0</span><span class="lbl">Avg MFE</span></div>
-</div><div class="card"><div class="empty">In attesa del primo segnale OTE chiuso. Candidate attivi: 0</div></div>
+</div><div class="card"><div class="empty">In attesa del primo segnale OTE chiuso. Candidate attivi: 1</div></div>
   <div class="grid-2">
     <div class="card">
   <div class="ch">Per Asset</div>
@@ -1294,7 +1294,24 @@ tr.hl td{background:rgba(79,255,176,.06)}
   </tr></thead><tbody><tr><td colspan="6" class="empty">Nessun dato</td></tr></tbody></table>
 </div>
   </div>
-  <div class="card"><div class="empty">Nessun segnale ancora.</div></div>
+  <div class="card"><div class="ch">Segnali Recenti OTE</div>
+  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+  <table><thead><tr>
+    <th>Data</th><th>Asset</th><th>Dir</th><th>Stato</th><th>Entry</th><th>SL</th><th>TP</th>
+    <th>R/R</th><th>Zona</th><th>Trigger</th>
+  </tr></thead><tbody><tr>
+  <td class="mono" style="color:var(--dim);font-size:11px">28 Sep 19:55</td>
+  <td><strong>XAU_USD</strong></td>
+  <td><span class="badge b-sell">SELL</span></td>
+  <td><span class="badge b-open">OPEN</span></td>
+  <td class="mono">4,123.37</td>
+  <td class="mono">4,131.37</td>
+  <td class="mono">4,085.79</td>
+  <td class="mono">4.70</td>
+  <td style="font-size:12px;color:var(--dim)">RECURRING_ZONE</td>
+  <td style="font-size:12px;color:var(--dim)">RECURRING_HIGH</td>
+</tr></tbody></table>
+  </div></div>
 </div>
 
 </div>
