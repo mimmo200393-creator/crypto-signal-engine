@@ -540,6 +540,101 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
                     continue
 
         # ══════════════════════════════════════════════════════
+        # ── MOD LAB 4: REACTION ENTRY ────────────────────────
+        # Simulazione su 350 trade: WR 56.9%→68.9%, sumR +309→+376
+        # XAU: WR 59.6%→82.0%, risk medio -70%
+        #
+        # Logica: TREND → ZONA → REAZIONE → ENTRY
+        # TRB ha trovato la zona e la direzione. Invece di entrare
+        # subito, cerchiamo una candela M5 di reazione nella zona
+        # (body >30% del range, nella direzione giusta).
+        # Se trovata: entriamo al close, SL sotto il minimo della
+        # candela di reazione → SL molto piu' stretto.
+        # Se non trovata: NON entriamo (aspettiamo il prossimo ciclo).
+        # ══════════════════════════════════════════════════════
+        df_m5 = v3_db.get_v3_candles_df(conn, asset, "5m", limit=20)
+        if df_m5 is not None and len(df_m5) >= 3:
+            orig_entry = signal["entry"]
+            orig_sl = signal["stop_loss"]
+            orig_risk = abs(orig_entry - orig_sl)
+            
+            # Zona approssimata attorno all'entry TRB
+            if direction == "BUY":
+                zone_high = orig_entry + orig_risk * 0.3
+                zone_low = orig_entry - orig_risk * 0.5
+            else:
+                zone_low = orig_entry - orig_risk * 0.3
+                zone_high = orig_entry + orig_risk * 0.5
+            
+            # Cerca reazione nelle ultime 5 candele M5
+            reaction_found = False
+            for _, c in df_m5.iloc[-5:].iterrows():
+                body = float(c["close"]) - float(c["open"])
+                rng = float(c["high"]) - float(c["low"])
+                if rng <= 0:
+                    continue
+                
+                if direction == "BUY":
+                    in_zone = float(c["low"]) <= zone_high
+                    is_reaction = body > 0 and body / rng > 0.3
+                    if in_zone and is_reaction:
+                        new_entry = float(c["close"])
+                        new_sl = min(float(c["low"]), zone_low) - rng * 0.2
+                        # Floor/cap XAU
+                        new_risk = abs(new_entry - new_sl)
+                        if asset == "XAU_USD":
+                            if new_risk < 8.0:
+                                new_sl = new_entry - 8.0
+                                new_risk = 8.0
+                            elif new_risk > MAX_RISK_XAU:
+                                new_sl = new_entry - MAX_RISK_XAU
+                                new_risk = MAX_RISK_XAU
+                        if new_risk > 0:
+                            rr2_val = signal.get("rr2") or 2.0
+                            signal["entry"] = round(new_entry, 5)
+                            signal["stop_loss"] = round(new_sl, 5)
+                            signal["risk"] = round(new_risk, 5)
+                            signal["tp1"] = round(new_entry + new_risk, 5)
+                            signal["tp2"] = round(new_entry + new_risk * rr2_val, 5)
+                            signal["rr1"] = 1.0
+                            signal["rr2"] = rr2_val
+                            reaction_found = True
+                            logger.info("OTE-LAB [%s %s]: REACTION ENTRY %.2f (orig %.2f) risk %.1f (orig %.1f)",
+                                       asset, direction, new_entry, orig_entry, new_risk, orig_risk)
+                        break
+                else:  # SELL
+                    in_zone = float(c["high"]) >= zone_low
+                    is_reaction = body < 0 and abs(body) / rng > 0.3
+                    if in_zone and is_reaction:
+                        new_entry = float(c["close"])
+                        new_sl = max(float(c["high"]), zone_high) + rng * 0.2
+                        new_risk = abs(new_entry - new_sl)
+                        if asset == "XAU_USD":
+                            if new_risk < 8.0:
+                                new_sl = new_entry + 8.0
+                                new_risk = 8.0
+                            elif new_risk > MAX_RISK_XAU:
+                                new_sl = new_entry + MAX_RISK_XAU
+                                new_risk = MAX_RISK_XAU
+                        if new_risk > 0:
+                            rr2_val = signal.get("rr2") or 2.0
+                            signal["entry"] = round(new_entry, 5)
+                            signal["stop_loss"] = round(new_sl, 5)
+                            signal["risk"] = round(new_risk, 5)
+                            signal["tp1"] = round(new_entry - new_risk, 5)
+                            signal["tp2"] = round(new_entry - new_risk * rr2_val, 5)
+                            signal["rr1"] = 1.0
+                            signal["rr2"] = rr2_val
+                            reaction_found = True
+                            logger.info("OTE-LAB [%s %s]: REACTION ENTRY %.2f (orig %.2f) risk %.1f (orig %.1f)",
+                                       asset, direction, new_entry, orig_entry, new_risk, orig_risk)
+                        break
+            
+            if not reaction_found:
+                logger.info("OTE-LAB [%s %s]: SKIP no reaction in zone (waiting)", asset, direction)
+                continue
+
+        # ══════════════════════════════════════════════════════
         # ── MOD LAB 3: Reaction zone come target fallback ────
         # ══════════════════════════════════════════════════════
         if signal.get("liquidity_priority") is None:
@@ -578,6 +673,212 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
 
         _notify_signal(signal, config)
 
+    # ── RECURRING_ZONE signals ──
+    try:
+        _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config)
+    except Exception as e:
+        logger.error("OTE-LAB [%s]: recurring zone error: %s", asset, e)
+
+
+# ================================================================
+# RECURRING_ZONE — zone con 5+ visite storiche H4+H1
+# Simulazione su 753 trade: WR 56.4%, avgR +0.270, sumR +194.1
+# ================================================================
+
+RECURRING_PROXIMITY = {"XAU_USD": 15.0, "BTC_USDT": 200.0}
+MIN_ZONE_VISITS = 5
+
+def _find_recurring_zones(conn, asset, current_price):
+    from collections import Counter
+    bucket_size = 10.0 if asset == "XAU_USD" else 500.0
+
+    h4_buckets = Counter()
+    h4_types = {}
+    try:
+        cur = conn.execute("SELECT swing_type, price FROM lh_swing_zones WHERE asset=? AND timeframe='H4'", (asset,))
+        for st, p in cur.fetchall():
+            b = round(p / bucket_size) * bucket_size
+            h4_buckets[b] += 1
+            h4_types[b] = st
+    except Exception:
+        pass
+
+    h1_buckets = Counter()
+    h1_types = {}
+    try:
+        cur = conn.execute("SELECT high, low FROM candles_cache WHERE asset=? AND timeframe='1h' ORDER BY timestamp", (asset,))
+        candles = cur.fetchall()
+        lb = 3
+        for i in range(lb, len(candles)-lb):
+            h, l = candles[i]
+            if all(h >= candles[j][0] for j in range(i-lb,i)) and all(h >= candles[j][0] for j in range(i+1,i+lb+1)):
+                b = round(h / bucket_size) * bucket_size
+                h1_buckets[b] += 1
+                h1_types[b] = "HIGH"
+            if all(l <= candles[j][1] for j in range(i-lb,i)) and all(l <= candles[j][1] for j in range(i+1,i+lb+1)):
+                b = round(l / bucket_size) * bucket_size
+                h1_buckets[b] += 1
+                h1_types[b] = "LOW"
+    except Exception:
+        pass
+
+    proximity = RECURRING_PROXIMITY.get(asset, 15.0)
+    zones = []
+    for b in set(h4_buckets.keys()) | set(h1_buckets.keys()):
+        v4 = h4_buckets.get(b, 0)
+        v1 = h1_buckets.get(b, 0)
+        if v4 + v1 < MIN_ZONE_VISITS:
+            continue
+        if abs(current_price - b) > proximity:
+            continue
+        lt = h4_types.get(b) or h1_types.get(b)
+        zones.append({
+            "bucket_price": b, "visits": v4+v1, "visits_h4": v4, "visits_h1": v1,
+            "score": v4*3 + v1,
+            "expected_direction": "SELL" if lt == "HIGH" else "BUY",
+            "last_swing_type": lt,
+        })
+    zones.sort(key=lambda z: -z["score"])
+    return zones
+
+
+def _check_m5_reaction(df_m5, direction):
+    if df_m5 is None or len(df_m5) < 3:
+        return False
+    for _, c in df_m5.iloc[-3:].iterrows():
+        body = float(c["close"]) - float(c["open"])
+        rng = float(c["high"]) - float(c["low"])
+        if rng <= 0: continue
+        if direction == "BUY" and body > 0 and body/rng > 0.5:
+            return True
+        if direction == "SELL" and body < 0 and abs(body)/rng > 0.5:
+            return True
+    return False
+
+
+def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
+    if df_m15 is None or len(df_m15) < 5:
+        return
+
+    current_price = float(df_m15.iloc[-1]["close"])
+    zones = _find_recurring_zones(conn, asset, current_price)
+
+    for zone in zones:
+        direction = zone["expected_direction"]
+
+        # Dedup: gia' aperto nella stessa direzione
+        if conn.execute(
+            "SELECT 1 FROM ote_lab_signals WHERE asset=? AND direction=? AND final_outcome='OPEN'",
+            (asset, direction)).fetchone():
+            continue
+
+        # Cooldown 4h per zona specifica
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
+        if conn.execute(
+            "SELECT 1 FROM ote_lab_signals WHERE asset=? AND direction=? "
+            "AND zone_ref LIKE 'RECURRING_%' AND timestamp_setup > ?",
+            (asset, direction, cutoff)).fetchone():
+            continue
+
+        # Conferma M5
+        df_m5 = v3_db.get_v3_candles_df(conn, asset, "5m", limit=20)
+        if not _check_m5_reaction(df_m5, direction):
+            continue
+
+        # H4 trend
+        if LAB_STRICT_H4 and df_h4 is not None and len(df_h4) >= 21:
+            closes = df_h4["close"].astype(float).values
+            ema = closes.copy()
+            k = 2.0/21
+            for i in range(1, len(ema)):
+                ema[i] = closes[i]*k + ema[i-1]*(1-k)
+            if len(ema) >= 7:
+                move = (ema[-1] - ema[-7]) / ema[-7] * 100
+                h4 = "BULLISH" if move > 0.5 else ("BEARISH" if move < -0.5 else "NEUTRAL")
+                if direction == "BUY" and h4 == "BEARISH": continue
+                if direction == "SELL" and h4 == "BULLISH": continue
+
+        # Entry/SL/TP
+        entry = current_price
+        bucket_size = 10.0 if asset == "XAU_USD" else 500.0
+        half = bucket_size / 2
+        if asset == "XAU_USD":
+            sl_dist = min(max(half + 5, 8.0), 25.0)
+        else:
+            sl_dist = half + 50
+
+        sl = entry - sl_dist if direction == "BUY" else entry + sl_dist
+        risk = abs(entry - sl)
+        if risk <= 0: continue
+
+        # Target: reaction zone o RR 2.0
+        rz = _find_rz_target(conn, asset, direction, entry, risk)
+        rz_used = False
+        if rz:
+            tp = rz["price"]
+            rr2 = rz["rr"]
+            target_label = rz["label"]
+            rz_used = True
+        else:
+            tp = entry + risk*2 if direction == "BUY" else entry - risk*2
+            rr2 = 2.0
+            target_label = "FALLBACK_2R"
+
+        if rr2 < 1.2: continue
+        tp1 = entry + risk if direction == "BUY" else entry - risk
+
+        now = datetime.now(timezone.utc)
+        sig = {
+            "asset": asset, "direction": direction,
+            "timestamp_setup": now.isoformat(),
+            "entry": round(entry, 5), "stop_loss": round(sl, 5),
+            "tp1": round(tp1, 5), "tp2": round(tp, 5),
+            "risk": round(risk, 5), "rr1": 1.0, "rr2": round(rr2, 3),
+            "entry_zone_type": f"RECURRING_{zone['last_swing_type']}",
+            "zone_ref": f"RECURRING_{zone['last_swing_type']}_{zone['bucket_price']:.0f}",
+            "liquidity_target": target_label,
+            "rz_target_used": rz_used, "rz_target_label": target_label if rz_used else None,
+            "quality_score": zone["score"], "quality_label": "LAB",
+            "session": _get_session(now),
+        }
+
+        try:
+            sid = _insert_signal(conn, sig)
+        except Exception as e:
+            logger.error("OTE-LAB [%s %s]: recurring insert error: %s", asset, direction, e)
+            continue
+
+        logger.info("OTE-LAB [%s %s]: 🏦 RECURRING_ZONE %.0f (H4=%dx H1=%dx score=%d) entry=%.2f tp=%.2f rr=%.2f",
+                    asset, direction, zone["bucket_price"],
+                    zone["visits_h4"], zone["visits_h1"], zone["score"],
+                    entry, tp, rr2)
+
+        # Notifica
+        try:
+            from notifications import telegram_bot, ntfy_bot
+            tk = config.get("TELEGRAM_BOT_TOKEN", "")
+            ch = config.get("TELEGRAM_CHAT_ID", "")
+            if tk and ch:
+                emoji = "🟢" if direction == "BUY" else "🔴"
+                msg = (f"{emoji} *OTE-LAB 🏦 RECURRING ZONE*\n\n"
+                       f"*{asset.replace('_',' ')}* — {direction}\n"
+                       f"Zona: {zone['bucket_price']:.0f} "
+                       f"(H4: {zone['visits_h4']}x | H1: {zone['visits_h1']}x)\n\n"
+                       f"Entry:  `{entry:.2f}`\n"
+                       f"SL:     `{sl:.2f}`\n"
+                       f"TP:     `{tp:.2f}` ({rr2:.2f}R)\n\n"
+                       f"Target: {target_label}\n"
+                       f"Score: {zone['score']} | Conferma M5: ✅\n"
+                       f"⚠️ LAB — solo raccolta dati")
+                telegram_bot.send_message(tk, ch, msg)
+            ntfy_topic = config.get("NTFY_TOPIC", "")
+            if ntfy_topic:
+                ntfy_bot.send_message(ntfy_topic,
+                    f"OTE-LAB {asset} {direction} RECURRING",
+                    msg.replace("*","").replace("`",""))
+        except Exception as e:
+            logger.warning("OTE-LAB recurring notify: %s", e)
+
 
 # ================================================================
 # Entry point
@@ -585,62 +886,19 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
 
 def run_ote_scan(config: dict, market_contexts: dict = None):
     """
-    Entry point. Chiamato da ote_scanner_runner.py.
-
-    Se market_contexts e' None (standalone), legge gli snapshot dal DB.
-    Se passato da edge_lab_runner, usa il context gia' costruito.
+    Entry point. Chiamato da edge_lab_runner (con market_contexts)
+    o da ote_scanner_runner (senza, standalone).
     """
     conn = core_db.get_connection(config["DB_PATH"])
     _init_schema(conn)
 
-    # Reset one-time: dati contaminati pre-cooldown
-    try:
-        n = conn.execute("SELECT COUNT(*) FROM ote_lab_signals").fetchone()[0]
-        if 0 < n <= 20:
-            conn.execute("DELETE FROM ote_lab_signals")
-            conn.commit()
-            logger.info("OTE-LAB: reset %d segnali contaminati", n)
-    except Exception:
-        pass
-
     now = datetime.now(timezone.utc)
 
-    # Se non riceve market_contexts, li costruisce dal DB
     if market_contexts is None:
-        market_contexts = {}
-        for asset in OTE_LAB_ASSETS:
-            ctx = {"asset": asset}
-            # Leggi MIE snapshot (stessa lista di TRB)
-            mie = {}
-            for prefix, table in [
-                ("structure","structure_snapshots"),("volatility","volatility_snapshots"),
-                ("order_block","order_block_snapshots"),("fvg","fvg_snapshots"),
-                ("liquidity","liquidity_snapshots"),("session_sweep","session_sweep_snapshots"),
-                ("reaction_map","reaction_map_snapshots"),("candlestick","candlestick_snapshots"),
-                ("macro","macro_snapshots"),("market_state","market_state_snapshots"),
-            ]:
-                try:
-                    row = conn.execute(
-                        f"SELECT snapshot_json FROM {table} WHERE asset=? "
-                        f"ORDER BY timestamp_snapshot DESC LIMIT 1", (asset,)).fetchone()
-                    if row:
-                        snap = json.loads(row[0])
-                        if isinstance(snap, dict):
-                            for k, v in snap.items():
-                                mie[f"mie_{prefix}_{k}"] = v
-                except Exception:
-                    pass
-            ctx["mie_context"] = mie
-            # Liquidity map
-            try:
-                row = conn.execute(
-                    "SELECT snapshot_json FROM liquidity_snapshots "
-                    "WHERE asset=? ORDER BY timestamp_snapshot DESC LIMIT 1",
-                    (asset,)).fetchone()
-                if row: ctx["liquidity"] = json.loads(row[0])
-            except Exception:
-                pass
-            market_contexts[asset] = ctx
+        logger.warning("OTE-LAB: nessun market_contexts ricevuto — skip. "
+                       "OTE-LAB deve essere chiamato da edge_lab_runner.")
+        conn.close()
+        return
 
     logger.info("=== OTE-LAB Scanner: inizio ciclo (%s) ===", ", ".join(OTE_LAB_ASSETS))
 
