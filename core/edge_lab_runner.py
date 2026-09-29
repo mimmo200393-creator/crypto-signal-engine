@@ -449,4 +449,10 @@ def run_edge_lab_scan(config: dict):
     except Exception as e:
         logger.error("TRB Scanner: errore non gestito: %s", e)
 
+    try:
+        from core import ote_runner
+        ote_runner.run_ote_scan(config, market_contexts)
+    except Exception as e:
+        logger.error("OTE-LAB Scanner: errore non gestito: %s", e)
+
     logger.info("=== Edge Lab Scanner: fine ciclo ===")
