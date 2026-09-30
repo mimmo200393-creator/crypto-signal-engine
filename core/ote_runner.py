@@ -29,12 +29,18 @@ logger = logging.getLogger("ote.lab")
 
 OTE_LAB_ASSETS = ["BTC_USDT", "XAU_USD"]
 
-# ── MOD LAB 1: Trailing piu' stretto ──
-LAB_TRAIL_R = 0.5          # TRB usa 0.7
+# ── Trailing: IDENTICO a TRB (0.7) per isolare l'effetto reaction entry ──
+# Test disciplinato: cambiamo una variabile alla volta. Se OTE-LAB batte
+# TRB, sappiamo che e' merito della reaction entry, non di un mix di
+# effetti (trail 0.5 che magari peggiora + reaction che migliora).
+LAB_TRAIL_R = 0.7          # uguale a TRB
 LAB_TRAIL_MIN_LOCK = {"BTC_USDT": 60.0, "XAU_USD": 2.5}
 
-# ── MOD LAB 2: Strict trend H4 ──
-LAB_STRICT_H4 = True
+# ── Strict trend H4: DISATTIVATO (verificato 30/09) ──
+# I dati mostrano che scarta il 37% dei segnali (130/356) che sono
+# buoni quanto gli altri: WR 59.2% identico, avgR +0.295, sumR +38.4
+# buttati via senza beneficio. TRB usa solo H1, teniamo uguale.
+LAB_STRICT_H4 = False
 
 # Stesse costanti di TRB
 MAX_RISK_XAU = 25.0
@@ -98,6 +104,18 @@ CREATE TABLE IF NOT EXISTS ote_lab_signals (
 """
 
 def _init_schema(conn):
+    # Fix 30/09: la tabella creata da versioni precedenti manca di
+    # colonne (tp1_hit, rr1, zone_ref, ...). CREATE IF NOT EXISTS non
+    # aggiorna una tabella gia' esistente. La ricreo una volta con lo
+    # schema corretto. I dati vecchi erano comunque contaminati/vuoti.
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(ote_lab_signals)").fetchall()]
+        if cols and "tp1_hit" not in cols:
+            conn.execute("DROP TABLE ote_lab_signals")
+            conn.commit()
+            logger.info("OTE-LAB: tabella ricreata con schema aggiornato")
+    except Exception:
+        pass
     conn.execute(_CREATE)
     conn.commit()
 
