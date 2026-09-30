@@ -113,12 +113,11 @@ def load_tt_stats(conn):
 
 
 def load_ote_open_unified(conn):
-    """Segnali OTE-LAB aperti (TRB_CLONE + RECURRING_ZONE)."""
+    """Segnali OTE-LAB aperti (clone TRB + RECURRING_ZONE)."""
     try:
         rows = q(conn, """
-            SELECT signal_id, asset, direction, signal_type,
-                   entry, stop_loss, tp2, rr2,
-                   entry_zone_type, rz_target_used, zone_visits,
+            SELECT signal_id, asset, direction, entry, stop_loss, tp2, rr2,
+                   entry_zone_type, zone_ref, rz_target_used,
                    timestamp_setup, mae, mfe, bars_open
             FROM ote_lab_signals WHERE final_outcome='OPEN'
             ORDER BY timestamp_setup DESC
@@ -128,22 +127,21 @@ def load_ote_open_unified(conn):
     now = datetime.now(timezone.utc)
     result = []
     for r in rows:
-        ts = r[11]
+        ts = r[10]
         try:
             setup_dt = datetime.fromisoformat(ts)
             if setup_dt.tzinfo is None: setup_dt = setup_dt.replace(tzinfo=timezone.utc)
             elapsed_h = round((now - setup_dt).total_seconds() / 3600, 1)
         except: elapsed_h = 0
-        sig_type = r[3] or "TRB_CLONE"
-        status = "🏦 RZ" if sig_type == "RECURRING_ZONE" else "🧪 LAB"
-        zone_info = r[8] or "—"
-        if r[10]:  # zone_visits
-            zone_info = f"{zone_info} ({r[10]}x)"
+        zone_ref = r[8] or ""
+        is_recurring = "RECURRING" in str(zone_ref)
+        status = "🏦 RZ" if is_recurring else "🧪 LAB"
+        zone_info = r[7] or "—"
         result.append({
             "asset": r[1], "direction": r[2] or "—",
             "status": status,
-            "entry": r[4], "sl": r[5], "tp": r[6],
-            "rr": r[7], "zone_strength": zone_info,
+            "entry": r[3], "sl": r[4], "tp": r[5],
+            "rr": r[6], "zone_strength": zone_info,
             "elapsed_h": elapsed_h, "ts": ts,
         })
     return result
@@ -158,7 +156,7 @@ def load_ote_stats_unified(conn):
         """)
         d = {r[0]: {"n": r[1], "sum_r": r[2]} for r in rows}
         n = sum(v["n"] for v in d.values())
-        wins = sum(v["n"] for k, v in d.items() if k in ("TP2_HIT", "TRAIL_HIT"))
+        wins = sum(v["n"] for k, v in d.items() if k in ("TP2_HIT", "TP1_HIT", "TRAIL_HIT"))
         total_r = sum(v["sum_r"] for v in d.values())
         open_n = q(conn, "SELECT COUNT(*) FROM ote_lab_signals WHERE final_outcome='OPEN'")[0][0]
         return {"n": n, "open": open_n,
