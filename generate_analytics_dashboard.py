@@ -113,10 +113,10 @@ def load_ote_signals(conn):
     try:
         rows = q(conn, """
             SELECT asset, direction, entry_zone_type, quality_score,
-                   signal_type, quality_label, rz_target_used,
+                   zone_ref, quality_label, rz_target_used,
                    liquidity_target, final_outcome,
                    mae, mfe, rr2, result_r, bars_open,
-                   timestamp_setup, zone_visits
+                   timestamp_setup
             FROM ote_lab_signals WHERE final_outcome NOT IN ('OPEN','')
             ORDER BY timestamp_setup DESC
         """)
@@ -125,13 +125,12 @@ def load_ote_signals(conn):
     result = []
     for r in rows:
         rr = r[12] if r[12] is not None else r[11]
-        sig_type = r[4] or "TRB_CLONE"
-        zone_info = r[2] or "N/A"
-        if r[15]:  # zone_visits
-            zone_info = f"{zone_info} ({r[15]}x)"
+        zone_ref = r[4] or ""
+        is_recurring = "RECURRING" in str(zone_ref)
+        sig_type = "RECURRING_ZONE" if is_recurring else "TRB_CLONE"
         result.append({
             "asset": r[0], "direction": r[1],
-            "zone_ref": zone_info, "zone_score": r[3] or 0,
+            "zone_ref": r[2] or "N/A", "zone_score": r[3] or 0,
             "zone_strength": sig_type,
             "quality_label": r[5] or "N/A", "quality_score": r[3] or 0,
             "tp_type": r[7] or "N/A",
@@ -143,7 +142,7 @@ def load_ote_signals(conn):
     return result
 
 def load_ote_candidates_stats(conn):
-    """Statistiche OTE-LAB — non usa piu' candidate neutri."""
+    """Statistiche OTE-LAB — segnali aperti/chiusi."""
     try:
         open_n = q(conn, "SELECT COUNT(*) FROM ote_lab_signals WHERE final_outcome='OPEN'")[0][0]
         closed_n = q(conn, "SELECT COUNT(*) FROM ote_lab_signals WHERE final_outcome NOT IN ('OPEN','')")[0][0]
@@ -161,7 +160,7 @@ def load_ote_recent(conn, limit=20):
     try:
         return q(conn, f"""
             SELECT signal_id, asset, direction, entry, stop_loss, tp2,
-                   rr2, quality_score, quality_label, signal_type,
+                   rr2, quality_score, quality_label, zone_ref,
                    entry_zone_type, liquidity_target, final_outcome,
                    timestamp_setup
             FROM ote_lab_signals ORDER BY timestamp_setup DESC LIMIT {limit}
@@ -610,7 +609,6 @@ def section_tt(rows, recent, invalidated_count):
   {rec_html}
 </div>"""
 
-
 # ============================================================
 # SEZIONE 1 — OTE-LAB (Clone TRB + Reaction Zones + Recurring Zones)
 # ============================================================
@@ -926,7 +924,6 @@ def section_v41p1(rows):
   </div>
   {v41_table("Per Sessione", bd_sess, ["ASIA","LONDON","NEW_YORK"], "Sessione")}
 </div>"""
-
 
 # ============================================================
 # Generate — MODIFICATO SOLO per: caricare i dati TT + inserire
