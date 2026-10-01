@@ -42,6 +42,45 @@ LAB_TRAIL_MIN_LOCK = {"BTC_USDT": 60.0, "XAU_USD": 2.5}
 # reaction zone e' piu' lontana, taglio il TP a 4R (piu' raggiungibile).
 MAX_RR2 = 4.0
 
+# ── Break-even + offset (verificato 01/10) ──
+# Chiudere a esattamente l'entry (0R) in realta' perde lo spread.
+# Il BE viene spostato un filo SOPRA l'entry per coprire spread+commissioni.
+# Valore in frazione di R: 0.3R copre lo spread con margine.
+# (XAU SL 10pt → BE+ a +3pt = copre spread 2-4pt + piccolo profitto;
+#  BTC SL 300pt → BE+ a +90pt = copre spread 20-50pt con margine)
+BE_PLUS_R = 0.3
+
+# ── Gap minimo TP1→TP2 ──
+# Se TP2 e' troppo vicino a TP1 (es. 1.0R e 1.3R), avere due target
+# separati e' inutile. Richiediamo almeno 1R di gap: se il target RZ
+# e' piu' vicino, lo portiamo ad almeno TP1+1R.
+MIN_TP_GAP_R = 1.0
+
+# ── Classificazione tier (tracking puro, verificato 01/10) ──
+# Audit statistico su 467 trade TRB: i 3 fattori con piu' potere
+# predittivo sono zona (FVG/OB vs EMA, spread 25pt), liquidita'
+# (CRITICAL 70% vs HIGH 55%, spread 15pt), ADX (alto 63% vs basso
+# 48%, spread 14pt). Quando coincidono → WR verso 70%+.
+# Questo campo e' SOLO un'etichetta: non cambia entry/SL/TP/size.
+# Serve a verificare FUORI CAMPIONE se la classificazione regge,
+# prima di applicare una size dinamica (fase 2, solo se confermato).
+def _classify_tier(signal):
+    zone = signal.get("entry_zone_type")
+    liq = signal.get("liquidity_priority")
+    adx = signal.get("adx") or 0
+    good_zone = zone in ("fvg", "order_block")   # fattore #1 (spread 25pt)
+    strong_liq = liq in ("CRITICAL", "HIGH")      # fattore #2 (spread 15pt)
+    critical = liq == "CRITICAL"
+    strong_adx = adx >= 35                         # fattore #3 (spread 14pt)
+    # PREMIUM: tutti e tre forti al massimo (zona buona + CRITICAL + ADX alto)
+    if good_zone and critical and strong_adx:
+        return "PREMIUM"
+    # FORTE: zona buona + almeno un altro fattore forte
+    if good_zone and (strong_liq or strong_adx):
+        return "FORTE"
+    # NORMALE: tutto il resto (incluso zona buona da sola)
+    return "NORMALE"
+
 # ── Strict trend H4: DISATTIVATO (verificato 30/09) ──
 # I dati mostrano che scarta il 37% dei segnali (130/356) che sono
 # buoni quanto gli altri: WR 59.2% identico, avgR +0.295, sumR +38.4
@@ -105,7 +144,8 @@ CREATE TABLE IF NOT EXISTS ote_lab_signals (
     timestamp_sl        TEXT,
     rz_target_used      BOOLEAN DEFAULT 0,
     rz_target_label     TEXT,
-    tp2_original        REAL
+    tp2_original        REAL,
+    tier                TEXT
 );
 """
 
@@ -116,10 +156,17 @@ def _init_schema(conn):
     # schema corretto. I dati vecchi erano comunque contaminati/vuoti.
     try:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(ote_lab_signals)").fetchall()]
-        if cols and "tp1_hit" not in cols:
-            conn.execute("DROP TABLE ote_lab_signals")
-            conn.commit()
-            logger.info("OTE-LAB: tabella ricreata con schema aggiornato")
+        if cols and ("tp1_hit" not in cols or "tier" not in cols):
+            # Aggiungo solo la colonna tier se e' l'unica mancante
+            # (non cancello i dati se lo schema e' gia' quello nuovo)
+            if "tp1_hit" in cols and "tier" not in cols:
+                conn.execute("ALTER TABLE ote_lab_signals ADD COLUMN tier TEXT")
+                conn.commit()
+                logger.info("OTE-LAB: colonna tier aggiunta")
+            else:
+                conn.execute("DROP TABLE ote_lab_signals")
+                conn.commit()
+                logger.info("OTE-LAB: tabella ricreata con schema aggiornato")
     except Exception:
         pass
     conn.execute(_CREATE)
@@ -139,8 +186,8 @@ def _insert_signal(conn, sig: dict) -> str:
             flag_adx_ok, flag_trigger_present, flag_volatility_ok, flag_sl_widened,
             liquidity_target, liquidity_target_price, liquidity_priority,
             quality_score, quality_label, expiry_bars,
-            rz_target_used, rz_target_label, tp2_original
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            rz_target_used, rz_target_label, tp2_original, tier
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         sid, sig["asset"], sig["direction"], sig["timestamp_setup"],
         sig.get("entry"), sig.get("stop_loss"), sig.get("tp1"), sig.get("tp2"),
@@ -156,7 +203,7 @@ def _insert_signal(conn, sig: dict) -> str:
         sig.get("quality_score"), sig.get("quality_label"),
         sig.get("expiry_bars", SIGNAL_EXPIRY_BARS),
         sig.get("rz_target_used", False), sig.get("rz_target_label"),
-        sig.get("tp2_original"),
+        sig.get("tp2_original"), sig.get("tier"),
     ))
     conn.commit()
     return sid
@@ -231,13 +278,14 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
         trail_active = False
         be_active = False
 
-        # Break-even dopo TP1
+        # Break-even+ dopo TP1 (un filo sopra entry per coprire lo spread)
         if tp1_already:
             be_active = True
+            be_offset = BE_PLUS_R * risk
             if d == "BUY":
-                effective_sl = max(effective_sl, entry)
+                effective_sl = max(effective_sl, entry + be_offset)
             else:
-                effective_sl = min(effective_sl, entry)
+                effective_sl = min(effective_sl, entry - be_offset)
 
         # Trailing (sopra il break-even)
         if old_mfe >= trail_dist:
@@ -284,14 +332,14 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
                 lock_val = min(lock_val, old_mfe)
                 trail_r = round(lock_val / risk, 3)
                 # Dopo TP1 il minimo garantito e' 1R: prendo il maggiore
-                if be_active and trail_r < 1.0:
-                    result_r = 1.0
+                if be_active and trail_r < BE_PLUS_R:
+                    result_r = BE_PLUS_R
                     outcome = "TP1_HIT"
                 else:
                     result_r = trail_r
                     outcome = "TRAIL_HIT"
             elif be_active:
-                result_r = 1.0
+                result_r = BE_PLUS_R
                 outcome = "TP1_HIT"
             else:
                 result_r = -1.0
@@ -301,14 +349,14 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
                 lock_val = max(old_mfe - trail_dist, min_lock)
                 lock_val = min(lock_val, old_mfe)
                 trail_r = round(lock_val / risk, 3)
-                if be_active and trail_r < 1.0:
-                    result_r = 1.0
+                if be_active and trail_r < BE_PLUS_R:
+                    result_r = BE_PLUS_R
                     outcome = "TP1_HIT"
                 else:
                     result_r = trail_r
                     outcome = "TRAIL_HIT"
             elif be_active:
-                result_r = 1.0
+                result_r = BE_PLUS_R
                 outcome = "TP1_HIT"
             else:
                 result_r = 0
@@ -400,6 +448,7 @@ def _notify_signal(signal, config):
             f"TP1:    `{fp(signal.get('tp1'))}` (1R)\n"
             f"TP2:    `{fp(signal.get('tp2'))}` ({signal.get('rr2',0):.2f}R){rz_tag}\n\n"
             f"Target: {signal.get('liquidity_target','N/A')}\n"
+            f"Livello: {signal.get('tier','NORMALE')}\n"
             f"Trail: {LAB_TRAIL_R}R | Session: {signal.get('session','N/A')}\n"
             f"⚠️ LAB — solo raccolta dati"
         )
@@ -408,11 +457,11 @@ def _notify_signal(signal, config):
         chat_id = config.get("TELEGRAM_CHAT_ID", "")
         ntfy_topic = config.get("NTFY_TOPIC", "")
 
+        # LAB: solo Telegram, niente ntfy (ntfy serve all'esecuzione MT5
+        # automatica, ma i segnali LAB non vanno eseguiti — mandare
+        # entrambi causava il doppio messaggio).
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
-        if ntfy_topic:
-            title = f"OTE-LAB {asset.replace('_',' ')} {direction} | {quality}"
-            ntfy_bot.send_message(ntfy_topic, title, text.replace("*","").replace("`",""))
     except Exception as e:
         logger.warning("OTE-LAB _notify: %s", e)
 
@@ -455,13 +504,9 @@ def _notify_stop_move(sp, config):
                 f"⚠️ LAB — solo raccolta dati")
         bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
         chat_id = config.get("TELEGRAM_CHAT_ID", "")
+        # LAB: solo Telegram, niente ntfy (evita doppio messaggio)
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
-        ntfy_topic = config.get("NTFY_TOPIC", "")
-        if ntfy_topic:
-            ntfy_bot.send_message(ntfy_topic,
-                f"OTE-LAB {asset} {direction} | {tag}",
-                text.replace("*","").replace("`",""))
     except Exception as e:
         logger.warning("OTE-LAB stop_move notify: %s", e)
 
@@ -733,6 +778,9 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
                     logger.info("OTE-LAB [%s %s]: RZ target %s RR=%.2f",
                                asset, direction, rz["label"], rz_rr)
 
+        # ── Classifica tier (tracking puro) ──
+        signal["tier"] = _classify_tier(signal)
+
         # ── Inserisci segnale ──
         signal["timestamp_setup"] = now.isoformat()
         try:
@@ -933,6 +981,12 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
             rr2 = 2.0
             target_label = "FALLBACK_2R"
 
+        # Gap minimo TP1→TP2: se troppo vicini, porta TP2 ad almeno TP1+1R
+        if rr2 < 1.0 + MIN_TP_GAP_R:
+            rr2 = 1.0 + MIN_TP_GAP_R
+            tp = entry + rr2*risk if direction == "BUY" else entry - rr2*risk
+            target_label = "TP1+gap"
+
         if rr2 < 1.2: continue
         tp1 = entry + risk if direction == "BUY" else entry - risk
 
@@ -949,6 +1003,7 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
             "rz_target_used": rz_used, "rz_target_label": target_label if rz_used else None,
             "quality_score": zone["score"], "quality_label": "LAB",
             "session": _get_session(now),
+            "tier": "RECURRING",  # categoria propria, non classificata coi 3 fattori TRB
         }
 
         try:
@@ -980,11 +1035,7 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
                        f"Score: {zone['score']} | Conferma M5: ✅\n"
                        f"⚠️ LAB — solo raccolta dati")
                 telegram_bot.send_message(tk, ch, msg)
-            ntfy_topic = config.get("NTFY_TOPIC", "")
-            if ntfy_topic:
-                ntfy_bot.send_message(ntfy_topic,
-                    f"OTE-LAB {asset} {direction} RECURRING",
-                    msg.replace("*","").replace("`",""))
+            # LAB: solo Telegram, niente ntfy (evita doppio messaggio)
         except Exception as e:
             logger.warning("OTE-LAB recurring notify: %s", e)
 
