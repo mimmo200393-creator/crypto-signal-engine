@@ -36,6 +36,12 @@ OTE_LAB_ASSETS = ["BTC_USDT", "XAU_USD"]
 LAB_TRAIL_R = 0.7          # uguale a TRB
 LAB_TRAIL_MIN_LOCK = {"BTC_USDT": 60.0, "XAU_USD": 2.5}
 
+# ── Cap RR2 (verificato 01/10 su dati reali) ──
+# Target oltre 5R non si raggiungono e il trade muore: RR2>=5 → sumR -1.8
+# (WR 43%), RR2<5 → sumR +2.3 (WR 45%). Limito il target a 4R max: se la
+# reaction zone e' piu' lontana, taglio il TP a 4R (piu' raggiungibile).
+MAX_RR2 = 4.0
+
 # ── Strict trend H4: DISATTIVATO (verificato 30/09) ──
 # I dati mostrano che scarta il 37% dei segnali (130/356) che sono
 # buoni quanto gli altri: WR 59.2% identico, avgR +0.295, sumR +38.4
@@ -203,35 +209,50 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
         new_mae = max(old_mae, adverse)
         new_mfe = max(old_mfe, favorable)
 
-        # ── MOD LAB: Trailing 0.5R ──
-        trail_dist = LAB_TRAIL_R * risk
-        min_lock = LAB_TRAIL_MIN_LOCK.get(asset, 0)
-        effective_sl = sl
-        trail_active = False
-
-        if old_mfe >= trail_dist:
-            lock = max(old_mfe - trail_dist, min_lock)
-            lock = min(lock, old_mfe)
-            if d == "BUY":
-                effective_sl = max(sl, entry + lock)
-            else:
-                effective_sl = min(sl, entry - lock)
-            trail_active = True
-
-            # Notifica spostamento stop (come TRB)
-            if not tp1_already:  # prima attivazione
-                stop_moves.append({
-                    "signal_id": sid, "asset": asset, "direction": d,
-                    "event": "TRAIL_ACTIVATED", "new_stop": effective_sl,
-                })
-
-        # Stage2: TP1 raggiunto
+        # ── TP1 raggiunto? (rilevato PRIMA di calcolare lo stop) ──
         tp1_hit_now = False
         if not tp1_already and tp1:
             if (d == "BUY" and current_high >= tp1) or (d == "SELL" and current_low <= tp1):
                 tp1_hit_now = True
+                tp1_already = True
                 conn.execute("UPDATE ote_lab_signals SET tp1_hit=1, timestamp_tp1=? WHERE signal_id=?",
                             (now_iso, sid))
+                stop_moves.append({
+                    "signal_id": sid, "asset": asset, "direction": d,
+                    "event": "TP1_HIT_BE", "new_stop": entry,
+                })
+
+        # ── Sistema di sicurezza (come TRB) ──
+        # 1. Dopo TP1 → SL a break-even (non perdi piu')
+        # 2. Trailing → segue il prezzo con distanza TRAIL_R, floor minimo
+        trail_dist = LAB_TRAIL_R * risk
+        min_lock = LAB_TRAIL_MIN_LOCK.get(asset, 0)
+        effective_sl = sl
+        trail_active = False
+        be_active = False
+
+        # Break-even dopo TP1
+        if tp1_already:
+            be_active = True
+            if d == "BUY":
+                effective_sl = max(effective_sl, entry)
+            else:
+                effective_sl = min(effective_sl, entry)
+
+        # Trailing (sopra il break-even)
+        if old_mfe >= trail_dist:
+            lock = max(old_mfe - trail_dist, min_lock)
+            lock = min(lock, old_mfe)
+            if d == "BUY":
+                effective_sl = max(effective_sl, entry + lock)
+            else:
+                effective_sl = min(effective_sl, entry - lock)
+            trail_active = True
+            if not tp1_already:
+                stop_moves.append({
+                    "signal_id": sid, "asset": asset, "direction": d,
+                    "event": "TRAIL_ACTIVATED", "new_stop": effective_sl,
+                })
 
         # Check esiti
         if d == "BUY":
@@ -244,24 +265,51 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
         outcome = None
         result_r = None
 
-        if sl_hit:
+        # PRIORITA' DEGLI ESITI (importante per non tagliare i win grandi):
+        # 1. TP2 pieno — sempre la priorita' massima. Se il prezzo arriva
+        #    al target, prendiamo il movimento pieno anche se nella stessa
+        #    candela ha toccato TP1. (Bug trovato nel double-check: prima
+        #    un trade che andava dritto a TP2 veniva chiuso a +1R.)
+        # 2. Trailing — se attivo, cattura il profitto raggiunto (puo'
+        #    essere molto > 1R se il prezzo e' salito parecchio).
+        # 3. Break-even dopo TP1 — solo se ne' TP2 ne' trailing: chiude a
+        #    +1R garantito (il minimo dopo aver toccato TP1).
+        # 4. SL pieno — solo se nulla di sopra e il prezzo va contro.
+        if tp2_hit:
+            result_r = sig.get("rr2") or round(abs(tp2 - entry) / risk, 3)
+            outcome = "TP2_HIT"
+        elif sl_hit:
             if trail_active:
                 lock_val = max(old_mfe - trail_dist, min_lock)
                 lock_val = min(lock_val, old_mfe)
-                result_r = round(lock_val / risk, 3)
-                outcome = "TRAIL_HIT"
+                trail_r = round(lock_val / risk, 3)
+                # Dopo TP1 il minimo garantito e' 1R: prendo il maggiore
+                if be_active and trail_r < 1.0:
+                    result_r = 1.0
+                    outcome = "TP1_HIT"
+                else:
+                    result_r = trail_r
+                    outcome = "TRAIL_HIT"
+            elif be_active:
+                result_r = 1.0
+                outcome = "TP1_HIT"
             else:
                 result_r = -1.0
                 outcome = "SL_HIT"
-        elif tp2_hit:
-            result_r = sig.get("rr2") or round(abs(tp2 - entry) / risk, 3)
-            outcome = "TP2_HIT"
         elif bars >= (sig.get("expiry_bars") or SIGNAL_EXPIRY_BARS):
             if trail_active:
                 lock_val = max(old_mfe - trail_dist, min_lock)
                 lock_val = min(lock_val, old_mfe)
-                result_r = round(lock_val / risk, 3)
-                outcome = "TRAIL_HIT"
+                trail_r = round(lock_val / risk, 3)
+                if be_active and trail_r < 1.0:
+                    result_r = 1.0
+                    outcome = "TP1_HIT"
+                else:
+                    result_r = trail_r
+                    outcome = "TRAIL_HIT"
+            elif be_active:
+                result_r = 1.0
+                outcome = "TP1_HIT"
             else:
                 result_r = 0
                 outcome = "EXPIRED"
@@ -390,11 +438,18 @@ def _notify_stop_move(sp, config):
         from notifications import telegram_bot, ntfy_bot
         asset = sp["asset"]
         direction = sp["direction"]
+        event = sp.get("event", "TRAIL_ACTIVATED")
         emoji = "🟢" if direction == "BUY" else "🔴"
         def fp(v):
             if v is None: return "N/A"
             return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
-        text = (f"{emoji} *OTE-LAB — TRAILING STOP*\n\n"
+        if event == "TP1_HIT_BE":
+            titolo = "OTE-LAB — TP1 RAGGIUNTO ✅ (SL a Break-Even)"
+            tag = "TP1/BE"
+        else:
+            titolo = "OTE-LAB — TRAILING STOP"
+            tag = "TRAIL"
+        text = (f"{emoji} *{titolo}*\n\n"
                 f"*{asset.replace('_',' ')}* — {direction}\n"
                 f"Nuovo stop: `{fp(sp['new_stop'])}`\n"
                 f"⚠️ LAB — solo raccolta dati")
@@ -405,7 +460,7 @@ def _notify_stop_move(sp, config):
         ntfy_topic = config.get("NTFY_TOPIC", "")
         if ntfy_topic:
             ntfy_bot.send_message(ntfy_topic,
-                f"OTE-LAB {asset} {direction} | TRAIL",
+                f"OTE-LAB {asset} {direction} | {tag}",
                 text.replace("*","").replace("`",""))
     except Exception as e:
         logger.warning("OTE-LAB stop_move notify: %s", e)
@@ -661,13 +716,22 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
                 rz = _find_rz_target(conn, asset, direction, entry, risk_val)
                 if rz:
                     signal["tp2_original"] = signal.get("tp2")
-                    signal["tp2"] = rz["price"]
-                    signal["rr2"] = rz["rr"]
+                    # Cap RR2 a 4R: se la RZ e' piu' lontana, taglio il TP
+                    rz_rr = rz["rr"]
+                    if rz_rr > MAX_RR2:
+                        rz_rr = MAX_RR2
+                        if direction == "BUY":
+                            signal["tp2"] = entry + MAX_RR2 * risk_val
+                        else:
+                            signal["tp2"] = entry - MAX_RR2 * risk_val
+                    else:
+                        signal["tp2"] = rz["price"]
+                    signal["rr2"] = round(rz_rr, 3)
                     signal["liquidity_target"] = rz["label"]
                     signal["rz_target_used"] = True
                     signal["rz_target_label"] = rz["label"]
                     logger.info("OTE-LAB [%s %s]: RZ target %s RR=%.2f",
-                               asset, direction, rz["label"], rz["rr"])
+                               asset, direction, rz["label"], rz_rr)
 
         # ── Inserisci segnale ──
         signal["timestamp_setup"] = now.isoformat()
@@ -790,12 +854,35 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
             (asset, direction)).fetchone():
             continue
 
-        # Cooldown 4h per zona specifica
+        # Cooldown 4h per zona specifica (stessa direzione)
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
         if conn.execute(
             "SELECT 1 FROM ote_lab_signals WHERE asset=? AND direction=? "
             "AND zone_ref LIKE 'RECURRING_%' AND timestamp_setup > ?",
             (asset, direction, cutoff)).fetchone():
+            continue
+
+        # ── Anti-whipsaw (verificato 01/10) ──
+        # I 3 SL XAU di fila dell'1/10 erano SELL→BUY→SELL nella stessa
+        # fascia 4170-4180 in 3 ore: mercato laterale che stoppa in
+        # entrambe le direzioni. Se ho preso un SL in QUALSIASI direzione
+        # in questa fascia nelle ultime 4h, non rientro affatto.
+        zone_bucket = zone["bucket_price"]
+        whipsaw = conn.execute(
+            "SELECT 1 FROM ote_lab_signals WHERE asset=? "
+            "AND zone_ref LIKE 'RECURRING_%' AND final_outcome='SL_HIT' "
+            "AND zone_price_bucket=? AND timestamp_closed > ?",
+            (asset, zone_bucket, cutoff)).fetchone() if False else None
+        # Nota: zone_price_bucket non e' in questo schema, uso zone_ref
+        bucket_str = f"_{zone_bucket:.0f}"
+        whipsaw = conn.execute(
+            "SELECT 1 FROM ote_lab_signals WHERE asset=? "
+            "AND zone_ref LIKE ? AND final_outcome='SL_HIT' "
+            "AND timestamp_closed > ?",
+            (asset, f"RECURRING_%{bucket_str}", cutoff)).fetchone()
+        if whipsaw:
+            logger.info("OTE-LAB [%s %s]: SKIP anti-whipsaw zona %.0f (SL recente)",
+                        asset, direction, zone_bucket)
             continue
 
         # Conferma M5
@@ -829,12 +916,16 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
         risk = abs(entry - sl)
         if risk <= 0: continue
 
-        # Target: reaction zone o RR 2.0
+        # Target: reaction zone o RR 2.0 (con cap a MAX_RR2)
         rz = _find_rz_target(conn, asset, direction, entry, risk)
         rz_used = False
         if rz:
-            tp = rz["price"]
             rr2 = rz["rr"]
+            if rr2 > MAX_RR2:
+                rr2 = MAX_RR2
+                tp = entry + MAX_RR2*risk if direction == "BUY" else entry - MAX_RR2*risk
+            else:
+                tp = rz["price"]
             target_label = rz["label"]
             rz_used = True
         else:
