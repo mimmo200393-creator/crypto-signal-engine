@@ -138,6 +138,13 @@ def load_ote_signals(conn):
             "mae": float(r[9] or 0), "mfe": float(r[10] or 0),
             "rr": float(rr or 0), "bars_open": int(r[13] or 0),
             "ts": r[14] or "", "trigger_type": sig_type,
+            # Campi per stats_trb (OTE-LAB usa gli stessi outcome di TRB).
+            # result_r (r[12]) e' il vero R realizzato: lo passo come rr1
+            # (usato da stats_trb per TP1_HIT e TRAIL_HIT) e come rr2 per
+            # TP2_HIT, cosi' l'expectancy e' calcolata sui valori reali.
+            "rr1": float(r[12]) if r[12] is not None else 0.0,
+            "rr2": float(r[12]) if r[12] is not None else float(r[11] or 0),
+            "adx": 0,
         })
     return result
 
@@ -609,12 +616,19 @@ def section_tt(rows, recent, invalidated_count):
   {rec_html}
 </div>"""
 
+
 # ============================================================
 # SEZIONE 1 — OTE-LAB (Clone TRB + Reaction Zones + Recurring Zones)
 # ============================================================
 
 def section_ote(rows, recent, cand_stats):
-    s = stats_el(rows)
+    # OTE-LAB usa gli stessi outcome di TRB (TP2_HIT, TP1_HIT, TRAIL_HIT,
+    # SL_HIT) non quelli vecchi (TP, TRAIL). Uso stats_trb che li legge
+    # correttamente, poi aggiungo i campi che il rendering OTE si aspetta.
+    s = stats_trb(rows)
+    s["avg_rr"] = round(sum(r["rr"] for r in rows)/len(rows), 2) if rows else 0
+    s["avg_mfe"] = round(sum(r["mfe"] for r in rows)/len(rows), 1) if rows else 0
+    s["avg_mae"] = round(sum(r["mae"] for r in rows)/len(rows), 1) if rows else 0
     wc = "pos" if s["win"]>=40 else ("neg" if s["win"]<25 else "warn")
     ec = "pos" if s["exp_r"]>0 else "neg"
 
@@ -924,6 +938,7 @@ def section_v41p1(rows):
   </div>
   {v41_table("Per Sessione", bd_sess, ["ASIA","LONDON","NEW_YORK"], "Sessione")}
 </div>"""
+
 
 # ============================================================
 # Generate — MODIFICATO SOLO per: caricare i dati TT + inserire
