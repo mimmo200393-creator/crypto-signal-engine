@@ -470,7 +470,7 @@ def _empty_row(cols):
 
 def outcome_badge(o):
     cls = {"TP":"b-tp","SL":"b-sl","EXPIRED":"b-exp","OPEN":"b-open",
-           "TRAIL":"b-tp",
+           "TRAIL":"b-tp","TRAIL_HIT":"b-tp","BE_HIT":"b-be",
            "TP1_HIT":"b-tp","TP2_HIT":"b-tp","SL_HIT":"b-sl",
            "SETUP":"b-open","ENTRY":"b-open",
            "INVALIDATED":"b-invalid"}.get(o,"b-exp")
