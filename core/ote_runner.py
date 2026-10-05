@@ -145,7 +145,8 @@ CREATE TABLE IF NOT EXISTS ote_lab_signals (
     rz_target_used      BOOLEAN DEFAULT 0,
     rz_target_label     TEXT,
     tp2_original        REAL,
-    tier                TEXT
+    tier                TEXT,
+    accumulation_hours  INTEGER
 );
 """
 
@@ -163,6 +164,10 @@ def _init_schema(conn):
                 conn.execute("ALTER TABLE ote_lab_signals ADD COLUMN tier TEXT")
                 conn.commit()
                 logger.info("OTE-LAB: colonna tier aggiunta")
+            if "tier" in cols and "accumulation_hours" not in cols:
+                conn.execute("ALTER TABLE ote_lab_signals ADD COLUMN accumulation_hours INTEGER")
+                conn.commit()
+                logger.info("OTE-LAB: colonna accumulation_hours aggiunta")
             else:
                 conn.execute("DROP TABLE ote_lab_signals")
                 conn.commit()
@@ -186,8 +191,8 @@ def _insert_signal(conn, sig: dict) -> str:
             flag_adx_ok, flag_trigger_present, flag_volatility_ok, flag_sl_widened,
             liquidity_target, liquidity_target_price, liquidity_priority,
             quality_score, quality_label, expiry_bars,
-            rz_target_used, rz_target_label, tp2_original, tier
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            rz_target_used, rz_target_label, tp2_original, tier, accumulation_hours
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         sid, sig["asset"], sig["direction"], sig["timestamp_setup"],
         sig.get("entry"), sig.get("stop_loss"), sig.get("tp1"), sig.get("tp2"),
@@ -203,7 +208,7 @@ def _insert_signal(conn, sig: dict) -> str:
         sig.get("quality_score"), sig.get("quality_label"),
         sig.get("expiry_bars", SIGNAL_EXPIRY_BARS),
         sig.get("rz_target_used", False), sig.get("rz_target_label"),
-        sig.get("tp2_original"), sig.get("tier"),
+        sig.get("tp2_original"), sig.get("tier"), sig.get("accumulation_hours"),
     ))
     conn.commit()
     return sid
@@ -815,6 +820,25 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
 # Simulazione su 753 trade: WR 56.4%, avgR +0.270, sumR +194.1
 # ================================================================
 
+def _calc_accumulation_hours(conn, asset, zone_price, bucket_size):
+    """
+    Wyckoff Causa-Effetto: quante candele H1 nelle ultime 48h hanno
+    chiuso nella fascia della zona? Piu' tempo = accumulazione vera.
+    
+    Verificato 05/10 su 61 RECURRING:
+      >9h: WR 62%, sumR +8.8
+      <=9h: WR 47%, sumR +0.1
+    """
+    half = bucket_size / 2
+    try:
+        cur = conn.execute(
+            "SELECT close FROM candles_cache WHERE asset=? AND timeframe='1h' "
+            "ORDER BY timestamp DESC LIMIT 48", (asset,))
+        closes = [r[0] for r in cur.fetchall()]
+        return sum(1 for c in closes if zone_price - half <= c <= zone_price + half)
+    except Exception:
+        return 0
+
 RECURRING_PROXIMITY = {"XAU_USD": 15.0, "BTC_USDT": 200.0}
 MIN_ZONE_VISITS = 5
 
@@ -873,6 +897,16 @@ def _find_recurring_zones(conn, asset, current_price):
 
 
 def _check_m5_reaction(df_m5, direction):
+    """
+    Conferma M5: candela con body >50% nella direzione nelle ultime 3.
+
+    La conferma Wyckoff (sweep+reclaim+test) e' stata testata il 05/10
+    sui 51 RECURRING con dati M5: passava solo il 10% dei segnali e
+    quei 5 perdevano (-2.5R), mentre i 46 esclusi guadagnavano (+8.1R).
+    Troppo restrittiva. Torniamo alla conferma semplice che, nonostante
+    un falso positivo alto (68% su BTC), produce un risultato netto
+    positivo (+9R su 61 RECURRING).
+    """
     if df_m5 is None or len(df_m5) < 3:
         return False
     for _, c in df_m5.iloc[-3:].iterrows():
@@ -938,7 +972,7 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
         if not _check_m5_reaction(df_m5, direction):
             continue
 
-        # H4 trend
+        # H4 trend (disattivato, verificato 30/09)
         if LAB_STRICT_H4 and df_h4 is not None and len(df_h4) >= 21:
             closes = df_h4["close"].astype(float).values
             ema = closes.copy()
@@ -955,13 +989,46 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
         entry = current_price
         bucket_size = 10.0 if asset == "XAU_USD" else 500.0
         half = bucket_size / 2
-        if asset == "XAU_USD":
-            sl_dist = min(max(half + 5, 8.0), 25.0)
-        else:
-            sl_dist = half + 50
 
-        sl = entry - sl_dist if direction == "BUY" else entry + sl_dist
-        risk = abs(entry - sl)
+        # ── Wyckoff SL: se c'e' stato uno sweep recente, uso
+        # il suo estremo + buffer come SL (piu' preciso).
+        # Se non c'e' stato sweep, fallback allo SL fisso. ──
+        sweep_sl = None
+        if df_m5 is not None and len(df_m5) >= 6:
+            zone_low = zone["bucket_price"] - half
+            zone_high = zone["bucket_price"] + half
+            # Buffer: XAU 2pt, BTC 30pt (un filo oltre lo sweep)
+            buffer = 2.0 if asset == "XAU_USD" else 30.0
+
+            for _, c in df_m5.iloc[-12:].iterrows():
+                cl, ch, clo = float(c["close"]), float(c["high"]), float(c["low"])
+                if direction == "BUY" and clo < zone_low and cl > zone_low:
+                    # Sweep sotto la zona + reclaim: SL sotto il minimo + buffer
+                    sweep_sl = clo - buffer
+                elif direction == "SELL" and ch > zone_high and cl < zone_high:
+                    sweep_sl = ch + buffer
+
+        if sweep_sl is not None:
+            sl = sweep_sl
+            risk = abs(entry - sl)
+            # Floor/cap
+            if asset == "XAU_USD":
+                if risk < 5.0:
+                    sl = entry - 5.0 if direction == "BUY" else entry + 5.0
+                    risk = 5.0
+                elif risk > 25.0:
+                    sl = entry - 25.0 if direction == "BUY" else entry + 25.0
+                    risk = 25.0
+            logger.info("OTE-LAB [%s %s]: Wyckoff SL=%.2f (sweep+buffer)", asset, direction, sl)
+        else:
+            # Fallback: SL fisso (come prima)
+            if asset == "XAU_USD":
+                sl_dist = min(max(half + 5, 8.0), 25.0)
+            else:
+                sl_dist = half + 50
+            sl = entry - sl_dist if direction == "BUY" else entry + sl_dist
+            risk = abs(entry - sl)
+
         if risk <= 0: continue
 
         # Target: reaction zone o RR 2.0 (con cap a MAX_RR2)
@@ -1003,7 +1070,9 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
             "rz_target_used": rz_used, "rz_target_label": target_label if rz_used else None,
             "quality_score": zone["score"], "quality_label": "LAB",
             "session": _get_session(now),
-            "tier": "RECURRING",  # categoria propria, non classificata coi 3 fattori TRB
+            "tier": "RECURRING",
+            "accumulation_hours": _calc_accumulation_hours(
+                conn, asset, zone["bucket_price"], bucket_size),
         }
 
         try:
@@ -1033,6 +1102,8 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
                        f"TP:     `{tp:.2f}` ({rr2:.2f}R)\n\n"
                        f"Target: {target_label}\n"
                        f"Score: {zone['score']} | Conferma M5: ✅\n"
+                       f"Accumulazione: {sig.get('accumulation_hours',0)}h "
+                       f"{'⭐' if sig.get('accumulation_hours',0) > 9 else ''}\n"
                        f"⚠️ LAB — solo raccolta dati")
                 telegram_bot.send_message(tk, ch, msg)
             # LAB: solo Telegram, niente ntfy (evita doppio messaggio)
