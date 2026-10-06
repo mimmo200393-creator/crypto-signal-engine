@@ -157,21 +157,21 @@ def _init_schema(conn):
     # schema corretto. I dati vecchi erano comunque contaminati/vuoti.
     try:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(ote_lab_signals)").fetchall()]
-        if cols and ("tp1_hit" not in cols or "tier" not in cols):
-            # Aggiungo solo la colonna tier se e' l'unica mancante
-            # (non cancello i dati se lo schema e' gia' quello nuovo)
-            if "tp1_hit" in cols and "tier" not in cols:
-                conn.execute("ALTER TABLE ote_lab_signals ADD COLUMN tier TEXT")
-                conn.commit()
-                logger.info("OTE-LAB: colonna tier aggiunta")
-            if "tier" in cols and "accumulation_hours" not in cols:
+        if cols and "tp1_hit" not in cols:
+            conn.execute("DROP TABLE ote_lab_signals")
+            conn.commit()
+            logger.info("OTE-LAB: tabella ricreata con schema aggiornato")
+        elif cols and "tier" not in cols:
+            conn.execute("ALTER TABLE ote_lab_signals ADD COLUMN tier TEXT")
+            conn.commit()
+            logger.info("OTE-LAB: colonna tier aggiunta")
+        if cols and "accumulation_hours" not in cols:
+            try:
                 conn.execute("ALTER TABLE ote_lab_signals ADD COLUMN accumulation_hours INTEGER")
                 conn.commit()
                 logger.info("OTE-LAB: colonna accumulation_hours aggiunta")
-            else:
-                conn.execute("DROP TABLE ote_lab_signals")
-                conn.commit()
-                logger.info("OTE-LAB: tabella ricreata con schema aggiornato")
+            except Exception:
+                pass
     except Exception:
         pass
     conn.execute(_CREATE)
