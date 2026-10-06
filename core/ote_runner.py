@@ -226,7 +226,7 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
     """
     cur = conn.execute("""
         SELECT signal_id, direction, entry, stop_loss, tp1, tp2,
-               tp1_hit, mae, mfe, bars_open, expiry_bars
+               tp1_hit, mae, mfe, bars_open, expiry_bars, risk
         FROM ote_lab_signals
         WHERE asset=? AND final_outcome='OPEN'
     """, (asset,))
@@ -240,14 +240,15 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
         sid = sig["signal_id"]
         d = sig["direction"]
         entry = sig["entry"]
-        sl = sig["stop_loss"]
+        sl = sig["stop_loss"]  # SL ORIGINALE (non viene mai modificato nel DB)
         tp1 = sig["tp1"]
         tp2 = sig["tp2"]
         old_mae = float(sig["mae"] or 0)
         old_mfe = float(sig["mfe"] or 0)
         tp1_already = bool(sig["tp1_hit"])
         bars = (sig["bars_open"] or 0) + 1
-        risk = abs(entry - sl) if entry and sl else 0
+        # Risk ORIGINALE dal DB (immutabile, calcolato all'insert)
+        risk = float(sig["risk"]) if sig.get("risk") else abs(entry - sl)
         if risk <= 0:
             continue
 
@@ -261,7 +262,7 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
         new_mae = max(old_mae, adverse)
         new_mfe = max(old_mfe, favorable)
 
-        # ── TP1 raggiunto? (rilevato PRIMA di calcolare lo stop) ──
+        # ── TP1 raggiunto? ──
         tp1_hit_now = False
         if not tp1_already and tp1:
             if (d == "BUY" and current_high >= tp1) or (d == "SELL" and current_low <= tp1):
@@ -269,43 +270,57 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
                 tp1_already = True
                 conn.execute("UPDATE ote_lab_signals SET tp1_hit=1, timestamp_tp1=? WHERE signal_id=?",
                             (now_iso, sid))
-                stop_moves.append({
-                    "signal_id": sid, "asset": asset, "direction": d,
-                    "event": "TP1_HIT_BE", "new_stop": entry,
-                })
 
-        # ── Sistema di sicurezza (come TRB) ──
-        # 1. Dopo TP1 → SL a break-even (non perdi piu')
-        # 2. Trailing → segue il prezzo con distanza TRAIL_R, floor minimo
+        # ── Calcolo stop protettivo ──
+        # REGOLA: lo stop puo' SOLO migliorare. Prendiamo il MAX di tutti
+        # i livelli di protezione. NON aggiorniamo stop_loss nel DB
+        # (serve per il calcolo risk che deve restare immutabile).
         trail_dist = LAB_TRAIL_R * risk
         min_lock = LAB_TRAIL_MIN_LOCK.get(asset, 0)
-        effective_sl = sl
         trail_active = False
         be_active = False
 
-        # Break-even+ dopo TP1 (un filo sopra entry per coprire lo spread)
+        # Livello 1: SL originale
+        effective_sl = sl
+
+        # Livello 2: Break-even+ dopo TP1
         if tp1_already:
             be_active = True
-            be_offset = BE_PLUS_R * risk
-            if d == "BUY":
-                effective_sl = max(effective_sl, entry + be_offset)
-            else:
-                effective_sl = min(effective_sl, entry - be_offset)
+            be_level = entry + BE_PLUS_R * risk if d == "BUY" else entry - BE_PLUS_R * risk
+            effective_sl = max(effective_sl, be_level) if d == "BUY" else min(effective_sl, be_level)
 
-        # Trailing (sopra il break-even)
-        if old_mfe >= trail_dist:
-            lock = max(old_mfe - trail_dist, min_lock)
-            lock = min(lock, old_mfe)
-            if d == "BUY":
-                effective_sl = max(effective_sl, entry + lock)
-            else:
-                effective_sl = min(effective_sl, entry - lock)
+        # Livello 3: Trailing (il piu' alto)
+        if new_mfe >= trail_dist:
+            lock = min(max(new_mfe - trail_dist, min_lock), new_mfe)
+            trail_level = entry + lock if d == "BUY" else entry - lock
+            effective_sl = max(effective_sl, trail_level) if d == "BUY" else min(effective_sl, trail_level)
             trail_active = True
-            if not tp1_already:
-                stop_moves.append({
-                    "signal_id": sid, "asset": asset, "direction": d,
-                    "event": "TRAIL_ACTIVATED", "new_stop": effective_sl,
-                })
+
+        # ── Notifica SOLO quando lo stop MIGLIORA rispetto al ciclo prima ──
+        # Ricalcolo lo stop del CICLO PRECEDENTE con old_mfe
+        prev_eff = sl
+        if tp1_already and not tp1_hit_now:  # BE era gia' attivo al ciclo prima
+            prev_be = entry + BE_PLUS_R * risk if d == "BUY" else entry - BE_PLUS_R * risk
+            prev_eff = max(prev_eff, prev_be) if d == "BUY" else min(prev_eff, prev_be)
+        if old_mfe >= trail_dist:
+            prev_lock = min(max(old_mfe - trail_dist, min_lock), old_mfe)
+            prev_trail = entry + prev_lock if d == "BUY" else entry - prev_lock
+            prev_eff = max(prev_eff, prev_trail) if d == "BUY" else min(prev_eff, prev_trail)
+
+        sl_improved = (d == "BUY" and effective_sl > prev_eff + 0.01) or \
+                      (d == "SELL" and effective_sl < prev_eff - 0.01)
+
+        if sl_improved or tp1_hit_now:
+            if tp1_hit_now:
+                event = "TP1_HIT_BE"
+            elif trail_active:
+                event = "TRAIL_ACTIVATED"
+            else:
+                event = "STOP_IMPROVED"
+            stop_moves.append({
+                "signal_id": sid, "asset": asset, "direction": d,
+                "event": event, "new_stop": round(effective_sl, 5),
+            })
 
         # Check esiti
         if d == "BUY":
@@ -333,10 +348,9 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
             outcome = "TP2_HIT"
         elif sl_hit:
             if trail_active:
-                lock_val = max(old_mfe - trail_dist, min_lock)
-                lock_val = min(lock_val, old_mfe)
+                lock_val = max(new_mfe - trail_dist, min_lock)
+                lock_val = min(lock_val, new_mfe)
                 trail_r = round(lock_val / risk, 3)
-                # Dopo TP1 il minimo garantito e' 1R: prendo il maggiore
                 if be_active and trail_r < BE_PLUS_R:
                     result_r = BE_PLUS_R
                     outcome = "TP1_HIT"
@@ -351,8 +365,8 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
                 outcome = "SL_HIT"
         elif bars >= (sig.get("expiry_bars") or SIGNAL_EXPIRY_BARS):
             if trail_active:
-                lock_val = max(old_mfe - trail_dist, min_lock)
-                lock_val = min(lock_val, old_mfe)
+                lock_val = max(new_mfe - trail_dist, min_lock)
+                lock_val = min(lock_val, new_mfe)
                 trail_r = round(lock_val / risk, 3)
                 if be_active and trail_r < BE_PLUS_R:
                     result_r = BE_PLUS_R
