@@ -950,12 +950,19 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
             (asset, direction)).fetchone():
             continue
 
-        # Cooldown 4h per zona specifica (stessa direzione)
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
+        # ── Cooldown 2h cross-direction (validato 09/10) ──────────────
+        # Backtest su 82 RECURRING: 82→57 segnali, Exp +0.107→+0.296R
+        # Bootstrap CI>0 (99.5%), permutation p=0.001, walk-forward stabile.
+        # Logica: se QUALSIASI RECURRING sullo stesso asset e' stato
+        # generato nelle ultime 2h (qualsiasi direzione), skip.
+        # Elimina il ping-pong counter-trend (BUY→SELL→BUY in poche ore).
+        cutoff_2h = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
         if conn.execute(
-            "SELECT 1 FROM ote_lab_signals WHERE asset=? AND direction=? "
+            "SELECT 1 FROM ote_lab_signals WHERE asset=? "
             "AND zone_ref LIKE 'RECURRING_%' AND timestamp_setup > ?",
-            (asset, direction, cutoff)).fetchone():
+            (asset, cutoff_2h)).fetchone():
+            logger.info("OTE-LAB [%s %s]: SKIP cooldown 2h (RECURRING recente)",
+                        asset, direction)
             continue
 
         # ── Anti-whipsaw (verificato 01/10) ──
@@ -963,19 +970,20 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
         # fascia 4170-4180 in 3 ore: mercato laterale che stoppa in
         # entrambe le direzioni. Se ho preso un SL in QUALSIASI direzione
         # in questa fascia nelle ultime 4h, non rientro affatto.
+        cutoff_4h = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
         zone_bucket = zone["bucket_price"]
         whipsaw = conn.execute(
             "SELECT 1 FROM ote_lab_signals WHERE asset=? "
             "AND zone_ref LIKE 'RECURRING_%' AND final_outcome='SL_HIT' "
             "AND zone_price_bucket=? AND timestamp_closed > ?",
-            (asset, zone_bucket, cutoff)).fetchone() if False else None
+            (asset, zone_bucket, cutoff_4h)).fetchone() if False else None
         # Nota: zone_price_bucket non e' in questo schema, uso zone_ref
         bucket_str = f"_{zone_bucket:.0f}"
         whipsaw = conn.execute(
             "SELECT 1 FROM ote_lab_signals WHERE asset=? "
             "AND zone_ref LIKE ? AND final_outcome='SL_HIT' "
             "AND timestamp_closed > ?",
-            (asset, f"RECURRING_%{bucket_str}", cutoff)).fetchone()
+            (asset, f"RECURRING_%{bucket_str}", cutoff_4h)).fetchone()
         if whipsaw:
             logger.info("OTE-LAB [%s %s]: SKIP anti-whipsaw zona %.0f (SL recente)",
                         asset, direction, zone_bucket)
