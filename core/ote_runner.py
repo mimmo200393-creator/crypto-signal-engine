@@ -538,9 +538,23 @@ def _notify_stop_move(sp, config):
                 f"⚠️ LAB — solo raccolta dati")
         bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
         chat_id = config.get("TELEGRAM_CHAT_ID", "")
-        # LAB: solo Telegram, niente ntfy (evita doppio messaggio)
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
+
+        # Invio JSON strutturato per EA MT5 — modifica SL
+        ntfy_topic = config.get("NTFY_TOPIC", "")
+        if ntfy_topic:
+            import json as _json
+            payload = _json.dumps({
+                "action": "MODIFY_SL",
+                "signal_id": sp.get("signal_id", ""),
+                "strategy_name": "OTE-LAB",
+                "asset": asset,
+                "direction": direction,
+                "new_stop": sp["new_stop"],
+                "event": event,
+            })
+            ntfy_bot.send_message(ntfy_topic, f"OTE-LAB {asset} {direction} | {titolo}", payload)
     except Exception as e:
         logger.warning("OTE-LAB stop_move notify: %s", e)
 
