@@ -476,11 +476,26 @@ def _notify_signal(signal, config):
         chat_id = config.get("TELEGRAM_CHAT_ID", "")
         ntfy_topic = config.get("NTFY_TOPIC", "")
 
-        # LAB: solo Telegram, niente ntfy (ntfy serve all'esecuzione MT5
-        # automatica, ma i segnali LAB non vanno eseguiti — mandare
-        # entrambi causava il doppio messaggio).
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
+
+        # Invio JSON strutturato su ntfy per EA MT5
+        if ntfy_topic:
+            import json as _json
+            expiry_h = 24 if signal.get("tier") in ("FORTE", "NORMALE") else 8
+            payload = _json.dumps({
+                "signal_id": signal.get("signal_id", str(uuid.uuid4())),
+                "strategy_name": "OTE-LAB",
+                "asset": signal["asset"],
+                "direction": signal["direction"],
+                "entry": signal["entry"],
+                "stop_loss": signal["stop_loss"],
+                "tp1": signal.get("tp1"),
+                "tp2": signal.get("tp2"),
+                "tier": signal.get("tier", "NORMALE"),
+                "expiry_hours": expiry_h,
+            })
+            ntfy_bot.send_message(ntfy_topic, f"OTE-LAB {signal['asset']} {signal['direction']}", payload)
     except Exception as e:
         logger.warning("OTE-LAB _notify: %s", e)
 
@@ -1129,7 +1144,24 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
                        f"{'⭐' if sig.get('accumulation_hours',0) > 9 else ''}\n"
                        f"⚠️ LAB — solo raccolta dati")
                 telegram_bot.send_message(tk, ch, msg)
-            # LAB: solo Telegram, niente ntfy (evita doppio messaggio)
+
+            # Invio JSON strutturato su ntfy per EA MT5
+            ntfy_topic = config.get("NTFY_TOPIC", "")
+            if ntfy_topic:
+                import json as _json
+                payload = _json.dumps({
+                    "signal_id": str(sid),
+                    "strategy_name": "OTE-LAB",
+                    "asset": asset,
+                    "direction": direction,
+                    "entry": round(entry, 5),
+                    "stop_loss": round(sl, 5),
+                    "tp1": round(tp1, 5),
+                    "tp2": round(tp, 5),
+                    "tier": "RECURRING",
+                    "expiry_hours": 8,
+                })
+                ntfy_bot.send_message(ntfy_topic, f"OTE-LAB RECURRING {asset} {direction}", payload)
         except Exception as e:
             logger.warning("OTE-LAB recurring notify: %s", e)
 
