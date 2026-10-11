@@ -405,10 +405,19 @@ def _notify_stop_move(sp: dict, config: dict):
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
 
+        # ── JSON per EA MT5 (solo JSON, leggibile va su Telegram) ──
         if ntfy_topic:
-            title = f"TRB {asset.replace('_',' ')} {direction} | {titolo}"
-            plain = text.replace("*","").replace("`","")
-            ntfy_bot.send_message(ntfy_topic, title, plain)
+            import json as _json
+            payload = _json.dumps({
+                "action": "MODIFY_SL",
+                "signal_id": sp.get("signal_id", ""),
+                "strategy_name": "TRB",
+                "asset": asset,
+                "direction": direction,
+                "new_stop": sp["new_stop"],
+                "event": sp.get("event", ""),
+            })
+            ntfy_bot.send_message(ntfy_topic, f"TRB {asset} {direction} | MODIFY_SL", payload)
 
     except Exception as e:
         logger.warning("TRB _notify_stop_move: errore: %s", e)
@@ -455,10 +464,21 @@ def _notify(signal: dict, config: dict):
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
 
+        # ── JSON per EA MT5 (solo JSON, leggibile va su Telegram) ──
         if ntfy_topic:
-            title = f"TRB {asset.replace('_',' ')} {direction} | {quality} {signal['quality_score']}"
-            plain = text.replace("*","").replace("`","")
-            ntfy_bot.send_message(ntfy_topic, title, plain)
+            import json as _json
+            payload = _json.dumps({
+                "signal_id": signal.get("signal_id", ""),
+                "strategy_name": "TRB",
+                "asset": asset,
+                "direction": direction,
+                "entry": signal["entry"],
+                "stop_loss": signal["stop_loss"],
+                "tp1": signal.get("tp1"),
+                "tp2": signal.get("tp2"),
+                "expiry_hours": 24,
+            })
+            ntfy_bot.send_message(ntfy_topic, f"TRB {asset} {direction}", payload)
 
     except Exception as e:
         logger.warning("TRB _notify: errore: %s", e)
