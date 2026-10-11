@@ -12,6 +12,8 @@ Salva in ote_lab_signals (schema identico a trb_signals).
 NON tocca TRB, TT, LH, V41P1 — zero impatto.
 
 Changelog 29/09/2026: riscritto da zero come clone fedele di TRB.
+Changelog 11/10/2026: fix expiry — da contatore cicli (32 cicli = 2h40 con cron 5m)
+                       a 6 ore reali basate su timestamp_setup.
 """
 
 from __future__ import annotations
@@ -89,7 +91,7 @@ LAB_STRICT_H4 = False
 
 # Stesse costanti di TRB
 MAX_RISK_XAU = 25.0
-SIGNAL_EXPIRY_BARS = 32
+SIGNAL_EXPIRY_HOURS = 6
 
 
 # ================================================================
@@ -206,7 +208,7 @@ def _insert_signal(conn, sig: dict) -> str:
         sig.get("liquidity_target"), sig.get("liquidity_target_price"),
         sig.get("liquidity_priority"),
         sig.get("quality_score"), sig.get("quality_label"),
-        sig.get("expiry_bars", SIGNAL_EXPIRY_BARS),
+        sig.get("expiry_bars", SIGNAL_EXPIRY_HOURS),  # legacy field, now hours
         sig.get("rz_target_used", False), sig.get("rz_target_label"),
         sig.get("tp2_original"), sig.get("tier"), sig.get("accumulation_hours"),
     ))
@@ -226,7 +228,7 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
     """
     cur = conn.execute("""
         SELECT signal_id, direction, entry, stop_loss, tp1, tp2,
-               tp1_hit, mae, mfe, bars_open, expiry_bars, risk
+               tp1_hit, mae, mfe, bars_open, timestamp_setup, risk
         FROM ote_lab_signals
         WHERE asset=? AND final_outcome='OPEN'
     """, (asset,))
@@ -363,23 +365,36 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
             else:
                 result_r = -1.0
                 outcome = "SL_HIT"
-        elif bars >= (sig.get("expiry_bars") or SIGNAL_EXPIRY_BARS):
-            if trail_active:
-                lock_val = max(new_mfe - trail_dist, min_lock)
-                lock_val = min(lock_val, new_mfe)
-                trail_r = round(lock_val / risk, 3)
-                if be_active and trail_r < BE_PLUS_R:
+        # ── Expiry basato su ore reali (fix 11/10/2026) ──
+        else:
+            try:
+                ts_setup = sig.get("timestamp_setup", "")
+                if ts_setup:
+                    t_open = datetime.fromisoformat(ts_setup.replace("Z", "+00:00"))
+                    t_now = datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
+                    hours_open = (t_now - t_open).total_seconds() / 3600
+                else:
+                    hours_open = 0
+            except Exception:
+                hours_open = 0
+
+            if hours_open >= SIGNAL_EXPIRY_HOURS:
+                if trail_active:
+                    lock_val = max(new_mfe - trail_dist, min_lock)
+                    lock_val = min(lock_val, new_mfe)
+                    trail_r = round(lock_val / risk, 3)
+                    if be_active and trail_r < BE_PLUS_R:
+                        result_r = BE_PLUS_R
+                        outcome = "TP1_HIT"
+                    else:
+                        result_r = trail_r
+                        outcome = "TRAIL_HIT"
+                elif be_active:
                     result_r = BE_PLUS_R
                     outcome = "TP1_HIT"
                 else:
-                    result_r = trail_r
-                    outcome = "TRAIL_HIT"
-            elif be_active:
-                result_r = BE_PLUS_R
-                outcome = "TP1_HIT"
-            else:
-                result_r = 0
-                outcome = "EXPIRED"
+                    result_r = 0
+                    outcome = "EXPIRED"
 
         if outcome:
             conn.execute("""
