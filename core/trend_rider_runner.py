@@ -497,7 +497,7 @@ def run_trb_scan(config: dict, market_contexts: dict):
     trend_rider_db.init_trb_schema(conn)
 
     now    = datetime.now(timezone.utc)
-    assets = config.get("EDGE_LAB", {}).get("assets", TRB_ASSETS)
+    assets = config.get("TRB_SCANNER", {}).get("assets", TRB_ASSETS)
 
     logger.info("=== TRB Scanner: inizio ciclo (%s) ===", ", ".join(assets))
 

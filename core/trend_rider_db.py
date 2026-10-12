@@ -448,6 +448,44 @@ TRAIL_MIN_LOCK = {"BTC_USDT": 60.0, "XAU_USD": 2.5, "PAXG_USDT": 2.5}
 # semplice pareggio.
 
 
+def _is_expired_by_time(
+    ts_setup: str | None,
+    now_iso: str,
+    expiry_bars: int | None,
+) -> bool:
+    """Expiry time-based: calcola dal timestamp reale, non dai cicli cron.
+
+    expiry_bars e' il vecchio parametro (default 32 cicli × ~5 min = 160 min).
+    Lo convertiamo in minuti e confrontiamo col tempo reale trascorso.
+    Se ts_setup manca, fallback al vecchio metodo non e' possibile qui,
+    quindi consideriamo non scaduto (sara' il prossimo ciclo a riprovare).
+    """
+    if not ts_setup:
+        return False
+    from datetime import datetime, timezone
+
+    try:
+        # Supporta sia 'Z' sia '+00:00' e formati senza tz
+        ts_str = ts_setup.replace("Z", "+00:00")
+        if "+" not in ts_str and "-" not in ts_str[10:]:
+            setup_dt = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
+        else:
+            setup_dt = datetime.fromisoformat(ts_str)
+
+        now_str = now_iso.replace("Z", "+00:00")
+        if "+" not in now_str and "-" not in now_str[10:]:
+            now_dt = datetime.fromisoformat(now_str).replace(tzinfo=timezone.utc)
+        else:
+            now_dt = datetime.fromisoformat(now_str)
+
+        elapsed_min = (now_dt - setup_dt).total_seconds() / 60.0
+        # expiry_bars default 32, ogni bar ~5 min → 160 min default
+        expiry_min = (expiry_bars or 32) * 5
+        return elapsed_min >= expiry_min
+    except Exception:
+        return False
+
+
 def monitor_open_trb_signals(
     conn: sqlite3.Connection,
     asset: str,
@@ -470,7 +508,8 @@ def monitor_open_trb_signals(
     rows = conn.execute(
         """
         SELECT signal_id, direction, entry, stop_loss, tp1, tp2,
-               mae, mfe, bars_open, expiry_bars, tp1_hit, tp2_hit
+               mae, mfe, bars_open, expiry_bars, tp1_hit, tp2_hit,
+               timestamp_setup
         FROM trb_signals
         WHERE final_outcome = 'OPEN' AND asset = ?
         """,
@@ -481,7 +520,7 @@ def monitor_open_trb_signals(
     spostamenti_stop = []
 
     for row in rows:
-        sid, direction, entry, sl, tp1, tp2, mae, mfe, bars_open, expiry_bars, tp1_hit, tp2_hit = row
+        sid, direction, entry, sl, tp1, tp2, mae, mfe, bars_open, expiry_bars, tp1_hit, tp2_hit, ts_setup = row
 
         if entry is None or sl is None:
             continue
@@ -607,7 +646,11 @@ def monitor_open_trb_signals(
         elif new_tp2_hit:
             outcome = "TP2_HIT"
             chiude = True
-        elif bars_open >= (expiry_bars or 32):
+        # ── Expiry TIME-BASED (v1.26 fix) ──
+        # Default 160 min (= vecchio 32 cicli × 5 min).
+        # Usa timestamp_setup reale invece di contare i cicli cron,
+        # che hanno latenza variabile su GitHub Actions.
+        elif _is_expired_by_time(ts_setup, now_iso, expiry_bars):
             outcome = "EXPIRED"
             chiude = True
         elif new_tp1_hit:

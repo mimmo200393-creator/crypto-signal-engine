@@ -29,7 +29,9 @@ from strategies.edge_lab.trend_rider import generate_trb_signal
 
 logger = logging.getLogger("ote.lab")
 
-OTE_LAB_ASSETS = ["BTC_USDT", "XAU_USD"]
+# XAU_USD disabilitato: expectancy negativa (-0.576R/trade, WR 26.3%)
+# Analisi diagnostica Oct 2026 — da riattivare solo dopo ottimizzazione
+OTE_LAB_ASSETS = ["BTC_USDT"]
 
 # ── Trailing: IDENTICO a TRB (0.7) per isolare l'effetto reaction entry ──
 # Test disciplinato: cambiamo una variabile alla volta. Se OTE-LAB batte
