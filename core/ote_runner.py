@@ -15,8 +15,12 @@ Changelog 29/09/2026: riscritto da zero come clone fedele di TRB.
 Changelog 11/10/2026: fix expiry — da contatore cicli (32 cicli = 2h40 con cron 5m)
                        a 6 ore reali basate su timestamp_setup.
 Changelog 12/10/2026: v1.2 — TRAIL_R 0.7→0.5 (RECURRING totalR +14→+35),
-                       blocco RECURRING in NEW_YORK (WR 30%),
                        blocco RECURRING con accumulazione 12-24h (WR 18.8%).
+Changelog 12/10/2026: v1.3 — Bounce Point filter per RECURRING:
+                       usa reaction_map expected_reaction (BOUNCE_UP/DOWN)
+                       per filtrare segnali contro la zona di confluenza.
+                       Dati: ALIGNED 75% WR vs AGAINST 37.5% (n=16).
+                       Rimosso blocco sessione NY (sessioni non vanno bloccate).
 """
 
 from __future__ import annotations
@@ -895,6 +899,152 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
 
 
 # ================================================================
+# BOUNCE POINT — Reaction Map alignment per RECURRING
+# Dati: ALIGNED 75% WR vs AGAINST 37.5% (n=16, Oct 10-12)
+# La reaction_map produce zone con expected_reaction (BOUNCE_UP/DOWN).
+# Se la zona piu' vicina al prezzo prevede un rimbalzo CONTRO la
+# direzione del trade, il trade ha probabilita' molto piu' basse.
+# ================================================================
+
+def _check_bounce_point(conn, asset, direction, current_price):
+    """
+    Legge la reaction_map piu' recente e controlla se una zona vicina
+    al prezzo ha expected_reaction coerente con la direzione del trade.
+
+    Ritorna:
+      "ALIGNED"  — zona vicina conferma la direzione (BOUNCE_UP + BUY, BOUNCE_DOWN + SELL)
+      "AGAINST"  — zona vicina contraddice la direzione → SKIP
+      "NEUTRAL"  — nessuna zona vicina o reaction UNKNOWN → procedi
+    """
+    try:
+        row = conn.execute(
+            "SELECT snapshot_json FROM reaction_map_snapshots "
+            "WHERE asset=? ORDER BY timestamp_snapshot DESC LIMIT 1",
+            (asset,)).fetchone()
+    except Exception:
+        return "NEUTRAL"
+
+    if not row:
+        return "NEUTRAL"
+
+    try:
+        rm = __import__("json").loads(row[0])
+    except Exception:
+        return "NEUTRAL"
+
+    zones = rm.get("zones", [])
+    if not zones:
+        return "NEUTRAL"
+
+    # Trova la zona piu' vicina al prezzo corrente
+    best_zone = None
+    best_dist = float("inf")
+    for z in zones:
+        mid = z.get("zone_midpoint", 0)
+        if mid <= 0:
+            continue
+        dist = abs(mid - current_price)
+        if dist < best_dist:
+            best_dist = dist
+            best_zone = z
+
+    if not best_zone:
+        return "NEUTRAL"
+
+    # Proximity check: la zona deve essere entro il 2% del prezzo
+    if current_price > 0 and (best_dist / current_price) > 0.02:
+        return "NEUTRAL"
+
+    exp = best_zone.get("expected_reaction", "UNKNOWN")
+    score = best_zone.get("confluence_score", 0)
+
+    # Soglia minima: solo zone con score sufficiente contano
+    if score < 30:
+        return "NEUTRAL"
+
+    if exp == "UNKNOWN":
+        return "NEUTRAL"
+
+    if (direction == "BUY" and exp == "BOUNCE_UP") or \
+       (direction == "SELL" and exp == "BOUNCE_DOWN"):
+        return "ALIGNED"
+    else:
+        return "AGAINST"
+
+
+def _apply_tp_barrier_recurring(conn, asset, direction, entry, tp, risk):
+    """
+    Stessa logica di _find_tp_barrier() in trend_rider.py ma per RECURRING.
+    Se c'e' una zona di reazione OPPOSTA tra entry e TP, cappa il TP
+    PRIMA di quella zona.
+    """
+    try:
+        row = conn.execute(
+            "SELECT snapshot_json FROM reaction_map_snapshots "
+            "WHERE asset=? ORDER BY timestamp_snapshot DESC LIMIT 1",
+            (asset,)).fetchone()
+    except Exception:
+        return tp
+
+    if not row:
+        return tp
+
+    try:
+        rm = __import__("json").loads(row[0])
+    except Exception:
+        return tp
+
+    zones = rm.get("zones", [])
+    if not zones:
+        return tp
+
+    # Zona opposta: BOUNCE_DOWN blocca un BUY, BOUNCE_UP blocca un SELL
+    block_reaction = "BOUNCE_DOWN" if direction == "BUY" else "BOUNCE_UP"
+    MIN_BARRIER_SCORE = 45
+
+    barriers = []
+    for z in zones:
+        exp = z.get("expected_reaction", "")
+        score = z.get("confluence_score", 0)
+        if exp != block_reaction or score < MIN_BARRIER_SCORE:
+            continue
+
+        # Per BUY: il bordo inferiore della zona blocca (il prezzo rimbalza giu' da li')
+        # Per SELL: il bordo superiore della zona blocca (il prezzo rimbalza su da li')
+        zone_edge = z.get("zone_low", 0) if direction == "BUY" else z.get("zone_high", 0)
+        if zone_edge <= 0:
+            continue
+
+        # La zona e' nel percorso entry → tp?
+        if direction == "BUY":
+            if entry < zone_edge < tp:
+                barriers.append(zone_edge)
+        else:
+            if tp < zone_edge < entry:
+                barriers.append(zone_edge)
+
+    if not barriers:
+        return tp
+
+    # Prendi la barriera piu' vicina e metti il TP PRIMA
+    margin = 0.2 * risk
+    if direction == "BUY":
+        nearest = min(barriers)
+        capped = nearest - margin
+        tp1_level = entry + risk
+        tp = max(capped, tp1_level + 0.1 * risk)
+    else:
+        nearest = max(barriers)
+        capped = nearest + margin
+        tp1_level = entry - risk
+        tp = min(capped, tp1_level - 0.1 * risk)
+
+    logger.info("OTE-LAB [%s %s]: TP barrier → capped at %.2f (zona opposta %.2f, score>=%d)",
+                asset, direction, tp, nearest, MIN_BARRIER_SCORE)
+    return tp
+
+
+# ================================================================
 # RECURRING_ZONE — zone con 5+ visite storiche H4+H1
 # Simulazione su 753 trade: WR 56.4%, avgR +0.270, sumR +194.1
 # ================================================================
@@ -1054,13 +1204,16 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
                         asset, direction, zone_bucket)
             continue
 
-        # ── v1.2: Filtro sessione NEW_YORK per RECURRING ──────────────
-        # Dati su 150 RECURRING: NEW_YORK WR 30.8% (HIGH) e 28.6% (LOW)
-        # vs LONDON 41-75%, ASIA 52-62%, OVERLAP 64-67%
-        # Rimozione NY: n=150→123, totalR +17.5→+17.1 (stesso R, meno rischio)
-        current_sess = _get_session(datetime.now(timezone.utc))
-        if current_sess == "NEW_YORK":
-            logger.info("OTE-LAB [%s %s]: SKIP RECURRING in NEW_YORK (WR 30%%)",
+        # ── v1.3: Bounce Point filter (reaction map) ─────────────────
+        # Dati: ALIGNED (trade direction = bounce direction) → 75% WR
+        #        AGAINST (trade vs bounce opposti) → 37.5% WR
+        # Se la zona di confluenza piu' vicina prevede un rimbalzo
+        # CONTRO la direzione del trade, il trade ha probabilita'
+        # molto piu' basse di successo → SKIP.
+        # Se non ci sono zone vicine o reaction=UNKNOWN → procedi.
+        bounce_ok = _check_bounce_point(conn, asset, direction, current_price)
+        if bounce_ok == "AGAINST":
+            logger.info("OTE-LAB [%s %s]: SKIP bounce point AGAINST (RM zona opposta)",
                         asset, direction)
             continue
 
@@ -1154,6 +1307,18 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
             tp = entry + risk*2 if direction == "BUY" else entry - risk*2
             rr2 = 2.0
             target_label = "FALLBACK_2R"
+
+        # ── v1.3: Bounce Point TP barrier ──────────────────────────
+        # Se c'e' una zona di reazione opposta tra entry e TP,
+        # cappa il TP PRIMA di quella zona (stessa logica di trend_rider)
+        tp_before_barrier = tp
+        tp = _apply_tp_barrier_recurring(conn, asset, direction, entry, tp, risk)
+        if tp != tp_before_barrier:
+            rr2 = round(abs(tp - entry) / risk, 3)
+            if rz_used:
+                target_label = f"{target_label}+BP_CAP"
+            else:
+                target_label = "BP_CAP"
 
         # Gap minimo TP1→TP2: se troppo vicini, porta TP2 ad almeno TP1+1R
         if rr2 < 1.0 + MIN_TP_GAP_R:
