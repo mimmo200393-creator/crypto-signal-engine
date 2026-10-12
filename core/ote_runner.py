@@ -44,7 +44,10 @@ LAB_TRAIL_MIN_LOCK = {"BTC_USDT": 60.0, "XAU_USD": 2.5}
 # Target oltre 5R non si raggiungono e il trade muore: RR2>=5 → sumR -1.8
 # (WR 43%), RR2<5 → sumR +2.3 (WR 45%). Limito il target a 4R max: se la
 # reaction zone e' piu' lontana, taglio il TP a 4R (piu' raggiungibile).
-MAX_RR2 = 4.0
+# v1.1: ridotto da 4.0 a 2.5 — dati mostrano che RR2 > 2.5 ha TP2 hit rate < 5%
+# OTE-LAB >= 4.0R: solo 1.1% TP2 hit rate (1/91 trade)
+# OTE-LAB 3.0-4.0R: solo 4.0% TP2 hit rate (1/25 trade)
+MAX_RR2 = 2.5
 
 # ── Break-even + offset (verificato 01/10) ──
 # Chiudere a esattamente l'entry (0R) in realta' perde lo spread.
@@ -627,6 +630,19 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
 
     # ── MIE context (da edge_lab_runner) ──
     mie_context = market_ctx.get("mie_context", {})
+
+    # ── Reaction Map per TP barrier check (v1.1) ──
+    if "reaction_map" not in market_ctx:
+        try:
+            row = conn.execute(
+                "SELECT snapshot_json FROM reaction_map_snapshots "
+                "WHERE asset = ? ORDER BY timestamp_snapshot DESC LIMIT 1",
+                (asset,)
+            ).fetchone()
+            if row and row[0]:
+                market_ctx["reaction_map"] = json.loads(row[0])
+        except Exception as e:
+            logger.debug("OTE-LAB [%s]: reaction_map non disponibile: %s", asset, e)
 
     # ── Zone gia' aperte ──
     open_refs = set()

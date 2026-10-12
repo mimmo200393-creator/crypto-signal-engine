@@ -16,7 +16,7 @@ import pandas as pd
 logger = logging.getLogger("edge_lab.trend_rider")
 
 STRATEGY_NAME    = "TRB"
-STRATEGY_VERSION = "v1.0"
+STRATEGY_VERSION = "v1.1"
 
 EXPIRY_BARS_M15  = 96
 
@@ -146,6 +146,59 @@ def _get_trend_h4(df_h4: pd.DataFrame) -> Optional[str]:
     ema50 = float(last["ema50"])
     if ema20 > ema50: return "BULLISH"
     if ema20 < ema50: return "BEARISH"
+    return None
+
+
+# ============================================================
+# M15 Market Structure — direzione veloce basata su swing
+# ============================================================
+
+def _get_structure_m15(df_m15: pd.DataFrame, lookback: int = 30) -> Optional[str]:
+    """
+    Determina la direzione basandosi sulla struttura M15 recente:
+    HH + HL = BULLISH, LH + LL = BEARISH.
+
+    Più reattivo delle EMA H1: coglie i cambi di direzione in 1-2 ore
+    anziché 5-10 ore.
+    """
+    if len(df_m15) < lookback:
+        return None
+
+    window = df_m15.iloc[-lookback:]
+    highs = window["high"].values.astype(float)
+    lows  = window["low"].values.astype(float)
+
+    # Trova swing highs e swing lows (min 2 candele di conferma)
+    swing_highs = []
+    swing_lows  = []
+    n = len(highs)
+
+    for i in range(2, n - 2):
+        if highs[i] >= highs[i-1] and highs[i] >= highs[i-2] and \
+           highs[i] >= highs[i+1] and highs[i] >= highs[i+2]:
+            swing_highs.append((i, highs[i]))
+        if lows[i] <= lows[i-1] and lows[i] <= lows[i-2] and \
+           lows[i] <= lows[i+1] and lows[i] <= lows[i+2]:
+            swing_lows.append((i, lows[i]))
+
+    # Servono almeno 2 swing per comparare
+    if len(swing_highs) < 2 or len(swing_lows) < 2:
+        return None
+
+    # Ultimi 2 swing
+    sh1, sh2 = swing_highs[-2][1], swing_highs[-1][1]  # penultimo, ultimo
+    sl1, sl2 = swing_lows[-2][1],  swing_lows[-1][1]
+
+    hh = sh2 > sh1  # Higher High
+    hl = sl2 > sl1  # Higher Low
+    lh = sh2 < sh1  # Lower High
+    ll = sl2 < sl1  # Lower Low
+
+    if hh and hl:
+        return "BULLISH"
+    if lh and ll:
+        return "BEARISH"
+    # Struttura mista (es. HH + LL o LH + HL) = transizione
     return None
 
 
@@ -350,6 +403,95 @@ def _find_liquidity_target(liq_map: Optional[dict], direction: str) -> Optional[
         return max(candidates, key=lambda lv: lv["price"]) if candidates else None
 
 
+# ============================================================
+# TP Barrier Check — zone di reazione tra entry e target
+# ============================================================
+
+MAX_RR2 = 2.5   # Dati dimostrano che RR2 > 2.5 ha hit rate pessimo
+
+def _find_tp_barrier(
+    market_ctx: dict,
+    entry: float,
+    direction: str,
+    tp2_raw: float,
+    risk: float,
+) -> float:
+    """
+    Controlla se ci sono zone di reazione OPPOSTE tra entry e tp2_raw.
+    Se una zona con expected_reaction contrario (BOUNCE_DOWN per BUY,
+    BOUNCE_UP per SELL) blocca il percorso, riduce il TP2 PRIMA di quella zona.
+
+    Inoltre, cap il RR2 massimo a MAX_RR2 (dati mostrano che target
+    più lontani hanno hit rate quasi zero).
+
+    Ritorna il TP2 corretto.
+    """
+    # 1) Cap RR2 massimo
+    max_tp = entry + MAX_RR2 * risk if direction == "BUY" else entry - MAX_RR2 * risk
+    if direction == "BUY":
+        tp2 = min(tp2_raw, max_tp)
+    else:
+        tp2 = max(tp2_raw, max_tp)
+
+    # 2) Cerca reaction zones nel percorso
+    reaction_map = market_ctx.get("reaction_map")
+    if reaction_map is None:
+        return tp2
+
+    zones = []
+    if isinstance(reaction_map, dict):
+        zones = reaction_map.get("zones", [])
+    elif isinstance(reaction_map, list):
+        zones = reaction_map
+
+    if not zones:
+        return tp2
+
+    # Zona opposta = quella che farebbe rimbalzare il prezzo contro di noi
+    block_reaction = "BOUNCE_DOWN" if direction == "BUY" else "BOUNCE_UP"
+    # Soglia minima di confluence per considerare una zona come barriera
+    MIN_BARRIER_SCORE = 45
+
+    barriers = []
+    for z in zones:
+        expected = z.get("expected_reaction", "")
+        score    = z.get("confluence_score", 0)
+        if expected != block_reaction or score < MIN_BARRIER_SCORE:
+            continue
+
+        zone_edge = z.get("zone_low", 0) if direction == "BUY" else z.get("zone_high", 0)
+        if zone_edge <= 0:
+            continue
+
+        # La zona è nel percorso entry → tp2?
+        if direction == "BUY":
+            if entry < zone_edge < tp2:
+                barriers.append(zone_edge)
+        else:
+            if tp2 < zone_edge < entry:
+                barriers.append(zone_edge)
+
+    if not barriers:
+        return tp2
+
+    # Prendi la barriera più vicina e metti il TP2 PRIMA di essa
+    # (offset = 20% del risk per dare margine)
+    margin = 0.2 * risk
+    if direction == "BUY":
+        nearest_barrier = min(barriers)
+        capped = nearest_barrier - margin
+        # Ma non sotto TP1 (= entry + risk)
+        tp1_level = entry + risk
+        tp2 = max(capped, tp1_level + 0.1 * risk)
+    else:
+        nearest_barrier = max(barriers)
+        capped = nearest_barrier + margin
+        tp1_level = entry - risk
+        tp2 = min(capped, tp1_level - 0.1 * risk)
+
+    return tp2
+
+
 def _check_new_24h_extreme(df_m15: pd.DataFrame, direction: str) -> bool:
     if len(df_m15) < 10:
         return False
@@ -475,15 +617,31 @@ def generate_trb_signal(
     atr_m15 = float(df_m15.iloc[-1]["atr"]) if "atr" in df_m15.columns else 0.0
     atr_h1  = float(df_h1.iloc[-1]["atr"])  if "atr" in df_h1.columns  else 0.0
 
-    # ── GATE: Trend H1 allineato ─────────────────────────────
+    # ── GATE: Direzione — H1 EMA + M15 Structure ──────────────
+    # v1.1: Non basta più solo la EMA H1 (troppo lenta, causa direzioni
+    # sbagliate su inversioni rapide). Ora servono ENTRAMBI:
+    # 1) H1 EMA20/EMA50 cross (trend di fondo)
+    # 2) M15 market structure HH/HL o LH/LL (direzione corrente)
+    # Se M15 disagree → il mercato sta invertendo e la EMA non ha
+    # ancora reagito → REJECT per evitare trade controdirezione.
     trend_h1 = _get_trend_h1(df_h1)
+    structure_m15 = _get_structure_m15(df_m15)
     diag["conditions"]["trend_h1"] = trend_h1
+    diag["conditions"]["structure_m15"] = structure_m15
+
     if trend_h1 is None:
         return reject("NO_H1_TREND")
     if direction == "BUY"  and trend_h1 != "BULLISH":
         return reject(f"TREND_NOT_ALIGNED (H1={trend_h1})")
     if direction == "SELL" and trend_h1 != "BEARISH":
         return reject(f"TREND_NOT_ALIGNED (H1={trend_h1})")
+
+    # M15 structure deve concordare (o essere None = no swing chiari → ok)
+    if structure_m15 is not None:
+        if direction == "BUY"  and structure_m15 == "BEARISH":
+            return reject(f"M15_STRUCTURE_DISAGREE (H1={trend_h1} M15={structure_m15})")
+        if direction == "SELL" and structure_m15 == "BULLISH":
+            return reject(f"M15_STRUCTURE_DISAGREE (H1={trend_h1} M15={structure_m15})")
 
     # ── GATE: il prezzo e' in una Entry Zone ─────────────────
     # La zona e' il cuore della strategia. Se il prezzo non e' in nessuna
@@ -543,6 +701,7 @@ def generate_trb_signal(
     diag["sl"] = sl
 
     # ── Take Profit ──────────────────────────────────────────
+    # v1.1: TP2 smart — rispetta le zone di reazione nel percorso
     tp1 = entry + risk if direction == "BUY" else entry - risk
     liq_map    = market_ctx.get("liquidity")
     liq_target = _find_liquidity_target(liq_map, direction)
@@ -550,16 +709,22 @@ def generate_trb_signal(
 
     if tp2_raw is not None:
         if direction == "BUY" and tp2_raw > tp1:
-            tp2 = tp2_raw
+            tp2_candidate = tp2_raw
         elif direction == "SELL" and tp2_raw < tp1:
-            tp2 = tp2_raw
+            tp2_candidate = tp2_raw
         else:
-            tp2 = tp1 + risk if direction == "BUY" else tp1 - risk
+            tp2_candidate = tp1 + risk if direction == "BUY" else tp1 - risk
             liq_target = None
     else:
-        tp2 = tp1 + risk if direction == "BUY" else tp1 - risk
+        tp2_candidate = tp1 + risk if direction == "BUY" else tp1 - risk
+
+    # Applica barrier check: riduce TP2 se ci sono zone di reazione
+    # nel percorso che bloccherebbero il prezzo
+    tp2 = _find_tp_barrier(market_ctx, entry, direction, tp2_candidate, risk)
     diag["tp1"] = tp1
     diag["tp2"] = tp2
+    diag["tp2_before_barrier"] = tp2_candidate
+    diag["tp2_was_capped"] = abs(tp2 - tp2_candidate) > 0.01 * risk
 
     # ── FLAG registrati (NON bloccano) ───────────────────────
     # Questi erano gate; ora sono informazioni per misurare nel tempo

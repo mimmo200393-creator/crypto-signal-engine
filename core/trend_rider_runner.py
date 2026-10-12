@@ -184,6 +184,22 @@ def _run_for_asset(conn, asset: str, config: dict, market_ctx: dict, now: dateti
     # ── MIE context (arriva da edge_lab_runner via market_ctx) ─
     mie_context = market_ctx.get("mie_context", {})
 
+    # ── Reaction Map per TP barrier check (v1.1) ──────────────
+    # Legge l'ultimo snapshot delle zone di reazione e lo aggiunge
+    # al market_ctx per permettere a generate_trb_signal() di verificare
+    # se ci sono zone che bloccano il percorso verso il TP2.
+    if "reaction_map" not in market_ctx:
+        try:
+            row = conn.execute(
+                "SELECT snapshot_json FROM reaction_map_snapshots "
+                "WHERE asset = ? ORDER BY timestamp_snapshot DESC LIMIT 1",
+                (asset,)
+            ).fetchone()
+            if row and row[0]:
+                market_ctx["reaction_map"] = json.loads(row[0])
+        except Exception as e:
+            logger.debug("TRB [%s]: reaction_map non disponibile: %s", asset, e)
+
     # ── Zone già segnalate e aperte ──────────────────────────
     # Regola "una configurazione = un segnale": la strategia non deve
     # ri-notificare una zona (Order Block / FVG) che ha già un segnale
