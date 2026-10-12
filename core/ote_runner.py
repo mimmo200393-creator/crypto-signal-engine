@@ -14,6 +14,9 @@ NON tocca TRB, TT, LH, V41P1 — zero impatto.
 Changelog 29/09/2026: riscritto da zero come clone fedele di TRB.
 Changelog 11/10/2026: fix expiry — da contatore cicli (32 cicli = 2h40 con cron 5m)
                        a 6 ore reali basate su timestamp_setup.
+Changelog 12/10/2026: v1.2 — TRAIL_R 0.7→0.5 (RECURRING totalR +14→+35),
+                       blocco RECURRING in NEW_YORK (WR 30%),
+                       blocco RECURRING con accumulazione 12-24h (WR 18.8%).
 """
 
 from __future__ import annotations
@@ -33,11 +36,11 @@ logger = logging.getLogger("ote.lab")
 # Analisi diagnostica Oct 2026 — da riattivare solo dopo ottimizzazione
 OTE_LAB_ASSETS = ["BTC_USDT"]
 
-# ── Trailing: IDENTICO a TRB (0.7) per isolare l'effetto reaction entry ──
-# Test disciplinato: cambiamo una variabile alla volta. Se OTE-LAB batte
-# TRB, sappiamo che e' merito della reaction entry, non di un mix di
-# effetti (trail 0.5 che magari peggiora + reaction che migliora).
-LAB_TRAIL_R = 0.7          # uguale a TRB
+# ── Trailing: 0.5R (v1.2 — validato su 150 RECURRING + 28 STANDARD) ──
+# Simulazione: TRAIL_R 0.7→0.5 su RECURRING: totalR +14.1→+35.3 (+150%)
+# MFE media ~0.85R → con 0.7R il trail cattura solo 0.15R, con 0.5R cattura 0.35R
+# 62 TRAIL_HIT su 150 trades: il trailing e' il principale meccanismo di uscita
+LAB_TRAIL_R = 0.5
 LAB_TRAIL_MIN_LOCK = {"BTC_USDT": 60.0, "XAU_USD": 2.5}
 
 # ── Cap RR2 (verificato 01/10 su dati reali) ──
@@ -1049,6 +1052,26 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
         if whipsaw:
             logger.info("OTE-LAB [%s %s]: SKIP anti-whipsaw zona %.0f (SL recente)",
                         asset, direction, zone_bucket)
+            continue
+
+        # ── v1.2: Filtro sessione NEW_YORK per RECURRING ──────────────
+        # Dati su 150 RECURRING: NEW_YORK WR 30.8% (HIGH) e 28.6% (LOW)
+        # vs LONDON 41-75%, ASIA 52-62%, OVERLAP 64-67%
+        # Rimozione NY: n=150→123, totalR +17.5→+17.1 (stesso R, meno rischio)
+        current_sess = _get_session(datetime.now(timezone.utc))
+        if current_sess == "NEW_YORK":
+            logger.info("OTE-LAB [%s %s]: SKIP RECURRING in NEW_YORK (WR 30%%)",
+                        asset, direction)
+            continue
+
+        # ── v1.2: Filtro accumulation 12-24h ─────────────────────────
+        # Dati: accum 12-24h → WR 25% (HIGH), 12.5% (LOW), -1.4R totale
+        # Probabilmente range esaurito dopo lunga accumulazione
+        bucket_size_acc = 10.0 if asset == "XAU_USD" else 500.0
+        accum_h = _calc_accumulation_hours(conn, asset, zone["bucket_price"], bucket_size_acc)
+        if 12 <= accum_h < 24:
+            logger.info("OTE-LAB [%s %s]: SKIP RECURRING accum=%dh (12-24h dead zone)",
+                        asset, direction, accum_h)
             continue
 
         # Conferma M5
