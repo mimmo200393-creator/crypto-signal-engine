@@ -16,7 +16,7 @@ import pandas as pd
 logger = logging.getLogger("edge_lab.trend_rider")
 
 STRATEGY_NAME    = "TRB"
-STRATEGY_VERSION = "v1.1"
+STRATEGY_VERSION = "v1.2"
 
 EXPIRY_BARS_M15  = 96
 
@@ -644,19 +644,23 @@ def generate_trb_signal(
             return reject(f"M15_STRUCTURE_DISAGREE (H1={trend_h1} M15={structure_m15})")
 
     # ── GATE: il prezzo e' in una Entry Zone ─────────────────
-    # La zona e' il cuore della strategia. Se il prezzo non e' in nessuna
-    # zona (ne' OB, ne' FVG, ne' pullback su EMA), non c'e' nulla da segnalare.
+    # v1.2 — Solo OB e FVG sono entry zones valide.
+    # EMA pullback rimosso: dati mostrano 28.9% WR vs 50%+ per OB/FVG,
+    # 51 SL_HIT vs 26 wins su 90 trades. Rimuoverlo migliora
+    # avgR da +0.189 a +0.249 e totalR da +110 a +123.
     entry_zone_type, zone_ref, zone_mid = _classify_entry_zone(
         df_h1, direction, atr_h1, market_ctx
     )
-    pullback_ok = _check_pullback(df_h1, direction)
     diag["conditions"]["entry_zone"] = entry_zone_type
-    diag["conditions"]["pullback"] = pullback_ok
 
-    # Zona valida = zona strutturale (OB/FVG) OPPURE pullback su EMA.
-    in_zone = (entry_zone_type in ("order_block", "fvg")) or pullback_ok
+    # Zona valida = solo zona strutturale (OB o FVG).
+    in_zone = entry_zone_type in ("order_block", "fvg")
     if not in_zone:
         return reject("NO_ENTRY_ZONE")
+
+    # v1.2: pullback_ok conservato per compatibilita' DB ma sempre False
+    # (EMA pullback non e' piu' una entry zone valida).
+    pullback_ok = False
 
     # ── Una configurazione = un solo segnale ─────────────────
     # Se questa zona ha gia' generato un segnale ancora aperto, non
@@ -751,8 +755,7 @@ def generate_trb_signal(
     fattori_negativi = 0
     if direction == "BUY" and ADX_TOXIC_LOW <= adx < ADX_TOXIC_HIGH:
         fattori_negativi += 1
-    if entry_zone_type == "ema":
-        fattori_negativi += 1
+    # v1.2: entry_zone_type == "ema" rimosso — non piu' possibile
     if trigger_idx is None:
         fattori_negativi += 1
     if liq_target is not None and liq_target.get("priority_label") == "HIGH":
