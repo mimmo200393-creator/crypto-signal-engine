@@ -972,76 +972,135 @@ def _check_bounce_point(conn, asset, direction, current_price):
         return "AGAINST"
 
 
-def _apply_tp_barrier_recurring(conn, asset, direction, entry, tp, risk):
+def _bounce_point_sl_tp(conn, asset, direction, entry, sl_current, risk_current):
     """
-    Stessa logica di _find_tp_barrier() in trend_rider.py ma per RECURRING.
-    Se c'e' una zona di reazione OPPOSTA tra entry e TP, cappa il TP
-    PRIMA di quella zona.
+    v1.4 — Il mercato racconta una storia: posiziona SL e TP dove il
+    mercato reagisce, non a distanze fisse.
+
+    Logica:
+      Il prezzo si muove da una zona di reazione alla prossima.
+      - TP → alla prossima zona che BLOCCA il movimento (reazione opposta).
+             BUY: prossima BOUNCE_DOWN sopra entry (il prezzo sale, la colpisce, rimbalza giu')
+             SELL: prossima BOUNCE_UP sotto entry (il prezzo scende, la colpisce, rimbalza su)
+             TP al midpoint della zona (dove la reazione e' piu' forte).
+      - SL → appena oltre la zona che PROTEGGE il trade (reazione allineata).
+             BUY: prossima BOUNCE_UP sotto entry (deve reggere; se rotta, trade invalido)
+             SELL: prossima BOUNCE_DOWN sopra entry (deve reggere; se rotto, trade invalido)
+             SL oltre il bordo esterno della zona.
+
+    Fallback: se nessuna zona trovata → ritorna None (il chiamante usa la logica corrente).
+    SL bounce: usato solo se entro 2x il risk corrente (non allargare troppo).
+    TP bounce: usato solo se almeno 1R dal entry (altrimenti inutile come target).
+
+    Returns: dict {"tp": float|None, "sl": float|None, "tp_zone": dict|None,
+                   "sl_zone": dict|None, "tp_label": str, "sl_label": str}
     """
+    result = {"tp": None, "sl": None, "tp_zone": None, "sl_zone": None,
+              "tp_label": "", "sl_label": ""}
+
     try:
         row = conn.execute(
             "SELECT snapshot_json FROM reaction_map_snapshots "
             "WHERE asset=? ORDER BY timestamp_snapshot DESC LIMIT 1",
             (asset,)).fetchone()
     except Exception:
-        return tp
+        return result
 
     if not row:
-        return tp
+        return result
 
     try:
         rm = __import__("json").loads(row[0])
     except Exception:
-        return tp
+        return result
 
     zones = rm.get("zones", [])
     if not zones:
-        return tp
+        return result
 
-    # Zona opposta: BOUNCE_DOWN blocca un BUY, BOUNCE_UP blocca un SELL
-    block_reaction = "BOUNCE_DOWN" if direction == "BUY" else "BOUNCE_UP"
-    MIN_BARRIER_SCORE = 45
+    # ── Reazioni per BUY/SELL ──
+    if direction == "BUY":
+        tp_reaction = "BOUNCE_DOWN"   # prezzo sale → colpisce → rimbalza giu = nostro exit
+        sl_reaction = "BOUNCE_UP"     # sotto entry → protegge → se rotto = invalido
+    else:
+        tp_reaction = "BOUNCE_UP"     # prezzo scende → colpisce → rimbalza su = nostro exit
+        sl_reaction = "BOUNCE_DOWN"   # sopra entry → protegge → se rotto = invalido
 
-    barriers = []
+    MIN_TP_SCORE = 30    # qualsiasi zona attrae il prezzo
+    MIN_SL_SCORE = 35    # per SL serve zona piu' affidabile
+
+    # ── TP: prossima zona opposta nella direzione del trade ──
+    tp_zone = None
+    tp_dist = float("inf")
     for z in zones:
         exp = z.get("expected_reaction", "")
         score = z.get("confluence_score", 0)
-        if exp != block_reaction or score < MIN_BARRIER_SCORE:
+        mid = z.get("zone_midpoint", 0)
+        if exp != tp_reaction or score < MIN_TP_SCORE or mid <= 0:
+            continue
+        if direction == "BUY" and mid > entry:
+            d = mid - entry
+            # Minimo 1R di distanza (altrimenti il target e' troppo vicino)
+            if d >= risk_current and d < tp_dist:
+                tp_dist = d
+                tp_zone = z
+        elif direction == "SELL" and mid < entry:
+            d = entry - mid
+            if d >= risk_current and d < tp_dist:
+                tp_dist = d
+                tp_zone = z
+
+    if tp_zone:
+        # TP al midpoint: dove la reazione e' piu' forte
+        result["tp"] = tp_zone["zone_midpoint"]
+        result["tp_zone"] = tp_zone
+        score = tp_zone["confluence_score"]
+        strength = tp_zone["reaction_strength"]
+        result["tp_label"] = f"BP_{strength}_{score:.0f}"
+        logger.info("OTE-LAB [%s %s]: TP bounce point → %.2f (zona %s score=%.0f, dist=%.2f)",
+                    asset, direction, result["tp"], tp_reaction, score, tp_dist)
+
+    # ── SL: prossima zona protettiva VICINA (entro 2x risk corrente) ──
+    sl_zone = None
+    sl_dist = float("inf")
+    max_sl_reach = risk_current * 2.0   # non allargare oltre 2x
+
+    for z in zones:
+        exp = z.get("expected_reaction", "")
+        score = z.get("confluence_score", 0)
+        if exp != sl_reaction or score < MIN_SL_SCORE:
             continue
 
-        # Per BUY: il bordo inferiore della zona blocca (il prezzo rimbalza giu' da li')
-        # Per SELL: il bordo superiore della zona blocca (il prezzo rimbalza su da li')
-        zone_edge = z.get("zone_low", 0) if direction == "BUY" else z.get("zone_high", 0)
-        if zone_edge <= 0:
-            continue
-
-        # La zona e' nel percorso entry → tp?
         if direction == "BUY":
-            if entry < zone_edge < tp:
-                barriers.append(zone_edge)
+            # Zona BOUNCE_UP sotto entry: SL sotto il bordo inferiore
+            edge = z.get("zone_low", 0)
+            if 0 < edge < entry:
+                d = entry - edge
+                if d <= max_sl_reach and d < sl_dist:
+                    sl_dist = d
+                    sl_zone = z
         else:
-            if tp < zone_edge < entry:
-                barriers.append(zone_edge)
+            # Zona BOUNCE_DOWN sopra entry: SL sopra il bordo superiore
+            edge = z.get("zone_high", 0)
+            if edge > entry:
+                d = edge - entry
+                if d <= max_sl_reach and d < sl_dist:
+                    sl_dist = d
+                    sl_zone = z
 
-    if not barriers:
-        return tp
+    if sl_zone:
+        buffer = 2.0 if asset == "XAU_USD" else 30.0
+        if direction == "BUY":
+            result["sl"] = sl_zone["zone_low"] - buffer
+        else:
+            result["sl"] = sl_zone["zone_high"] + buffer
+        result["sl_zone"] = sl_zone
+        score = sl_zone["confluence_score"]
+        result["sl_label"] = f"BP_{sl_zone['reaction_strength']}_{score:.0f}"
+        logger.info("OTE-LAB [%s %s]: SL bounce point → %.2f (zona %s score=%.0f)",
+                    asset, direction, result["sl"], sl_reaction, score)
 
-    # Prendi la barriera piu' vicina e metti il TP PRIMA
-    margin = 0.2 * risk
-    if direction == "BUY":
-        nearest = min(barriers)
-        capped = nearest - margin
-        tp1_level = entry + risk
-        tp = max(capped, tp1_level + 0.1 * risk)
-    else:
-        nearest = max(barriers)
-        capped = nearest + margin
-        tp1_level = entry - risk
-        tp = min(capped, tp1_level - 0.1 * risk)
-
-    logger.info("OTE-LAB [%s %s]: TP barrier → capped at %.2f (zona opposta %.2f, score>=%d)",
-                asset, direction, tp, nearest, MIN_BARRIER_SCORE)
-    return tp
+    return result
 
 
 # ================================================================
@@ -1250,20 +1309,21 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
         bucket_size = 10.0 if asset == "XAU_USD" else 500.0
         half = bucket_size / 2
 
-        # ── Wyckoff SL: se c'e' stato uno sweep recente, uso
-        # il suo estremo + buffer come SL (piu' preciso).
-        # Se non c'e' stato sweep, fallback allo SL fisso. ──
+        # ══════════════════════════════════════════════════════════
+        # v1.4 — Bounce Point SL/TP: il mercato racconta una storia
+        # Il prezzo si muove da una zona di reazione alla prossima.
+        # SL e TP devono essere posizionati dove il mercato reagisce.
+        # ══════════════════════════════════════════════════════════
+
+        # --- SL: prima calcolo il base (Wyckoff o fisso), poi bounce point ---
         sweep_sl = None
         if df_m5 is not None and len(df_m5) >= 6:
             zone_low = zone["bucket_price"] - half
             zone_high = zone["bucket_price"] + half
-            # Buffer: XAU 2pt, BTC 30pt (un filo oltre lo sweep)
             buffer = 2.0 if asset == "XAU_USD" else 30.0
-
             for _, c in df_m5.iloc[-12:].iterrows():
                 cl, ch, clo = float(c["close"]), float(c["high"]), float(c["low"])
                 if direction == "BUY" and clo < zone_low and cl > zone_low:
-                    # Sweep sotto la zona + reclaim: SL sotto il minimo + buffer
                     sweep_sl = clo - buffer
                 elif direction == "SELL" and ch > zone_high and cl < zone_high:
                     sweep_sl = ch + buffer
@@ -1271,7 +1331,6 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
         if sweep_sl is not None:
             sl = sweep_sl
             risk = abs(entry - sl)
-            # Floor/cap
             if asset == "XAU_USD":
                 if risk < 5.0:
                     sl = entry - 5.0 if direction == "BUY" else entry + 5.0
@@ -1279,46 +1338,59 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
                 elif risk > 25.0:
                     sl = entry - 25.0 if direction == "BUY" else entry + 25.0
                     risk = 25.0
-            logger.info("OTE-LAB [%s %s]: Wyckoff SL=%.2f (sweep+buffer)", asset, direction, sl)
+            sl_method = "WYCKOFF"
         else:
-            # Fallback: SL fisso (come prima)
             if asset == "XAU_USD":
                 sl_dist = min(max(half + 5, 8.0), 25.0)
             else:
                 sl_dist = half + 50
             sl = entry - sl_dist if direction == "BUY" else entry + sl_dist
             risk = abs(entry - sl)
+            sl_method = "FIXED"
 
         if risk <= 0: continue
 
-        # Target: reaction zone o RR 2.0 (con cap a MAX_RR2)
-        rz = _find_rz_target(conn, asset, direction, entry, risk)
+        # --- Bounce Point SL/TP: posiziona dove il mercato reagisce ---
+        bp = _bounce_point_sl_tp(conn, asset, direction, entry, sl, risk)
+
+        # SL bounce point: se c'e' una zona protettiva vicina, usala
+        if bp["sl"] is not None:
+            new_risk = abs(entry - bp["sl"])
+            if new_risk > 0:
+                sl = bp["sl"]
+                risk = new_risk
+                sl_method = f"BP_{bp['sl_label']}"
+                logger.info("OTE-LAB [%s %s]: SL → bounce point %.2f (%s)",
+                            asset, direction, sl, sl_method)
+
+        # TP bounce point: il prossimo target dove il mercato reagira'
         rz_used = False
-        if rz:
-            rr2 = rz["rr"]
+        if bp["tp"] is not None:
+            tp = bp["tp"]
+            rr2 = round(abs(tp - entry) / risk, 3)
             if rr2 > MAX_RR2:
                 rr2 = MAX_RR2
                 tp = entry + MAX_RR2*risk if direction == "BUY" else entry - MAX_RR2*risk
-            else:
-                tp = rz["price"]
-            target_label = rz["label"]
+            target_label = bp["tp_label"]
             rz_used = True
+            logger.info("OTE-LAB [%s %s]: TP → bounce point %.2f (RR=%.2f, %s)",
+                        asset, direction, tp, rr2, target_label)
         else:
-            tp = entry + risk*2 if direction == "BUY" else entry - risk*2
-            rr2 = 2.0
-            target_label = "FALLBACK_2R"
-
-        # ── v1.3: Bounce Point TP barrier ──────────────────────────
-        # Se c'e' una zona di reazione opposta tra entry e TP,
-        # cappa il TP PRIMA di quella zona (stessa logica di trend_rider)
-        tp_before_barrier = tp
-        tp = _apply_tp_barrier_recurring(conn, asset, direction, entry, tp, risk)
-        if tp != tp_before_barrier:
-            rr2 = round(abs(tp - entry) / risk, 3)
-            if rz_used:
-                target_label = f"{target_label}+BP_CAP"
+            # Fallback: vecchia logica reaction zone generica
+            rz = _find_rz_target(conn, asset, direction, entry, risk)
+            if rz:
+                rr2 = rz["rr"]
+                if rr2 > MAX_RR2:
+                    rr2 = MAX_RR2
+                    tp = entry + MAX_RR2*risk if direction == "BUY" else entry - MAX_RR2*risk
+                else:
+                    tp = rz["price"]
+                target_label = rz["label"]
+                rz_used = True
             else:
-                target_label = "BP_CAP"
+                tp = entry + risk*2 if direction == "BUY" else entry - risk*2
+                rr2 = 2.0
+                target_label = "FALLBACK_2R"
 
         # Gap minimo TP1→TP2: se troppo vicini, porta TP2 ad almeno TP1+1R
         if rr2 < 1.0 + MIN_TP_GAP_R:
