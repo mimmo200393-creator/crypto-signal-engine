@@ -1026,8 +1026,9 @@ def _bounce_point_sl_tp(conn, asset, direction, entry, sl_current, risk_current)
         tp_reaction = "BOUNCE_UP"     # prezzo scende → colpisce → rimbalza su = nostro exit
         sl_reaction = "BOUNCE_DOWN"   # sopra entry → protegge → se rotto = invalido
 
-    MIN_TP_SCORE = 30    # qualsiasi zona attrae il prezzo
+    MIN_TP_SCORE = 20    # qualsiasi zona attrae il prezzo (grid search: 20 ottimale)
     MIN_SL_SCORE = 35    # per SL serve zona piu' affidabile
+    MAX_TP_RR = 5.0      # cap TP: non oltre 5R (zone troppo lontane irraggiungibili)
 
     # ── TP: prossima zona opposta nella direzione del trade ──
     tp_zone = None
@@ -1040,13 +1041,13 @@ def _bounce_point_sl_tp(conn, asset, direction, entry, sl_current, risk_current)
             continue
         if direction == "BUY" and mid > entry:
             d = mid - entry
-            # Minimo 1R di distanza (altrimenti il target e' troppo vicino)
-            if d >= risk_current and d < tp_dist:
+            # Minimo 1R, massimo MAX_TP_RR (zone troppo lontane irraggiungibili)
+            if d >= risk_current and d / risk_current <= MAX_TP_RR and d < tp_dist:
                 tp_dist = d
                 tp_zone = z
         elif direction == "SELL" and mid < entry:
             d = entry - mid
-            if d >= risk_current and d < tp_dist:
+            if d >= risk_current and d / risk_current <= MAX_TP_RR and d < tp_dist:
                 tp_dist = d
                 tp_zone = z
 
@@ -1063,7 +1064,7 @@ def _bounce_point_sl_tp(conn, asset, direction, entry, sl_current, risk_current)
     # ── SL: prossima zona protettiva VICINA (entro 2x risk corrente) ──
     sl_zone = None
     sl_dist = float("inf")
-    max_sl_reach = risk_current * 2.0   # non allargare oltre 2x
+    max_sl_reach = risk_current * 1.5   # non allargare oltre 1.5x (grid search ottimale)
 
     for z in zones:
         exp = z.get("expected_reaction", "")
