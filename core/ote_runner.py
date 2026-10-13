@@ -1074,6 +1074,40 @@ def _bounce_point_sl_tp(conn, asset, direction, entry, sl_current, risk_current)
                 tp_dist = d
                 tp_zone = z
 
+    # ── Fallback TP: zona ricorrente forte vicina (0.5R–1.0R) ──
+    # Se non c'e' TP a >=1R, una zona dove il mercato va sempre
+    # e' meglio di niente — cattura profitto che altrimenti diventa loss.
+    if not tp_zone:
+        MIN_RR_RECURRING = 0.5
+        MIN_VISITS_FALLBACK = 15
+        fb_dist = float("inf")
+        for z in operative_zones:
+            if z.get("confluence_score", 0) < MIN_TP_SCORE:
+                continue
+            if not z.get("has_recurring") or z.get("rz_visits", 0) < MIN_VISITS_FALLBACK:
+                continue
+            mid = z.get("zone_midpoint", 0)
+            if direction == "BUY" and mid > entry:
+                target = z.get("zone_low", mid)
+                d = target - entry
+                rr = d / risk_current if risk_current > 0 else 0
+                if rr >= MIN_RR_RECURRING and rr < 1.0 and d < fb_dist:
+                    fb_dist = d
+                    tp_zone = z
+            elif direction == "SELL" and mid < entry:
+                target = z.get("zone_high", mid)
+                d = entry - target
+                rr = d / risk_current if risk_current > 0 else 0
+                if rr >= MIN_RR_RECURRING and rr < 1.0 and d < fb_dist:
+                    fb_dist = d
+                    tp_zone = z
+        if tp_zone:
+            tp_dist = fb_dist
+            logger.info("OTE-LAB [%s %s]: TP fallback recurring zone "
+                        "(visits=%d, RR=%.2f)",
+                        asset, direction, tp_zone.get("rz_visits", 0),
+                        fb_dist / risk_current if risk_current > 0 else 0)
+
     if tp_zone:
         if direction == "BUY":
             result["tp"] = tp_zone["zone_low"]   # bordo inferiore della zona sopra
@@ -1084,11 +1118,14 @@ def _bounce_point_sl_tp(conn, asset, direction, entry, sl_current, risk_current)
         strength = tp_zone.get("reaction_strength", "?")
         sources = tp_zone.get("sources", [])
         n_sources = len(sources)
-        result["tp_label"] = f"RZ_{strength}_{score:.0f}_x{n_sources}"
+        is_fallback = tp_dist < risk_current  # RR < 1.0 = fallback
+        fb_tag = "FB_" if is_fallback else ""
+        result["tp_label"] = f"RZ_{fb_tag}{strength}_{score:.0f}_x{n_sources}"
         logger.info("OTE-LAB [%s %s]: TP structural zone → %.2f "
-                    "(score=%.0f, %s, %d sources, dist=%.2f)",
+                    "(score=%.0f, %s, %d sources, dist=%.2f%s)",
                     asset, direction, result["tp"], score, strength,
-                    n_sources, tp_dist)
+                    n_sources, tp_dist,
+                    " [FALLBACK recurring]" if is_fallback else "")
 
     # ── SL: oltre la prima zona dietro l'entry (invalidazione strutturale) ──
     # BUY → zona piu' vicina sotto entry. Se rotta → struttura invalida
