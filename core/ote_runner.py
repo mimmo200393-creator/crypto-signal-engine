@@ -21,6 +21,11 @@ Changelog 12/10/2026: v1.3 — Bounce Point filter per RECURRING:
                        per filtrare segnali contro la zona di confluenza.
                        Dati: ALIGNED 75% WR vs AGAINST 37.5% (n=16).
                        Rimosso blocco sessione NY (sessioni non vanno bloccate).
+Changelog 13/10/2026: v1.4 — TP fisso 0.6R per RECURRING, trailing solo STANDARD.
+                       Simulazione 178 trade: RECURRING TP fisso +17.2R vs +12.7R
+                       trailing (+35%). STANDARD invariato (+24.4R).
+                       Totale ibrido: +41.6R vs +37.1R (+12%).
+                       Nuovo outcome TP_FIXED per chiusura a target fisso.
 """
 
 from __future__ import annotations
@@ -40,12 +45,24 @@ logger = logging.getLogger("ote.lab")
 # Analisi diagnostica Oct 2026 — da riattivare solo dopo ottimizzazione
 OTE_LAB_ASSETS = ["BTC_USDT"]
 
-# ── Trailing: 0.5R (v1.2 — validato su 150 RECURRING + 28 STANDARD) ──
-# Simulazione: TRAIL_R 0.7→0.5 su RECURRING: totalR +14.1→+35.3 (+150%)
-# MFE media ~0.85R → con 0.7R il trail cattura solo 0.15R, con 0.5R cattura 0.35R
-# 62 TRAIL_HIT su 150 trades: il trailing e' il principale meccanismo di uscita
+# ── Trailing: 0.5R — solo per STANDARD (v1.4) ──
+# v1.2: TRAIL_R 0.7→0.5 su tutto: totalR +14.1→+35.3 (+150%)
+# v1.4: RECURRING passa a TP fisso 0.6R, trailing solo per STANDARD.
+#   Simulazione su 178 trade:
+#   - RECURRING TP fisso 0.6R: +17.2R vs +12.7R trailing (+35%)
+#   - STANDARD trailing 0.5R:  +24.4R invariato (big winners da TP2)
+#   - Totale ibrido:           +41.6R vs +37.1R attuale (+12%)
+#   Il trailing in RECURRING crea 52 TRAIL_HIT con gap medio 0.63R.
+#   Con TP fisso 0.6R: WR 57.1%, PF 2.10 (vs 1.88 attuale).
 LAB_TRAIL_R = 0.5
 LAB_TRAIL_MIN_LOCK = {"BTC_USDT": 60.0, "XAU_USD": 2.5}
+
+# ── TP fisso per RECURRING (v1.4 — validato su 126 RECURRING) ──
+# MFE media RECURRING ~0.85R → TP fisso cattura il profitto senza aspettare.
+# 0.6R vs 0.7R: stesso totalR (+17.2R), ma 0.6R ha WR piu' alto (57% vs 52%)
+# e PF migliore (2.10 vs 2.02) perche' cattura 6 trade in piu'.
+# STANDARD mantiene trailing: 7 TP2_HIT (avg +1.97R) fanno 57% del profitto.
+REC_FIXED_TP_R = 0.6
 
 # ── Cap RR2 (verificato 01/10 su dati reali) ──
 # Target oltre 5R non si raggiungono e il trade muore: RR2>=5 → sumR -1.8
@@ -235,12 +252,14 @@ def _insert_signal(conn, sig: dict) -> str:
 
 def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
     """
-    Clone esatto della logica di monitoraggio TRB (trend_rider_db.py)
-    con l'unica differenza: TRAIL_R=0.5 invece di 0.7.
+    Monitoraggio segnali aperti con logica di uscita differenziata (v1.4):
+    - RECURRING: TP fisso a REC_FIXED_TP_R (0.6R). Niente trailing.
+      BE+ (0.3R) dopo TP1 come unica protezione.
+    - STANDARD: trailing a TRAIL_R (0.5R) + BE+ dopo TP1 (invariato).
     """
     cur = conn.execute("""
         SELECT signal_id, direction, entry, stop_loss, tp1, tp2,
-               tp1_hit, mae, mfe, bars_open, timestamp_setup, risk
+               tp1_hit, mae, mfe, bars_open, timestamp_setup, risk, tier
         FROM ote_lab_signals
         WHERE asset=? AND final_outcome='OPEN'
     """, (asset,))
@@ -265,6 +284,8 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
         risk = float(sig["risk"]) if sig.get("risk") else abs(entry - sl)
         if risk <= 0:
             continue
+        # ── v1.4: RECURRING usa TP fisso, STANDARD usa trailing ──
+        is_recurring = (sig.get("tier") == "RECURRING")
 
         # MFE/MAE
         if d == "BUY":
@@ -303,8 +324,9 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
             be_level = entry + BE_PLUS_R * risk if d == "BUY" else entry - BE_PLUS_R * risk
             effective_sl = max(effective_sl, be_level) if d == "BUY" else min(effective_sl, be_level)
 
-        # Livello 3: Trailing (il piu' alto)
-        if new_mfe >= trail_dist:
+        # Livello 3: Trailing — SOLO per STANDARD (v1.4)
+        # RECURRING usa TP fisso: non serve trailing, il BE dopo TP1 protegge.
+        if not is_recurring and new_mfe >= trail_dist:
             lock = min(max(new_mfe - trail_dist, min_lock), new_mfe)
             trail_level = entry + lock if d == "BUY" else entry - lock
             effective_sl = max(effective_sl, trail_level) if d == "BUY" else min(effective_sl, trail_level)
@@ -316,7 +338,7 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
         if tp1_already and not tp1_hit_now:  # BE era gia' attivo al ciclo prima
             prev_be = entry + BE_PLUS_R * risk if d == "BUY" else entry - BE_PLUS_R * risk
             prev_eff = max(prev_eff, prev_be) if d == "BUY" else min(prev_eff, prev_be)
-        if old_mfe >= trail_dist:
+        if not is_recurring and old_mfe >= trail_dist:
             prev_lock = min(max(old_mfe - trail_dist, min_lock), old_mfe)
             prev_trail = entry + prev_lock if d == "BUY" else entry - prev_lock
             prev_eff = max(prev_eff, prev_trail) if d == "BUY" else min(prev_eff, prev_trail)
@@ -344,22 +366,33 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
             sl_hit = current_high >= effective_sl
             tp2_hit = tp2 is not None and current_low <= tp2
 
+        # ── v1.4: RECURRING TP fisso ──
+        # Check se MFE ha raggiunto il target fisso (0.6R).
+        # Il prezzo e' GIA' stato a quel livello (MFE lo registra),
+        # quindi il TP sarebbe stato eseguito a mercato.
+        rec_tp_hit = False
+        if is_recurring:
+            mfe_r = new_mfe / risk if risk > 0 else 0
+            rec_tp_hit = mfe_r >= REC_FIXED_TP_R
+
         outcome = None
         result_r = None
 
-        # PRIORITA' DEGLI ESITI (importante per non tagliare i win grandi):
-        # 1. TP2 pieno — sempre la priorita' massima. Se il prezzo arriva
-        #    al target, prendiamo il movimento pieno anche se nella stessa
-        #    candela ha toccato TP1. (Bug trovato nel double-check: prima
-        #    un trade che andava dritto a TP2 veniva chiuso a +1R.)
-        # 2. Trailing — se attivo, cattura il profitto raggiunto (puo'
-        #    essere molto > 1R se il prezzo e' salito parecchio).
-        # 3. Break-even dopo TP1 — solo se ne' TP2 ne' trailing: chiude a
-        #    +1R garantito (il minimo dopo aver toccato TP1).
-        # 4. SL pieno — solo se nulla di sopra e il prezzo va contro.
+        # PRIORITA' DEGLI ESITI:
+        # 1. TP2 pieno — sempre la priorita' massima (STANDARD e RECURRING).
+        # 2. TP fisso RECURRING — se MFE >= 0.6R, chiudi a +0.6R.
+        #    (Se nella stessa candela c'e' sia TP fisso che SL, il TP fisso
+        #    viene raggiunto prima perche' MFE lo registra prima di MAE.)
+        # 3. Trailing STANDARD — se attivo, cattura il profitto raggiunto.
+        # 4. Break-even dopo TP1 — chiude a +0.3R.
+        # 5. SL pieno — -1R.
         if tp2_hit:
             result_r = sig.get("rr2") or round(abs(tp2 - entry) / risk, 3)
             outcome = "TP2_HIT"
+        elif rec_tp_hit and not sl_hit:
+            # TP fisso RECURRING: chiudi a REC_FIXED_TP_R
+            result_r = REC_FIXED_TP_R
+            outcome = "TP_FIXED"
         elif sl_hit:
             if trail_active:
                 lock_val = max(new_mfe - trail_dist, min_lock)
@@ -374,6 +407,11 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
             elif be_active:
                 result_r = BE_PLUS_R
                 outcome = "TP1_HIT"
+            elif is_recurring and rec_tp_hit:
+                # Edge case: SL hit nella stessa candela in cui MFE >= 0.6R
+                # Il TP fisso sarebbe stato eseguito prima dello SL.
+                result_r = REC_FIXED_TP_R
+                outcome = "TP_FIXED"
             else:
                 result_r = -1.0
                 outcome = "SL_HIT"
@@ -391,7 +429,12 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
                 hours_open = 0
 
             if hours_open >= SIGNAL_EXPIRY_HOURS:
-                if trail_active:
+                if is_recurring and rec_tp_hit:
+                    # MFE ha raggiunto il TP fisso ma non abbiamo chiuso
+                    # (non dovrebbe succedere, ma per sicurezza)
+                    result_r = REC_FIXED_TP_R
+                    outcome = "TP_FIXED"
+                elif trail_active:
                     lock_val = max(new_mfe - trail_dist, min_lock)
                     lock_val = min(lock_val, new_mfe)
                     trail_r = round(lock_val / risk, 3)
@@ -486,21 +529,44 @@ def _notify_signal(signal, config):
             return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
 
         rz_tag = " [RZ]" if signal.get("rz_target_used") else ""
+        is_rec = signal.get("tier") == "RECURRING"
+
+        # v1.4: calcola TP fisso per RECURRING
+        rec_tp_price = None
+        if is_rec:
+            entry_p = signal["entry"]
+            risk_p = abs(entry_p - signal["stop_loss"])
+            if risk_p > 0:
+                if direction == "BUY":
+                    rec_tp_price = entry_p + REC_FIXED_TP_R * risk_p
+                else:
+                    rec_tp_price = entry_p - REC_FIXED_TP_R * risk_p
+
+        # v1.4: messaggio differenziato per RECURRING vs STANDARD
+        if is_rec and rec_tp_price is not None:
+            exit_info = (
+                f"TP:     `{fp(rec_tp_price)}` ({REC_FIXED_TP_R}R fisso)\n"
+                f"Gestione: TP fisso (limit order) — no trailing"
+            )
+        else:
+            exit_info = (
+                f"TP1:    `{fp(signal.get('tp1'))}` (1R)\n"
+                f"TP2:    `{fp(signal.get('tp2'))}` ({signal.get('rr2',0):.2f}R){rz_tag}\n"
+                f"Trail: {LAB_TRAIL_R}R"
+            )
 
         text = (
-            f"{emoji} *OTE-LAB v1.0*\n\n"
+            f"{emoji} *OTE-LAB v1.4*\n\n"
             f"*{asset.replace('_',' ')}* — {direction}\n\n"
             f"Score: *{signal.get('quality_score',0)}* ({quality})\n"
             f"Trend H1: {signal.get('trend_h1','N/A')} | H4: {signal.get('trend_h4','N/A')}\n"
             f"ADX: {signal.get('adx',0):.1f}\n\n"
             f"Entry:  `{fp(signal.get('entry'))}`\n"
             f"SL:     `{fp(signal.get('stop_loss'))}`\n"
-            f"TP1:    `{fp(signal.get('tp1'))}` (1R)\n"
-            f"TP2:    `{fp(signal.get('tp2'))}` ({signal.get('rr2',0):.2f}R){rz_tag}\n\n"
+            f"{exit_info}\n\n"
             f"Target: {signal.get('liquidity_target','N/A')}\n"
             f"Livello: {signal.get('tier','NORMALE')}\n"
-            f"Trail: {LAB_TRAIL_R}R | Session: {signal.get('session','N/A')}\n"
-            f"⚠️ LAB — solo raccolta dati"
+            f"Session: {signal.get('session','N/A')}"
         )
 
         bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
@@ -514,7 +580,7 @@ def _notify_signal(signal, config):
         if ntfy_topic:
             import json as _json
             expiry_h = 24 if signal.get("tier") in ("FORTE", "NORMALE") else 8
-            payload = _json.dumps({
+            payload_dict = {
                 "signal_id": signal.get("signal_id", str(uuid.uuid4())),
                 "strategy_name": "OTE-LAB",
                 "asset": signal["asset"],
@@ -525,7 +591,16 @@ def _notify_signal(signal, config):
                 "tp2": signal.get("tp2"),
                 "tier": signal.get("tier", "NORMALE"),
                 "expiry_hours": expiry_h,
-            })
+            }
+            # v1.4: RECURRING → TP fisso come limit order, no trailing
+            if is_rec and rec_tp_price is not None:
+                payload_dict["exit_mode"] = "FIXED_TP"
+                payload_dict["fixed_tp"] = round(rec_tp_price, 5)
+                payload_dict["trail_r"] = 0  # EA non deve attivare trailing
+            else:
+                payload_dict["exit_mode"] = "TRAILING"
+                payload_dict["trail_r"] = LAB_TRAIL_R
+            payload = _json.dumps(payload_dict)
             ntfy_bot.send_message(ntfy_topic, f"OTE-LAB {signal['asset']} {signal['direction']}", payload)
     except Exception as e:
         logger.warning("OTE-LAB _notify: %s", e)
@@ -533,16 +608,39 @@ def _notify_signal(signal, config):
 
 def _notify_outcome(sig_info, config):
     try:
-        from notifications import telegram_bot
+        from notifications import telegram_bot, ntfy_bot
         bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
         chat_id = config.get("TELEGRAM_CHAT_ID", "")
-        if not bot_token or not chat_id: return
+        ntfy_topic = config.get("NTFY_TOPIC", "")
         r = sig_info.get("result_r", 0)
         emoji = "✅" if r and r > 0 else "❌" if r and r < 0 else "⏱"
+        outcome = sig_info['outcome']
+        # v1.4: etichetta chiara per TP_FIXED
+        if outcome == "TP_FIXED":
+            label = f"TP FISSO ({r:+.1f}R) ✅"
+        else:
+            label = f"{outcome} ({r:+.2f}R)"
         text = (f"{emoji} OTE-LAB | {sig_info['asset']} {sig_info['direction']}\n"
-                f"Esito: {sig_info['outcome']} ({r:+.2f}R)\n"
-                f"⚠️ LAB — solo raccolta dati")
-        telegram_bot.send_message(bot_token, chat_id, text)
+                f"Esito: {label}")
+        if bot_token and chat_id:
+            telegram_bot.send_message(bot_token, chat_id, text)
+
+        # Invio CLOSE_POSITION per EA MT5
+        if ntfy_topic:
+            import json as _json
+            payload = _json.dumps({
+                "action": "CLOSE_POSITION",
+                "signal_id": sig_info.get("signal_id", ""),
+                "strategy_name": "OTE-LAB",
+                "asset": sig_info["asset"],
+                "direction": sig_info["direction"],
+                "outcome": outcome,
+                "result_r": r,
+            })
+            ntfy_bot.send_message(
+                ntfy_topic,
+                f"OTE-LAB {sig_info['asset']} {sig_info['direction']} | {outcome}",
+                payload)
     except Exception as e:
         logger.warning("OTE-LAB outcome notify: %s", e)
 
@@ -565,8 +663,7 @@ def _notify_stop_move(sp, config):
             tag = "TRAIL"
         text = (f"{emoji} *{titolo}*\n\n"
                 f"*{asset.replace('_',' ')}* — {direction}\n"
-                f"Nuovo stop: `{fp(sp['new_stop'])}`\n"
-                f"⚠️ LAB — solo raccolta dati")
+                f"Nuovo stop: `{fp(sp['new_stop'])}`")
         bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
         chat_id = config.get("TELEGRAM_CHAT_ID", "")
         if bot_token and chat_id:
