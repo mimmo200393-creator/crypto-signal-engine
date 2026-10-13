@@ -26,6 +26,11 @@ Changelog 13/10/2026: v1.4 — TP fisso 0.6R per RECURRING, trailing solo STANDA
                        trailing (+35%). STANDARD invariato (+24.4R).
                        Totale ibrido: +41.6R vs +37.1R (+12%).
                        Nuovo outcome TP_FIXED per chiusura a target fisso.
+Changelog 13/10/2026: v1.5 — EA gestisce tutto: scanner manda solo entry/SL/TP.
+                       RECURRING: tp2 = 0.6R (EA piazza TP, broker chiude).
+                       STANDARD: tp2 invariato (EA trailing tick-by-tick).
+                       Rimosso exit_mode/fixed_tp/trail_r dal payload.
+                       CLOSE_POSITION mantenuto come safety net.
 """
 
 from __future__ import annotations
@@ -580,6 +585,10 @@ def _notify_signal(signal, config):
         if ntfy_topic:
             import json as _json
             expiry_h = 24 if signal.get("tier") in ("FORTE", "NORMALE") else 8
+            # v1.5 OpzB: scanner manda sempre tp2 originale
+            # EA gestisce BE a 0.6R (InpBeActivateR) + trailing a 0.7R
+            order_tp2 = signal.get("tp2")
+
             payload_dict = {
                 "signal_id": signal.get("signal_id", str(uuid.uuid4())),
                 "strategy_name": "OTE-LAB",
@@ -588,18 +597,10 @@ def _notify_signal(signal, config):
                 "entry": signal["entry"],
                 "stop_loss": signal["stop_loss"],
                 "tp1": signal.get("tp1"),
-                "tp2": signal.get("tp2"),
+                "tp2": order_tp2,
                 "tier": signal.get("tier", "NORMALE"),
                 "expiry_hours": expiry_h,
             }
-            # v1.4: RECURRING → TP fisso come limit order, no trailing
-            if is_rec and rec_tp_price is not None:
-                payload_dict["exit_mode"] = "FIXED_TP"
-                payload_dict["fixed_tp"] = round(rec_tp_price, 5)
-                payload_dict["trail_r"] = 0  # EA non deve attivare trailing
-            else:
-                payload_dict["exit_mode"] = "TRAILING"
-                payload_dict["trail_r"] = LAB_TRAIL_R
             payload = _json.dumps(payload_dict)
             ntfy_bot.send_message(ntfy_topic, f"OTE-LAB {signal['asset']} {signal['direction']}", payload)
     except Exception as e:
