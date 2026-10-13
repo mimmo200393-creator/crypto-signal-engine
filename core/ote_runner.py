@@ -436,6 +436,7 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
 # ================================================================
 
 def _find_rz_target(conn, asset, direction, entry, risk):
+    """Fallback TP: prima zona operativa nella direzione del trade."""
     try:
         row = conn.execute(
             "SELECT snapshot_json FROM reaction_map_snapshots "
@@ -446,12 +447,15 @@ def _find_rz_target(conn, asset, direction, entry, risk):
     except Exception:
         return None
     MIN_RR = 1.2
+    max_dist_pct = 0.02 if asset == "XAU_USD" else 0.03
     cands = []
     for z in zones:
         mid = z.get("zone_midpoint", 0)
         if mid <= 0: continue
         if direction == "BUY" and mid <= entry: continue
         if direction == "SELL" and mid >= entry: continue
+        dist_pct = abs(mid - entry) / entry if entry > 0 else 0
+        if dist_pct > max_dist_pct: continue
         rr = abs(mid - entry) / risk if risk > 0 else 0
         if rr < MIN_RR: continue
         cands.append({"price": mid,
@@ -974,23 +978,25 @@ def _check_bounce_point(conn, asset, direction, current_price):
 
 def _bounce_point_sl_tp(conn, asset, direction, entry, sl_current, risk_current):
     """
-    v1.4 — Il mercato racconta una storia: posiziona SL e TP dove il
-    mercato reagisce, non a distanze fisse.
+    v2.0 — Zone strutturali: il trade context determina l'interpretazione.
+
+    Le zone della Reaction Map sono livelli strutturali dove il prezzo
+    ha alta probabilita' di reagire (validato: 77-97% raggiungimento
+    per zone entro 0.5%). Non ci affidiamo alla predicted reaction
+    (BOUNCE_UP/DOWN) perche' la sua accuracy e' insufficiente (40-64%).
 
     Logica:
-      Il prezzo si muove da una zona di reazione alla prossima.
-      - TP → alla prossima zona che BLOCCA il movimento (reazione opposta).
-             BUY: prossima BOUNCE_DOWN sopra entry (il prezzo sale, la colpisce, rimbalza giu')
-             SELL: prossima BOUNCE_UP sotto entry (il prezzo scende, la colpisce, rimbalza su)
-             TP al midpoint della zona (dove la reazione e' piu' forte).
-      - SL → appena oltre la zona che PROTEGGE il trade (reazione allineata).
-             BUY: prossima BOUNCE_UP sotto entry (deve reggere; se rotta, trade invalido)
-             SELL: prossima BOUNCE_DOWN sopra entry (deve reggere; se rotto, trade invalido)
-             SL oltre il bordo esterno della zona.
+      - TP → prima zona significativa nella direzione del trade.
+             BUY: prima zona sopra entry (resistenza strutturale).
+             SELL: prima zona sotto entry (supporto strutturale).
+             Qualsiasi zona con score sufficiente e' un potenziale ostacolo.
+             TP al bordo vicino della zona (dove il prezzo incontra resistenza).
+      - SL → oltre la prima zona significativa dietro l'entry.
+             BUY: oltre la zona piu' vicina sotto entry (se rotta = invalidazione).
+             SELL: oltre la zona piu' vicina sopra entry (se rotta = invalidazione).
+             Se lo SL strutturale supera il risk massimo → trade scartato (None).
 
-    Fallback: se nessuna zona trovata → ritorna None (il chiamante usa la logica corrente).
-    SL bounce: usato solo se entro 2x il risk corrente (non allargare troppo).
-    TP bounce: usato solo se almeno 1R dal entry (altrimenti inutile come target).
+    Filtro distanza: zone oltre MAX_DIST_PCT vengono ignorate (irraggiungibili).
 
     Returns: dict {"tp": float|None, "sl": float|None, "tp_zone": dict|None,
                    "sl_zone": dict|None, "tp_label": str, "sl_label": str}
@@ -1018,71 +1024,93 @@ def _bounce_point_sl_tp(conn, asset, direction, entry, sl_current, risk_current)
     if not zones:
         return result
 
-    # ── Reazioni per BUY/SELL ──
-    if direction == "BUY":
-        tp_reaction = "BOUNCE_DOWN"   # prezzo sale → colpisce → rimbalza giu = nostro exit
-        sl_reaction = "BOUNCE_UP"     # sotto entry → protegge → se rotto = invalido
-    else:
-        tp_reaction = "BOUNCE_UP"     # prezzo scende → colpisce → rimbalza su = nostro exit
-        sl_reaction = "BOUNCE_DOWN"   # sopra entry → protegge → se rotto = invalido
+    # ── Parametri ──
+    MIN_TP_SCORE = 15     # zona deve avere un minimo di confluenza
+    MIN_SL_SCORE = 25     # per SL un po' piu' alta (deve reggere)
+    MAX_TP_RR = 5.0       # cap TP: non oltre 5R
+    MAX_SL_MULT = 1.5     # SL non oltre 1.5x il risk corrente
+    MAX_DIST_PCT = 0.03   # ignora zone oltre 3% di distanza (BTC)
+    if asset == "XAU_USD":
+        MAX_DIST_PCT = 0.02  # XAU: zone oltre 2% irraggiungibili
 
-    MIN_TP_SCORE = 20    # qualsiasi zona attrae il prezzo (grid search: 20 ottimale)
-    MIN_SL_SCORE = 35    # per SL serve zona piu' affidabile
-    MAX_TP_RR = 5.0      # cap TP: non oltre 5R (zone troppo lontane irraggiungibili)
+    # ── Filtra zone per distanza operativa ──
+    operative_zones = []
+    for z in zones:
+        mid = z.get("zone_midpoint", 0)
+        score = z.get("confluence_score", 0)
+        if mid <= 0 or score < min(MIN_TP_SCORE, MIN_SL_SCORE):
+            continue
+        dist_pct = abs(mid - entry) / entry if entry > 0 else 0
+        if dist_pct > MAX_DIST_PCT:
+            continue
+        operative_zones.append(z)
 
-    # ── TP: prossima zona opposta nella direzione del trade ──
+    if not operative_zones:
+        return result
+
+    # ── TP: prima zona nella direzione del trade ──
+    # BUY → prima zona sopra entry = resistenza/ostacolo
+    # SELL → prima zona sotto entry = supporto/ostacolo
     tp_zone = None
     tp_dist = float("inf")
-    for z in zones:
-        exp = z.get("expected_reaction", "")
+    for z in operative_zones:
         score = z.get("confluence_score", 0)
-        mid = z.get("zone_midpoint", 0)
-        if exp != tp_reaction or score < MIN_TP_SCORE or mid <= 0:
+        if score < MIN_TP_SCORE:
             continue
+        mid = z.get("zone_midpoint", 0)
+
         if direction == "BUY" and mid > entry:
-            d = mid - entry
-            # Minimo 1R, massimo MAX_TP_RR (zone troppo lontane irraggiungibili)
+            # TP al bordo vicino della zona (zone_low = dove il prezzo incontra prima resistenza)
+            target = z.get("zone_low", mid)
+            d = target - entry
             if d >= risk_current and d / risk_current <= MAX_TP_RR and d < tp_dist:
                 tp_dist = d
                 tp_zone = z
         elif direction == "SELL" and mid < entry:
-            d = entry - mid
+            # TP al bordo vicino della zona (zone_high = dove il prezzo incontra prima supporto)
+            target = z.get("zone_high", mid)
+            d = entry - target
             if d >= risk_current and d / risk_current <= MAX_TP_RR and d < tp_dist:
                 tp_dist = d
                 tp_zone = z
 
     if tp_zone:
-        # TP al midpoint: dove la reazione e' piu' forte
-        result["tp"] = tp_zone["zone_midpoint"]
+        if direction == "BUY":
+            result["tp"] = tp_zone["zone_low"]   # bordo inferiore della zona sopra
+        else:
+            result["tp"] = tp_zone["zone_high"]   # bordo superiore della zona sotto
         result["tp_zone"] = tp_zone
         score = tp_zone["confluence_score"]
-        strength = tp_zone["reaction_strength"]
-        result["tp_label"] = f"BP_{strength}_{score:.0f}"
-        logger.info("OTE-LAB [%s %s]: TP bounce point → %.2f (zona %s score=%.0f, dist=%.2f)",
-                    asset, direction, result["tp"], tp_reaction, score, tp_dist)
+        strength = tp_zone.get("reaction_strength", "?")
+        sources = tp_zone.get("sources", [])
+        n_sources = len(sources)
+        result["tp_label"] = f"RZ_{strength}_{score:.0f}_x{n_sources}"
+        logger.info("OTE-LAB [%s %s]: TP structural zone → %.2f "
+                    "(score=%.0f, %s, %d sources, dist=%.2f)",
+                    asset, direction, result["tp"], score, strength,
+                    n_sources, tp_dist)
 
-    # ── SL: prossima zona protettiva VICINA (entro 2x risk corrente) ──
+    # ── SL: oltre la prima zona dietro l'entry (invalidazione strutturale) ──
+    # BUY → zona piu' vicina sotto entry. Se rotta → struttura invalida
+    # SELL → zona piu' vicina sopra entry. Se rotta → struttura invalida
     sl_zone = None
     sl_dist = float("inf")
-    max_sl_reach = risk_current * 1.5   # non allargare oltre 1.5x (grid search ottimale)
+    max_sl_reach = risk_current * MAX_SL_MULT
 
-    for z in zones:
-        exp = z.get("expected_reaction", "")
+    for z in operative_zones:
         score = z.get("confluence_score", 0)
-        if exp != sl_reaction or score < MIN_SL_SCORE:
+        if score < MIN_SL_SCORE:
             continue
 
         if direction == "BUY":
-            # Zona BOUNCE_UP sotto entry: SL sotto il bordo inferiore
-            edge = z.get("zone_low", 0)
+            edge = z.get("zone_low", 0)    # bordo esterno: se rotto, game over
             if 0 < edge < entry:
                 d = entry - edge
                 if d <= max_sl_reach and d < sl_dist:
                     sl_dist = d
                     sl_zone = z
         else:
-            # Zona BOUNCE_DOWN sopra entry: SL sopra il bordo superiore
-            edge = z.get("zone_high", 0)
+            edge = z.get("zone_high", 0)   # bordo esterno: se rotto, game over
             if edge > entry:
                 d = edge - entry
                 if d <= max_sl_reach and d < sl_dist:
@@ -1097,9 +1125,11 @@ def _bounce_point_sl_tp(conn, asset, direction, entry, sl_current, risk_current)
             result["sl"] = sl_zone["zone_high"] + buffer
         result["sl_zone"] = sl_zone
         score = sl_zone["confluence_score"]
-        result["sl_label"] = f"BP_{sl_zone['reaction_strength']}_{score:.0f}"
-        logger.info("OTE-LAB [%s %s]: SL bounce point → %.2f (zona %s score=%.0f)",
-                    asset, direction, result["sl"], sl_reaction, score)
+        strength = sl_zone.get("reaction_strength", "?")
+        result["sl_label"] = f"RZ_{strength}_{score:.0f}"
+        logger.info("OTE-LAB [%s %s]: SL structural zone → %.2f "
+                    "(score=%.0f, %s, beyond zone edge)",
+                    asset, direction, result["sl"], score, strength)
 
     return result
 
