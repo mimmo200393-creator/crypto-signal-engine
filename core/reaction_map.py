@@ -38,6 +38,7 @@ WEIGHTS = {
     "fvg": 15,
     "liquidity": 20,
     "support_resistance": 10,
+    "recurring": 20,
     "session_extreme": 10,
     "premium_discount": 10,
     "displacement": 10,
@@ -68,7 +69,8 @@ def init_reaction_map_schema(conn: sqlite3.Connection):
 
 def _collect_zones(ob_snapshot: dict, fvg_snapshot: dict,
                     liq_snapshot: dict, structure_snapshot: dict,
-                    current_price: float) -> list:
+                    current_price: float,
+                    recurring_zones: list = None) -> list:
     """Raccoglie tutte le zone da tutti i moduli in un formato unificato."""
     raw_zones = []
 
@@ -149,6 +151,35 @@ def _collect_zones(ob_snapshot: dict, fvg_snapshot: dict,
                     "metadata": {"level_type": key},
                 })
 
+    # ── Recurring Zones (punti ricorrenti H4+H1+M15) ───────
+    if recurring_zones:
+        for rz in recurring_zones:
+            price = rz.get("bucket_price", 0)
+            if price <= 0:
+                continue
+            # Zona sottile attorno al bucket (±0.15%)
+            zone_size = price * 0.0015
+            # Normalizza score: H4×3 + H1×1 + M15×0.5, cap a 1.0
+            raw_score = rz.get("score", 0)
+            # score 15+ = max strength; 5 = min (MIN_ZONE_VISITS)
+            norm_strength = min(raw_score / 15.0, 1.0)
+            direction = "BEARISH" if rz.get("last_swing_type") == "HIGH" else "BULLISH"
+            raw_zones.append({
+                "source": "RECURRING",
+                "zone_high": price + zone_size,
+                "zone_low": price - zone_size,
+                "direction": direction,
+                "strength": norm_strength,
+                "status": "ACTIVE",
+                "metadata": {
+                    "rz_visits": rz.get("visits", 0),
+                    "rz_visits_h4": rz.get("visits_h4", 0),
+                    "rz_visits_h1": rz.get("visits_h1", 0),
+                    "rz_visits_m15": rz.get("visits_m15", 0),
+                    "rz_score": raw_score,
+                },
+            })
+
     return raw_zones
 
 
@@ -203,6 +234,7 @@ def _fuse_group(group: list, current_price: float) -> dict:
     has_fvg = "FVG" in sources
     has_liq = "LIQUIDITY" in sources
     has_sr = "STRUCTURE_SR" in sources
+    has_recurring = "RECURRING" in sources
 
     confluence_count = len(sources)
 
@@ -228,6 +260,12 @@ def _fuse_group(group: list, current_price: float) -> dict:
         score += WEIGHTS["liquidity"] * liq_score
     if has_sr:
         score += WEIGHTS["support_resistance"]
+    if has_recurring:
+        rz_strength = max(
+            (z["strength"] for z in group if z["source"] == "RECURRING"),
+            default=0
+        )
+        score += WEIGHTS["recurring"] * rz_strength
 
     # Premium/Discount context
     in_premium = current_price > 0 and midpoint > current_price
@@ -273,6 +311,8 @@ def _fuse_group(group: list, current_price: float) -> dict:
         "has_liquidity_pool": has_liq,
         "liq_structural_score": max((z["metadata"].get("liq_structural_score", 0) for z in group if z["source"] == "LIQUIDITY"), default=0),
         "has_support_resistance": has_sr,
+        "has_recurring": has_recurring,
+        "rz_visits": max((z["metadata"].get("rz_visits", 0) for z in group if z["source"] == "RECURRING"), default=0),
         "is_session_extreme": False,
         "in_premium": in_premium,
         "in_discount": in_discount,
@@ -295,6 +335,7 @@ def produce_reaction_map(
     ob_snapshot: dict = None,
     fvg_snapshot: dict = None,
     liq_snapshot: dict = None,
+    recurring_zones: list = None,
     conn: sqlite3.Connection = None,
     now: datetime = None,
     config: dict = None,
@@ -310,7 +351,8 @@ def produce_reaction_map(
 
     # ── 1. Raccogli zone ─────────────────────────────────────
     raw = _collect_zones(ob_snapshot, fvg_snapshot, liq_snapshot,
-                          structure_snapshot, current_price)
+                          structure_snapshot, current_price,
+                          recurring_zones=recurring_zones)
 
     # ── 2. Fondi zone sovrapposte ────────────────────────────
     tolerance = cfg.get("zone_merge_tolerance_pct", 0.003)

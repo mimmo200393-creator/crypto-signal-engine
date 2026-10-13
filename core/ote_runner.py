@@ -1161,10 +1161,21 @@ def _calc_accumulation_hours(conn, asset, zone_price, bucket_size):
 RECURRING_PROXIMITY = {"XAU_USD": 15.0, "BTC_USDT": 200.0}
 MIN_ZONE_VISITS = 5
 
-def _find_recurring_zones(conn, asset, current_price):
+def _find_recurring_zones(conn, asset, current_price, proximity_filter=True):
+    """Trova zone ricorrenti dove il prezzo ha reagito piu' volte.
+
+    Scansiona swing points su H4 (da lh_swing_zones), H1 (da candles_cache)
+    e M15 (da v3_candles_cache). I pesi sono: H4×3, H1×1, M15×0.5.
+
+    Args:
+        proximity_filter: Se True applica il filtro di prossimita' (per
+            segnali RECURRING). Se False restituisce tutte le zone qualificate
+            (per integrazione nella Reaction Map).
+    """
     from collections import Counter
     bucket_size = 10.0 if asset == "XAU_USD" else 500.0
 
+    # ── H4 swings (da lh_swing_zones) ───────────────────────
     h4_buckets = Counter()
     h4_types = {}
     try:
@@ -1176,6 +1187,7 @@ def _find_recurring_zones(conn, asset, current_price):
     except Exception:
         pass
 
+    # ── H1 swings (calcolati on-the-fly) ────────────────────
     h1_buckets = Counter()
     h1_types = {}
     try:
@@ -1195,19 +1207,44 @@ def _find_recurring_zones(conn, asset, current_price):
     except Exception:
         pass
 
+    # ── M15 swings (da v3_candles_cache) ────────────────────
+    m15_buckets = Counter()
+    m15_types = {}
+    try:
+        cur = conn.execute("SELECT high, low FROM v3_candles_cache WHERE asset=? AND timeframe='15m' ORDER BY timestamp", (asset,))
+        candles_m15 = cur.fetchall()
+        lb = 3
+        for i in range(lb, len(candles_m15)-lb):
+            h, l = candles_m15[i]
+            if all(h >= candles_m15[j][0] for j in range(i-lb,i)) and all(h >= candles_m15[j][0] for j in range(i+1,i+lb+1)):
+                b = round(h / bucket_size) * bucket_size
+                m15_buckets[b] += 1
+                m15_types[b] = "HIGH"
+            if all(l <= candles_m15[j][1] for j in range(i-lb,i)) and all(l <= candles_m15[j][1] for j in range(i+1,i+lb+1)):
+                b = round(l / bucket_size) * bucket_size
+                m15_buckets[b] += 1
+                m15_types[b] = "LOW"
+    except Exception:
+        pass
+
+    # ── Combina e filtra ────────────────────────────────────
+    all_buckets = set(h4_buckets.keys()) | set(h1_buckets.keys()) | set(m15_buckets.keys())
     proximity = RECURRING_PROXIMITY.get(asset, 15.0)
     zones = []
-    for b in set(h4_buckets.keys()) | set(h1_buckets.keys()):
+    for b in all_buckets:
         v4 = h4_buckets.get(b, 0)
         v1 = h1_buckets.get(b, 0)
-        if v4 + v1 < MIN_ZONE_VISITS:
+        vm = m15_buckets.get(b, 0)
+        total_visits = v4 + v1 + vm
+        if total_visits < MIN_ZONE_VISITS:
             continue
-        if abs(current_price - b) > proximity:
+        if proximity_filter and abs(current_price - b) > proximity:
             continue
-        lt = h4_types.get(b) or h1_types.get(b)
+        lt = h4_types.get(b) or h1_types.get(b) or m15_types.get(b)
         zones.append({
-            "bucket_price": b, "visits": v4+v1, "visits_h4": v4, "visits_h1": v1,
-            "score": v4*3 + v1,
+            "bucket_price": b, "visits": total_visits,
+            "visits_h4": v4, "visits_h1": v1, "visits_m15": vm,
+            "score": v4*3 + v1 + vm*0.5,
             "expected_direction": "SELL" if lt == "HIGH" else "BUY",
             "last_swing_type": lt,
         })

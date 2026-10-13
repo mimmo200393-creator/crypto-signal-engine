@@ -26,6 +26,7 @@ from core.fvg_engine import produce_fvg_snapshot, init_fvg_schema
 from core.liquidity_engine_v2 import produce_liquidity_snapshot, init_liquidity_schema
 from core.session_sweep_engine import produce_session_sweep_snapshot, init_session_sweep_schema
 from core.reaction_map import produce_reaction_map, init_reaction_map_schema
+from core.ote_runner import _find_recurring_zones
 from core.candlestick_engine import produce_candlestick_snapshot, init_candlestick_schema
 from core.macro_context_engine import produce_macro_snapshot, init_macro_schema
 from core.market_state_model import produce_market_state, init_market_state_schema
@@ -349,6 +350,16 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
     except Exception as e:
         logger.error("V41P1 Liquidity [%s]: errore: %s", asset, e)
 
+    # ── Recurring zones (punti ricorrenti H4+H1+M15) ──────
+    rz_list = []
+    try:
+        current_price = structure_snapshot.get("current_price", 0) if structure_snapshot else 0
+        if current_price > 0:
+            rz_list = _find_recurring_zones(conn, asset, current_price, proximity_filter=False)
+            logger.info("V41P1 RecurringZones [%s]: %d zone trovate", asset, len(rz_list))
+    except Exception as e:
+        logger.error("V41P1 RecurringZones [%s]: errore: %s", asset, e)
+
     rm_snapshot = None
     try:
         rm_snapshot = produce_reaction_map(
@@ -356,6 +367,7 @@ def _run_for_asset(conn, asset: str, config: dict, macro_provider, now: datetime
             ob_snapshot=ob_snapshot,
             fvg_snapshot=fvg_snapshot,
             liq_snapshot=liq_snapshot,
+            recurring_zones=rz_list if rz_list else None,
             conn=conn, now=now)
     except Exception as e:
         logger.error("V41P1 ReactionMap [%s]: errore: %s", asset, e)
