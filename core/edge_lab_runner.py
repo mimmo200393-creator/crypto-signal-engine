@@ -41,7 +41,7 @@ from core.decision_ledger.decision_collector import generate_ulid
 
 logger = logging.getLogger("edge_lab.runner")
 
-EDGE_LAB_ASSETS     = ["BTC_USDT", "PAXG_USDT"]
+EDGE_LAB_ASSETS     = ["BTC_USDT", "XAU_USD"]
 EDGE_LAB_TIMEFRAMES = {"H4": "4h", "H1": "1h", "M15": "15m", "D1": "1D"}
 
 

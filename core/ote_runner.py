@@ -31,6 +31,10 @@ Changelog 13/10/2026: v1.5 — EA gestisce tutto: scanner manda solo entry/SL/TP
                        STANDARD: tp2 invariato (EA trailing tick-by-tick).
                        Rimosso exit_mode/fixed_tp/trail_r dal payload.
                        CLOSE_POSITION mantenuto come safety net.
+Changelog 14/10/2026: v1.6 — XAU_USD ri-abilitato (EA v1.28 gestisce localmente).
+                       M15 Strategic Pivots in SHADOW MODE: calcola m15_pivot_tp
+                       e m15_pivot_sl per ogni segnale, salva nel DB senza
+                       modificare TP/SL reali. Raccolta dati per validazione.
 """
 
 from __future__ import annotations
@@ -46,9 +50,10 @@ from strategies.edge_lab.trend_rider import generate_trb_signal
 
 logger = logging.getLogger("ote.lab")
 
-# XAU_USD disabilitato: expectancy negativa (-0.576R/trade, WR 26.3%)
-# Analisi diagnostica Oct 2026 — da riattivare solo dopo ottimizzazione
-OTE_LAB_ASSETS = ["BTC_USDT"]
+# XAU_USD ri-abilitato: EA v1.28 gestisce BE/trailing localmente (tick-by-tick),
+# eliminando il problema latenza scanner che causava expectancy negativa.
+# Da monitorare: se expectancy XAU resta negativa dopo 50+ trade, ri-valutare.
+OTE_LAB_ASSETS = ["BTC_USDT", "XAU_USD"]
 
 # ── Trailing: 0.5R — solo per STANDARD (v1.4) ──
 # v1.2: TRAIL_R 0.7→0.5 su tutto: totalR +14.1→+35.3 (+150%)
@@ -182,7 +187,9 @@ CREATE TABLE IF NOT EXISTS ote_lab_signals (
     rz_target_label     TEXT,
     tp2_original        REAL,
     tier                TEXT,
-    accumulation_hours  INTEGER
+    accumulation_hours  INTEGER,
+    m15_pivot_tp        REAL,
+    m15_pivot_sl        REAL
 );
 """
 
@@ -208,6 +215,15 @@ def _init_schema(conn):
                 logger.info("OTE-LAB: colonna accumulation_hours aggiunta")
             except Exception:
                 pass
+        # v1.6: colonne shadow M15 pivots
+        for shadow_col in ("m15_pivot_tp", "m15_pivot_sl"):
+            if cols and shadow_col not in cols:
+                try:
+                    conn.execute(f"ALTER TABLE ote_lab_signals ADD COLUMN {shadow_col} REAL")
+                    conn.commit()
+                    logger.info("OTE-LAB: colonna %s aggiunta (shadow)", shadow_col)
+                except Exception:
+                    pass
     except Exception:
         pass
     conn.execute(_CREATE)
@@ -227,8 +243,9 @@ def _insert_signal(conn, sig: dict) -> str:
             flag_adx_ok, flag_trigger_present, flag_volatility_ok, flag_sl_widened,
             liquidity_target, liquidity_target_price, liquidity_priority,
             quality_score, quality_label, expiry_bars,
-            rz_target_used, rz_target_label, tp2_original, tier, accumulation_hours
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            rz_target_used, rz_target_label, tp2_original, tier, accumulation_hours,
+            m15_pivot_tp, m15_pivot_sl
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         sid, sig["asset"], sig["direction"], sig["timestamp_setup"],
         sig.get("entry"), sig.get("stop_loss"), sig.get("tp1"), sig.get("tp2"),
@@ -245,6 +262,7 @@ def _insert_signal(conn, sig: dict) -> str:
         sig.get("expiry_bars", SIGNAL_EXPIRY_HOURS),  # legacy field, now hours
         sig.get("rz_target_used", False), sig.get("rz_target_label"),
         sig.get("tp2_original"), sig.get("tier"), sig.get("accumulation_hours"),
+        sig.get("m15_pivot_tp"), sig.get("m15_pivot_sl"),
     ))
     conn.commit()
     return sid
@@ -689,6 +707,79 @@ def _notify_stop_move(sp, config):
 
 
 # ================================================================
+# M15 Strategic Pivots — SHADOW MODE (v1.6)
+# Calcola swing highs/lows su M15. Salva nel DB senza modificare
+# TP/SL reali. Dopo N trade, analizzeremo se migliorano il trade.
+# ================================================================
+
+def _find_m15_strategic_pivots(df_m15):
+    """Trova swing highs e swing lows su M15 con lookback=3."""
+    if df_m15 is None or len(df_m15) < 7:
+        return []
+    pivots = []
+    highs = df_m15["high"].astype(float).values
+    lows = df_m15["low"].astype(float).values
+    lb = 3
+    for i in range(lb, len(highs) - lb):
+        # Swing High
+        if all(highs[i] >= highs[j] for j in range(i - lb, i)) and \
+           all(highs[i] >= highs[j] for j in range(i + 1, i + lb + 1)):
+            pivots.append({"price": highs[i], "type": "HIGH"})
+        # Swing Low
+        if all(lows[i] <= lows[j] for j in range(i - lb, i)) and \
+           all(lows[i] <= lows[j] for j in range(i + 1, i + lb + 1)):
+            pivots.append({"price": lows[i], "type": "LOW"})
+    return pivots
+
+
+def _calc_shadow_m15_pivots(df_m15, direction, entry, sl, tp2, risk):
+    """
+    Calcola TP e SL shadow basati su M15 pivots.
+    NON modifica il trade — solo valori da salvare per analisi futura.
+
+    TP shadow: primo pivot nella direzione del trade oltre entry (min 1R).
+    SL shadow: primo pivot protettivo dietro entry (max 1.5x risk attuale).
+    """
+    pivots = _find_m15_strategic_pivots(df_m15)
+    if not pivots or risk <= 0:
+        return None, None
+
+    shadow_tp = None
+    shadow_sl = None
+
+    if direction == "BUY":
+        # TP: primo swing HIGH sopra entry con almeno 1R
+        tp_candidates = [p["price"] for p in pivots
+                         if p["type"] == "HIGH" and p["price"] > entry
+                         and (p["price"] - entry) >= risk]
+        if tp_candidates:
+            shadow_tp = min(tp_candidates)  # il piu' vicino
+
+        # SL: primo swing LOW sotto entry (protezione), max 1.5x risk
+        sl_candidates = [p["price"] for p in pivots
+                         if p["type"] == "LOW" and p["price"] < entry
+                         and (entry - p["price"]) <= risk * 1.5]
+        if sl_candidates:
+            shadow_sl = max(sl_candidates)  # il piu' vicino all'entry
+    else:
+        # TP: primo swing LOW sotto entry con almeno 1R
+        tp_candidates = [p["price"] for p in pivots
+                         if p["type"] == "LOW" and p["price"] < entry
+                         and (entry - p["price"]) >= risk]
+        if tp_candidates:
+            shadow_tp = max(tp_candidates)
+
+        # SL: primo swing HIGH sopra entry, max 1.5x risk
+        sl_candidates = [p["price"] for p in pivots
+                         if p["type"] == "HIGH" and p["price"] > entry
+                         and (p["price"] - entry) <= risk * 1.5]
+        if sl_candidates:
+            shadow_sl = min(sl_candidates)
+
+    return shadow_tp, shadow_sl
+
+
+# ================================================================
 # Session helper (identico a TRB)
 # ================================================================
 
@@ -967,6 +1058,22 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
                     signal["rz_target_label"] = rz["label"]
                     logger.info("OTE-LAB [%s %s]: RZ target %s RR=%.2f",
                                asset, direction, rz["label"], rz_rr)
+
+        # ── v1.6: M15 pivots SHADOW (calcola, salva, non applica) ──
+        try:
+            s_tp, s_sl = _calc_shadow_m15_pivots(
+                df_m15, direction,
+                signal.get("entry", 0), signal.get("stop_loss", 0),
+                signal.get("tp2", 0), signal.get("risk", 0))
+            if s_tp is not None:
+                signal["m15_pivot_tp"] = round(s_tp, 5)
+            if s_sl is not None:
+                signal["m15_pivot_sl"] = round(s_sl, 5)
+            if s_tp or s_sl:
+                logger.info("OTE-LAB [%s %s]: SHADOW M15 tp=%.2f sl=%.2f",
+                            asset, direction, s_tp or 0, s_sl or 0)
+        except Exception as e:
+            logger.debug("OTE-LAB [%s %s]: shadow M15 error: %s", asset, direction, e)
 
         # ── Classifica tier (tracking puro) ──
         signal["tier"] = _classify_tier(signal)
@@ -1604,6 +1711,17 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
         if rr2 < 1.2: continue
         tp1 = entry + risk if direction == "BUY" else entry - risk
 
+        # ── v1.6: M15 pivots SHADOW per RECURRING ──
+        rec_m15_tp, rec_m15_sl = None, None
+        try:
+            rec_m15_tp, rec_m15_sl = _calc_shadow_m15_pivots(
+                df_m15, direction, entry, sl, tp, risk)
+            if rec_m15_tp or rec_m15_sl:
+                logger.info("OTE-LAB [%s %s]: SHADOW M15 REC tp=%.2f sl=%.2f",
+                            asset, direction, rec_m15_tp or 0, rec_m15_sl or 0)
+        except Exception as e:
+            logger.debug("OTE-LAB [%s %s]: shadow M15 REC error: %s", asset, direction, e)
+
         now = datetime.now(timezone.utc)
         sig = {
             "asset": asset, "direction": direction,
@@ -1620,6 +1738,8 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
             "tier": "RECURRING",
             "accumulation_hours": _calc_accumulation_hours(
                 conn, asset, zone["bucket_price"], bucket_size),
+            "m15_pivot_tp": round(rec_m15_tp, 5) if rec_m15_tp else None,
+            "m15_pivot_sl": round(rec_m15_sl, 5) if rec_m15_sl else None,
         }
 
         try:
