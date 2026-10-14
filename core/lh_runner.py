@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import datetime, timezone, timedelta
 
 from storage import db as core_db
@@ -703,6 +704,7 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         signal_id,
     )
 
+    signal["signal_id"] = signal_id
     _notify(signal, config)
 
 
@@ -885,10 +887,26 @@ def _notify(signal: dict, config: dict):
 
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
+        # Invio JSON strutturato su ntfy per EA MT5
         if ntfy_topic:
-            title = (f"LH {dir_it} {asset.replace('_',' ')} | "
-                     f"{stars} {tags_str}")
-            ntfy_bot.send_message(ntfy_topic, title, text.replace("*","").replace("`",""))
+            payload_dict = {
+                "signal_id": signal.get("signal_id", str(uuid.uuid4())),
+                "strategy_name": "LH",
+                "asset": asset,
+                "direction": direction,
+                "entry": signal["entry"],
+                "stop_loss": signal["stop_loss"],
+                "tp": signal["tp"],
+                "rr": round(signal.get("rr", 0), 2),
+                "quality_label": signal.get("quality_label", "MEDIUM"),
+                "expiry_hours": 8,
+            }
+            payload = json.dumps(payload_dict)
+            ntfy_bot.send_message(
+                ntfy_topic,
+                f"LH {dir_it} {asset.replace('_',' ')}",
+                payload,
+            )
 
     except Exception as e:
         logger.warning("LH _notify: %s", e)
