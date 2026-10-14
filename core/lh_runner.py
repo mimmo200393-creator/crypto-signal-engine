@@ -705,6 +705,9 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
     )
 
     signal["signal_id"] = signal_id
+    # v1.29: pass ATR M15 for EA autonomous BE management
+    atr_m15_val = mie_context.get("mie_volatility_atr_m15", 0) or 0
+    signal["atr_m15"] = atr_m15_val
     _notify(signal, config)
 
 
@@ -889,6 +892,11 @@ def _notify(signal: dict, config: dict):
             telegram_bot.send_message(bot_token, chat_id, text)
         # Invio JSON strutturato su ntfy per EA MT5
         if ntfy_topic:
+            # v1.29: EA calcola tutto autonomamente.
+            # be_activate_dist = 0.3 * ATR_M15 (unico param che l'EA
+            # non puo calcolare da solo — ATR viene dal runner Python).
+            atr_val = signal.get("atr_m15", 0) or 0
+            be_dist = round(0.3 * atr_val, 2) if atr_val > 0 else 0
             payload_dict = {
                 "signal_id": signal.get("signal_id", str(uuid.uuid4())),
                 "strategy_name": "LH",
@@ -900,6 +908,7 @@ def _notify(signal: dict, config: dict):
                 "rr": round(signal.get("rr", 0), 2),
                 "quality_label": signal.get("quality_label", "MEDIUM"),
                 "expiry_hours": 8,
+                "be_activate_dist": be_dist,
             }
             payload = json.dumps(payload_dict)
             ntfy_bot.send_message(
