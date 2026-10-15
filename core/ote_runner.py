@@ -12,29 +12,6 @@ Salva in ote_lab_signals (schema identico a trb_signals).
 NON tocca TRB, TT, LH, V41P1 — zero impatto.
 
 Changelog 29/09/2026: riscritto da zero come clone fedele di TRB.
-Changelog 11/10/2026: fix expiry — da contatore cicli (32 cicli = 2h40 con cron 5m)
-                       a 6 ore reali basate su timestamp_setup.
-Changelog 12/10/2026: v1.2 — TRAIL_R 0.7→0.5 (RECURRING totalR +14→+35),
-                       blocco RECURRING con accumulazione 12-24h (WR 18.8%).
-Changelog 12/10/2026: v1.3 — Bounce Point filter per RECURRING:
-                       usa reaction_map expected_reaction (BOUNCE_UP/DOWN)
-                       per filtrare segnali contro la zona di confluenza.
-                       Dati: ALIGNED 75% WR vs AGAINST 37.5% (n=16).
-                       Rimosso blocco sessione NY (sessioni non vanno bloccate).
-Changelog 13/10/2026: v1.4 — TP fisso 0.6R per RECURRING, trailing solo STANDARD.
-                       Simulazione 178 trade: RECURRING TP fisso +17.2R vs +12.7R
-                       trailing (+35%). STANDARD invariato (+24.4R).
-                       Totale ibrido: +41.6R vs +37.1R (+12%).
-                       Nuovo outcome TP_FIXED per chiusura a target fisso.
-Changelog 13/10/2026: v1.5 — EA gestisce tutto: scanner manda solo entry/SL/TP.
-                       RECURRING: tp2 = 0.6R (EA piazza TP, broker chiude).
-                       STANDARD: tp2 invariato (EA trailing tick-by-tick).
-                       Rimosso exit_mode/fixed_tp/trail_r dal payload.
-                       CLOSE_POSITION mantenuto come safety net.
-Changelog 14/10/2026: v1.6 — XAU_USD ri-abilitato (EA v1.28 gestisce localmente).
-                       M15 Strategic Pivots in SHADOW MODE: calcola m15_pivot_tp
-                       e m15_pivot_sl per ogni segnale, salva nel DB senza
-                       modificare TP/SL reali. Raccolta dati per validazione.
 """
 
 from __future__ import annotations
@@ -50,38 +27,20 @@ from strategies.edge_lab.trend_rider import generate_trb_signal
 
 logger = logging.getLogger("ote.lab")
 
-# XAU_USD ri-abilitato: EA v1.28 gestisce BE/trailing localmente (tick-by-tick),
-# eliminando il problema latenza scanner che causava expectancy negativa.
-# Da monitorare: se expectancy XAU resta negativa dopo 50+ trade, ri-valutare.
 OTE_LAB_ASSETS = ["BTC_USDT", "XAU_USD"]
 
-# ── Trailing: 0.5R — solo per STANDARD (v1.4) ──
-# v1.2: TRAIL_R 0.7→0.5 su tutto: totalR +14.1→+35.3 (+150%)
-# v1.4: RECURRING passa a TP fisso 0.6R, trailing solo per STANDARD.
-#   Simulazione su 178 trade:
-#   - RECURRING TP fisso 0.6R: +17.2R vs +12.7R trailing (+35%)
-#   - STANDARD trailing 0.5R:  +24.4R invariato (big winners da TP2)
-#   - Totale ibrido:           +41.6R vs +37.1R attuale (+12%)
-#   Il trailing in RECURRING crea 52 TRAIL_HIT con gap medio 0.63R.
-#   Con TP fisso 0.6R: WR 57.1%, PF 2.10 (vs 1.88 attuale).
-LAB_TRAIL_R = 0.5
+# ── Trailing: IDENTICO a TRB (0.7) per isolare l'effetto reaction entry ──
+# Test disciplinato: cambiamo una variabile alla volta. Se OTE-LAB batte
+# TRB, sappiamo che e' merito della reaction entry, non di un mix di
+# effetti (trail 0.5 che magari peggiora + reaction che migliora).
+LAB_TRAIL_R = 0.7          # uguale a TRB
 LAB_TRAIL_MIN_LOCK = {"BTC_USDT": 60.0, "XAU_USD": 2.5}
-
-# ── TP fisso per RECURRING (v1.4 — validato su 126 RECURRING) ──
-# MFE media RECURRING ~0.85R → TP fisso cattura il profitto senza aspettare.
-# 0.6R vs 0.7R: stesso totalR (+17.2R), ma 0.6R ha WR piu' alto (57% vs 52%)
-# e PF migliore (2.10 vs 2.02) perche' cattura 6 trade in piu'.
-# STANDARD mantiene trailing: 7 TP2_HIT (avg +1.97R) fanno 57% del profitto.
-REC_FIXED_TP_R = 0.6
 
 # ── Cap RR2 (verificato 01/10 su dati reali) ──
 # Target oltre 5R non si raggiungono e il trade muore: RR2>=5 → sumR -1.8
 # (WR 43%), RR2<5 → sumR +2.3 (WR 45%). Limito il target a 4R max: se la
 # reaction zone e' piu' lontana, taglio il TP a 4R (piu' raggiungibile).
-# v1.1: ridotto da 4.0 a 2.5 — dati mostrano che RR2 > 2.5 ha TP2 hit rate < 5%
-# OTE-LAB >= 4.0R: solo 1.1% TP2 hit rate (1/91 trade)
-# OTE-LAB 3.0-4.0R: solo 4.0% TP2 hit rate (1/25 trade)
-MAX_RR2 = 2.5
+MAX_RR2 = 4.0
 
 # ── Break-even + offset (verificato 01/10) ──
 # Chiudere a esattamente l'entry (0R) in realta' perde lo spread.
@@ -130,7 +89,7 @@ LAB_STRICT_H4 = False
 
 # Stesse costanti di TRB
 MAX_RISK_XAU = 25.0
-SIGNAL_EXPIRY_HOURS = 6
+SIGNAL_EXPIRY_BARS = 32
 
 
 # ================================================================
@@ -187,9 +146,7 @@ CREATE TABLE IF NOT EXISTS ote_lab_signals (
     rz_target_label     TEXT,
     tp2_original        REAL,
     tier                TEXT,
-    accumulation_hours  INTEGER,
-    m15_pivot_tp        REAL,
-    m15_pivot_sl        REAL
+    accumulation_hours  INTEGER
 );
 """
 
@@ -215,15 +172,6 @@ def _init_schema(conn):
                 logger.info("OTE-LAB: colonna accumulation_hours aggiunta")
             except Exception:
                 pass
-        # v1.6: colonne shadow M15 pivots
-        for shadow_col in ("m15_pivot_tp", "m15_pivot_sl"):
-            if cols and shadow_col not in cols:
-                try:
-                    conn.execute(f"ALTER TABLE ote_lab_signals ADD COLUMN {shadow_col} REAL")
-                    conn.commit()
-                    logger.info("OTE-LAB: colonna %s aggiunta (shadow)", shadow_col)
-                except Exception:
-                    pass
     except Exception:
         pass
     conn.execute(_CREATE)
@@ -243,9 +191,8 @@ def _insert_signal(conn, sig: dict) -> str:
             flag_adx_ok, flag_trigger_present, flag_volatility_ok, flag_sl_widened,
             liquidity_target, liquidity_target_price, liquidity_priority,
             quality_score, quality_label, expiry_bars,
-            rz_target_used, rz_target_label, tp2_original, tier, accumulation_hours,
-            m15_pivot_tp, m15_pivot_sl
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            rz_target_used, rz_target_label, tp2_original, tier, accumulation_hours
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         sid, sig["asset"], sig["direction"], sig["timestamp_setup"],
         sig.get("entry"), sig.get("stop_loss"), sig.get("tp1"), sig.get("tp2"),
@@ -259,10 +206,9 @@ def _insert_signal(conn, sig: dict) -> str:
         sig.get("liquidity_target"), sig.get("liquidity_target_price"),
         sig.get("liquidity_priority"),
         sig.get("quality_score"), sig.get("quality_label"),
-        sig.get("expiry_bars", SIGNAL_EXPIRY_HOURS),  # legacy field, now hours
+        sig.get("expiry_bars", SIGNAL_EXPIRY_BARS),
         sig.get("rz_target_used", False), sig.get("rz_target_label"),
         sig.get("tp2_original"), sig.get("tier"), sig.get("accumulation_hours"),
-        sig.get("m15_pivot_tp"), sig.get("m15_pivot_sl"),
     ))
     conn.commit()
     return sid
@@ -275,14 +221,12 @@ def _insert_signal(conn, sig: dict) -> str:
 
 def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
     """
-    Monitoraggio segnali aperti con logica di uscita differenziata (v1.4):
-    - RECURRING: TP fisso a REC_FIXED_TP_R (0.6R). Niente trailing.
-      BE+ (0.3R) dopo TP1 come unica protezione.
-    - STANDARD: trailing a TRAIL_R (0.5R) + BE+ dopo TP1 (invariato).
+    Clone esatto della logica di monitoraggio TRB (trend_rider_db.py)
+    con l'unica differenza: TRAIL_R=0.5 invece di 0.7.
     """
     cur = conn.execute("""
         SELECT signal_id, direction, entry, stop_loss, tp1, tp2,
-               tp1_hit, mae, mfe, bars_open, timestamp_setup, risk, tier
+               tp1_hit, mae, mfe, bars_open, expiry_bars, risk
         FROM ote_lab_signals
         WHERE asset=? AND final_outcome='OPEN'
     """, (asset,))
@@ -307,8 +251,6 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
         risk = float(sig["risk"]) if sig.get("risk") else abs(entry - sl)
         if risk <= 0:
             continue
-        # ── v1.4: RECURRING usa TP fisso, STANDARD usa trailing ──
-        is_recurring = (sig.get("tier") == "RECURRING")
 
         # MFE/MAE
         if d == "BUY":
@@ -347,9 +289,8 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
             be_level = entry + BE_PLUS_R * risk if d == "BUY" else entry - BE_PLUS_R * risk
             effective_sl = max(effective_sl, be_level) if d == "BUY" else min(effective_sl, be_level)
 
-        # Livello 3: Trailing — SOLO per STANDARD (v1.4)
-        # RECURRING usa TP fisso: non serve trailing, il BE dopo TP1 protegge.
-        if not is_recurring and new_mfe >= trail_dist:
+        # Livello 3: Trailing (il piu' alto)
+        if new_mfe >= trail_dist:
             lock = min(max(new_mfe - trail_dist, min_lock), new_mfe)
             trail_level = entry + lock if d == "BUY" else entry - lock
             effective_sl = max(effective_sl, trail_level) if d == "BUY" else min(effective_sl, trail_level)
@@ -361,7 +302,7 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
         if tp1_already and not tp1_hit_now:  # BE era gia' attivo al ciclo prima
             prev_be = entry + BE_PLUS_R * risk if d == "BUY" else entry - BE_PLUS_R * risk
             prev_eff = max(prev_eff, prev_be) if d == "BUY" else min(prev_eff, prev_be)
-        if not is_recurring and old_mfe >= trail_dist:
+        if old_mfe >= trail_dist:
             prev_lock = min(max(old_mfe - trail_dist, min_lock), old_mfe)
             prev_trail = entry + prev_lock if d == "BUY" else entry - prev_lock
             prev_eff = max(prev_eff, prev_trail) if d == "BUY" else min(prev_eff, prev_trail)
@@ -389,33 +330,22 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
             sl_hit = current_high >= effective_sl
             tp2_hit = tp2 is not None and current_low <= tp2
 
-        # ── v1.4: RECURRING TP fisso ──
-        # Check se MFE ha raggiunto il target fisso (0.6R).
-        # Il prezzo e' GIA' stato a quel livello (MFE lo registra),
-        # quindi il TP sarebbe stato eseguito a mercato.
-        rec_tp_hit = False
-        if is_recurring:
-            mfe_r = new_mfe / risk if risk > 0 else 0
-            rec_tp_hit = mfe_r >= REC_FIXED_TP_R
-
         outcome = None
         result_r = None
 
-        # PRIORITA' DEGLI ESITI:
-        # 1. TP2 pieno — sempre la priorita' massima (STANDARD e RECURRING).
-        # 2. TP fisso RECURRING — se MFE >= 0.6R, chiudi a +0.6R.
-        #    (Se nella stessa candela c'e' sia TP fisso che SL, il TP fisso
-        #    viene raggiunto prima perche' MFE lo registra prima di MAE.)
-        # 3. Trailing STANDARD — se attivo, cattura il profitto raggiunto.
-        # 4. Break-even dopo TP1 — chiude a +0.3R.
-        # 5. SL pieno — -1R.
+        # PRIORITA' DEGLI ESITI (importante per non tagliare i win grandi):
+        # 1. TP2 pieno — sempre la priorita' massima. Se il prezzo arriva
+        #    al target, prendiamo il movimento pieno anche se nella stessa
+        #    candela ha toccato TP1. (Bug trovato nel double-check: prima
+        #    un trade che andava dritto a TP2 veniva chiuso a +1R.)
+        # 2. Trailing — se attivo, cattura il profitto raggiunto (puo'
+        #    essere molto > 1R se il prezzo e' salito parecchio).
+        # 3. Break-even dopo TP1 — solo se ne' TP2 ne' trailing: chiude a
+        #    +1R garantito (il minimo dopo aver toccato TP1).
+        # 4. SL pieno — solo se nulla di sopra e il prezzo va contro.
         if tp2_hit:
             result_r = sig.get("rr2") or round(abs(tp2 - entry) / risk, 3)
             outcome = "TP2_HIT"
-        elif rec_tp_hit and not sl_hit:
-            # TP fisso RECURRING: chiudi a REC_FIXED_TP_R
-            result_r = REC_FIXED_TP_R
-            outcome = "TP_FIXED"
         elif sl_hit:
             if trail_active:
                 lock_val = max(new_mfe - trail_dist, min_lock)
@@ -430,49 +360,26 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
             elif be_active:
                 result_r = BE_PLUS_R
                 outcome = "TP1_HIT"
-            elif is_recurring and rec_tp_hit:
-                # Edge case: SL hit nella stessa candela in cui MFE >= 0.6R
-                # Il TP fisso sarebbe stato eseguito prima dello SL.
-                result_r = REC_FIXED_TP_R
-                outcome = "TP_FIXED"
             else:
                 result_r = -1.0
                 outcome = "SL_HIT"
-        # ── Expiry basato su ore reali (fix 11/10/2026) ──
-        else:
-            try:
-                ts_setup = sig.get("timestamp_setup", "")
-                if ts_setup:
-                    t_open = datetime.fromisoformat(ts_setup.replace("Z", "+00:00"))
-                    t_now = datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
-                    hours_open = (t_now - t_open).total_seconds() / 3600
-                else:
-                    hours_open = 0
-            except Exception:
-                hours_open = 0
-
-            if hours_open >= SIGNAL_EXPIRY_HOURS:
-                if is_recurring and rec_tp_hit:
-                    # MFE ha raggiunto il TP fisso ma non abbiamo chiuso
-                    # (non dovrebbe succedere, ma per sicurezza)
-                    result_r = REC_FIXED_TP_R
-                    outcome = "TP_FIXED"
-                elif trail_active:
-                    lock_val = max(new_mfe - trail_dist, min_lock)
-                    lock_val = min(lock_val, new_mfe)
-                    trail_r = round(lock_val / risk, 3)
-                    if be_active and trail_r < BE_PLUS_R:
-                        result_r = BE_PLUS_R
-                        outcome = "TP1_HIT"
-                    else:
-                        result_r = trail_r
-                        outcome = "TRAIL_HIT"
-                elif be_active:
+        elif bars >= (sig.get("expiry_bars") or SIGNAL_EXPIRY_BARS):
+            if trail_active:
+                lock_val = max(new_mfe - trail_dist, min_lock)
+                lock_val = min(lock_val, new_mfe)
+                trail_r = round(lock_val / risk, 3)
+                if be_active and trail_r < BE_PLUS_R:
                     result_r = BE_PLUS_R
                     outcome = "TP1_HIT"
                 else:
-                    result_r = 0
-                    outcome = "EXPIRED"
+                    result_r = trail_r
+                    outcome = "TRAIL_HIT"
+            elif be_active:
+                result_r = BE_PLUS_R
+                outcome = "TP1_HIT"
+            else:
+                result_r = 0
+                outcome = "EXPIRED"
 
         if outcome:
             conn.execute("""
@@ -502,7 +409,6 @@ def _monitor_open_signals(conn, asset, current_high, current_low, now_iso):
 # ================================================================
 
 def _find_rz_target(conn, asset, direction, entry, risk):
-    """Fallback TP: prima zona operativa nella direzione del trade."""
     try:
         row = conn.execute(
             "SELECT snapshot_json FROM reaction_map_snapshots "
@@ -513,15 +419,12 @@ def _find_rz_target(conn, asset, direction, entry, risk):
     except Exception:
         return None
     MIN_RR = 1.2
-    max_dist_pct = 0.02 if asset == "XAU_USD" else 0.03
     cands = []
     for z in zones:
         mid = z.get("zone_midpoint", 0)
         if mid <= 0: continue
         if direction == "BUY" and mid <= entry: continue
         if direction == "SELL" and mid >= entry: continue
-        dist_pct = abs(mid - entry) / entry if entry > 0 else 0
-        if dist_pct > max_dist_pct: continue
         rr = abs(mid - entry) / risk if risk > 0 else 0
         if rr < MIN_RR: continue
         cands.append({"price": mid,
@@ -532,8 +435,40 @@ def _find_rz_target(conn, asset, direction, entry, risk):
 
 
 # ================================================================
-# Notifiche — identiche a TRB
+# Notifiche — Telegram + JSON ntfy per EA MT5
 # ================================================================
+
+def _notify_ntfy_entry(signal, config):
+    """Invia il segnale OTE-LAB in JSON strutturato all'EA MT5 via ntfy."""
+    try:
+        from notifications import ntfy_bot
+
+        ntfy_topic = config.get("NTFY_TOPIC", "")
+        if not ntfy_topic:
+            return
+
+        payload_dict = {
+            "signal_id": signal.get("signal_id", str(uuid.uuid4())),
+            "strategy_name": "OTE-LAB",
+            "asset": signal["asset"],
+            "direction": signal["direction"],
+            "entry": signal.get("entry"),
+            "stop_loss": signal.get("stop_loss"),
+            # L'EA supporta tp e/o tp1/tp2. Manteniamo TP2 come target finale.
+            "tp": signal.get("tp2"),
+            "tp1": signal.get("tp1"),
+            "tp2": signal.get("tp2"),
+            "timestamp_setup": signal.get("timestamp_setup"),
+            "tier": signal.get("tier", "NORMALE"),
+        }
+        payload = json.dumps(payload_dict, separators=(",", ":"))
+        title = f"OTE-LAB {signal['asset']} {signal['direction']}"
+        ntfy_bot.send_message(ntfy_topic, title, payload)
+        logger.info("OTE-LAB: JSON ntfy inviato per %s %s (id=%s)",
+                    signal["asset"], signal["direction"], payload_dict["signal_id"])
+    except Exception as e:
+        logger.warning("OTE-LAB ntfy JSON: %s", e)
+
 
 def _notify_signal(signal, config):
     try:
@@ -552,114 +487,47 @@ def _notify_signal(signal, config):
             return f"{v:,.2f}" if float(v) > 1000 else f"{v:.4f}"
 
         rz_tag = " [RZ]" if signal.get("rz_target_used") else ""
-        is_rec = signal.get("tier") == "RECURRING"
-
-        # v1.4: calcola TP fisso per RECURRING
-        rec_tp_price = None
-        if is_rec:
-            entry_p = signal["entry"]
-            risk_p = abs(entry_p - signal["stop_loss"])
-            if risk_p > 0:
-                if direction == "BUY":
-                    rec_tp_price = entry_p + REC_FIXED_TP_R * risk_p
-                else:
-                    rec_tp_price = entry_p - REC_FIXED_TP_R * risk_p
-
-        # v1.4: messaggio differenziato per RECURRING vs STANDARD
-        if is_rec and rec_tp_price is not None:
-            exit_info = (
-                f"TP:     `{fp(rec_tp_price)}` ({REC_FIXED_TP_R}R fisso)\n"
-                f"Gestione: TP fisso (limit order) — no trailing"
-            )
-        else:
-            exit_info = (
-                f"TP1:    `{fp(signal.get('tp1'))}` (1R)\n"
-                f"TP2:    `{fp(signal.get('tp2'))}` ({signal.get('rr2',0):.2f}R){rz_tag}\n"
-                f"Trail: {LAB_TRAIL_R}R"
-            )
 
         text = (
-            f"{emoji} *OTE-LAB v1.4*\n\n"
+            f"{emoji} *OTE-LAB v1.0*\n\n"
             f"*{asset.replace('_',' ')}* — {direction}\n\n"
             f"Score: *{signal.get('quality_score',0)}* ({quality})\n"
             f"Trend H1: {signal.get('trend_h1','N/A')} | H4: {signal.get('trend_h4','N/A')}\n"
             f"ADX: {signal.get('adx',0):.1f}\n\n"
             f"Entry:  `{fp(signal.get('entry'))}`\n"
             f"SL:     `{fp(signal.get('stop_loss'))}`\n"
-            f"{exit_info}\n\n"
+            f"TP1:    `{fp(signal.get('tp1'))}` (1R)\n"
+            f"TP2:    `{fp(signal.get('tp2'))}` ({signal.get('rr2',0):.2f}R){rz_tag}\n\n"
             f"Target: {signal.get('liquidity_target','N/A')}\n"
             f"Livello: {signal.get('tier','NORMALE')}\n"
-            f"Session: {signal.get('session','N/A')}"
+            f"Trail: {LAB_TRAIL_R}R | Session: {signal.get('session','N/A')}\n"
+            f"⚠️ LAB — solo raccolta dati"
         )
 
         bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
         chat_id = config.get("TELEGRAM_CHAT_ID", "")
-        ntfy_topic = config.get("NTFY_TOPIC", "")
 
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
 
-        # Invio JSON strutturato su ntfy per EA MT5
-        if ntfy_topic:
-            import json as _json
-            expiry_h = 24 if signal.get("tier") in ("FORTE", "NORMALE") else 8
-            # v1.5 OpzB: scanner manda sempre tp2 originale
-            # EA gestisce BE a 0.6R (InpBeActivateR) + trailing a 0.7R
-            order_tp2 = signal.get("tp2")
-
-            payload_dict = {
-                "signal_id": signal.get("signal_id", str(uuid.uuid4())),
-                "strategy_name": "OTE-LAB",
-                "asset": signal["asset"],
-                "direction": signal["direction"],
-                "entry": signal["entry"],
-                "stop_loss": signal["stop_loss"],
-                "tp1": signal.get("tp1"),
-                "tp2": order_tp2,
-                "tier": signal.get("tier", "NORMALE"),
-                "expiry_hours": expiry_h,
-            }
-            payload = _json.dumps(payload_dict)
-            ntfy_bot.send_message(ntfy_topic, f"OTE-LAB {signal['asset']} {signal['direction']}", payload)
+        # Invio JSON strutturato su ntfy per l'EA MT5.
+        _notify_ntfy_entry(signal, config)
     except Exception as e:
         logger.warning("OTE-LAB _notify: %s", e)
 
 
 def _notify_outcome(sig_info, config):
     try:
-        from notifications import telegram_bot, ntfy_bot
+        from notifications import telegram_bot
         bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
         chat_id = config.get("TELEGRAM_CHAT_ID", "")
-        ntfy_topic = config.get("NTFY_TOPIC", "")
+        if not bot_token or not chat_id: return
         r = sig_info.get("result_r", 0)
         emoji = "✅" if r and r > 0 else "❌" if r and r < 0 else "⏱"
-        outcome = sig_info['outcome']
-        # v1.4: etichetta chiara per TP_FIXED
-        if outcome == "TP_FIXED":
-            label = f"TP FISSO ({r:+.1f}R) ✅"
-        else:
-            label = f"{outcome} ({r:+.2f}R)"
         text = (f"{emoji} OTE-LAB | {sig_info['asset']} {sig_info['direction']}\n"
-                f"Esito: {label}")
-        if bot_token and chat_id:
-            telegram_bot.send_message(bot_token, chat_id, text)
-
-        # Invio CLOSE_POSITION per EA MT5
-        if ntfy_topic:
-            import json as _json
-            payload = _json.dumps({
-                "action": "CLOSE_POSITION",
-                "signal_id": sig_info.get("signal_id", ""),
-                "strategy_name": "OTE-LAB",
-                "asset": sig_info["asset"],
-                "direction": sig_info["direction"],
-                "outcome": outcome,
-                "result_r": r,
-            })
-            ntfy_bot.send_message(
-                ntfy_topic,
-                f"OTE-LAB {sig_info['asset']} {sig_info['direction']} | {outcome}",
-                payload)
+                f"Esito: {sig_info['outcome']} ({r:+.2f}R)\n"
+                f"⚠️ LAB — solo raccolta dati")
+        telegram_bot.send_message(bot_token, chat_id, text)
     except Exception as e:
         logger.warning("OTE-LAB outcome notify: %s", e)
 
@@ -682,101 +550,15 @@ def _notify_stop_move(sp, config):
             tag = "TRAIL"
         text = (f"{emoji} *{titolo}*\n\n"
                 f"*{asset.replace('_',' ')}* — {direction}\n"
-                f"Nuovo stop: `{fp(sp['new_stop'])}`")
+                f"Nuovo stop: `{fp(sp['new_stop'])}`\n"
+                f"⚠️ LAB — solo raccolta dati")
         bot_token = config.get("TELEGRAM_BOT_TOKEN", "")
         chat_id = config.get("TELEGRAM_CHAT_ID", "")
+        # LAB: solo Telegram, niente ntfy (evita doppio messaggio)
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
-
-        # Invio JSON strutturato per EA MT5 — modifica SL
-        ntfy_topic = config.get("NTFY_TOPIC", "")
-        if ntfy_topic:
-            import json as _json
-            payload = _json.dumps({
-                "action": "MODIFY_SL",
-                "signal_id": sp.get("signal_id", ""),
-                "strategy_name": "OTE-LAB",
-                "asset": asset,
-                "direction": direction,
-                "new_stop": sp["new_stop"],
-                "event": event,
-            })
-            ntfy_bot.send_message(ntfy_topic, f"OTE-LAB {asset} {direction} | {titolo}", payload)
     except Exception as e:
         logger.warning("OTE-LAB stop_move notify: %s", e)
-
-
-# ================================================================
-# M15 Strategic Pivots — SHADOW MODE (v1.6)
-# Calcola swing highs/lows su M15. Salva nel DB senza modificare
-# TP/SL reali. Dopo N trade, analizzeremo se migliorano il trade.
-# ================================================================
-
-def _find_m15_strategic_pivots(df_m15):
-    """Trova swing highs e swing lows su M15 con lookback=3."""
-    if df_m15 is None or len(df_m15) < 7:
-        return []
-    pivots = []
-    highs = df_m15["high"].astype(float).values
-    lows = df_m15["low"].astype(float).values
-    lb = 3
-    for i in range(lb, len(highs) - lb):
-        # Swing High
-        if all(highs[i] >= highs[j] for j in range(i - lb, i)) and \
-           all(highs[i] >= highs[j] for j in range(i + 1, i + lb + 1)):
-            pivots.append({"price": highs[i], "type": "HIGH"})
-        # Swing Low
-        if all(lows[i] <= lows[j] for j in range(i - lb, i)) and \
-           all(lows[i] <= lows[j] for j in range(i + 1, i + lb + 1)):
-            pivots.append({"price": lows[i], "type": "LOW"})
-    return pivots
-
-
-def _calc_shadow_m15_pivots(df_m15, direction, entry, sl, tp2, risk):
-    """
-    Calcola TP e SL shadow basati su M15 pivots.
-    NON modifica il trade — solo valori da salvare per analisi futura.
-
-    TP shadow: primo pivot nella direzione del trade oltre entry (min 1R).
-    SL shadow: primo pivot protettivo dietro entry (max 1.5x risk attuale).
-    """
-    pivots = _find_m15_strategic_pivots(df_m15)
-    if not pivots or risk <= 0:
-        return None, None
-
-    shadow_tp = None
-    shadow_sl = None
-
-    if direction == "BUY":
-        # TP: primo swing HIGH sopra entry con almeno 1R
-        tp_candidates = [p["price"] for p in pivots
-                         if p["type"] == "HIGH" and p["price"] > entry
-                         and (p["price"] - entry) >= risk]
-        if tp_candidates:
-            shadow_tp = min(tp_candidates)  # il piu' vicino
-
-        # SL: primo swing LOW sotto entry (protezione), max 1.5x risk
-        sl_candidates = [p["price"] for p in pivots
-                         if p["type"] == "LOW" and p["price"] < entry
-                         and (entry - p["price"]) <= risk * 1.5]
-        if sl_candidates:
-            shadow_sl = max(sl_candidates)  # il piu' vicino all'entry
-    else:
-        # TP: primo swing LOW sotto entry con almeno 1R
-        tp_candidates = [p["price"] for p in pivots
-                         if p["type"] == "LOW" and p["price"] < entry
-                         and (entry - p["price"]) >= risk]
-        if tp_candidates:
-            shadow_tp = max(tp_candidates)
-
-        # SL: primo swing HIGH sopra entry, max 1.5x risk
-        sl_candidates = [p["price"] for p in pivots
-                         if p["type"] == "HIGH" and p["price"] > entry
-                         and (p["price"] - entry) <= risk * 1.5]
-        if sl_candidates:
-            shadow_sl = min(sl_candidates)
-
-    return shadow_tp, shadow_sl
 
 
 # ================================================================
@@ -830,19 +612,6 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
 
     # ── MIE context (da edge_lab_runner) ──
     mie_context = market_ctx.get("mie_context", {})
-
-    # ── Reaction Map per TP barrier check (v1.1) ──
-    if "reaction_map" not in market_ctx:
-        try:
-            row = conn.execute(
-                "SELECT snapshot_json FROM reaction_map_snapshots "
-                "WHERE asset = ? ORDER BY timestamp_snapshot DESC LIMIT 1",
-                (asset,)
-            ).fetchone()
-            if row and row[0]:
-                market_ctx["reaction_map"] = json.loads(row[0])
-        except Exception as e:
-            logger.debug("OTE-LAB [%s]: reaction_map non disponibile: %s", asset, e)
 
     # ── Zone gia' aperte ──
     open_refs = set()
@@ -1059,22 +828,6 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
                     logger.info("OTE-LAB [%s %s]: RZ target %s RR=%.2f",
                                asset, direction, rz["label"], rz_rr)
 
-        # ── v1.6: M15 pivots SHADOW (calcola, salva, non applica) ──
-        try:
-            s_tp, s_sl = _calc_shadow_m15_pivots(
-                df_m15, direction,
-                signal.get("entry", 0), signal.get("stop_loss", 0),
-                signal.get("tp2", 0), signal.get("risk", 0))
-            if s_tp is not None:
-                signal["m15_pivot_tp"] = round(s_tp, 5)
-            if s_sl is not None:
-                signal["m15_pivot_sl"] = round(s_sl, 5)
-            if s_tp or s_sl:
-                logger.info("OTE-LAB [%s %s]: SHADOW M15 tp=%.2f sl=%.2f",
-                            asset, direction, s_tp or 0, s_sl or 0)
-        except Exception as e:
-            logger.debug("OTE-LAB [%s %s]: shadow M15 error: %s", asset, direction, e)
-
         # ── Classifica tier (tracking puro) ──
         signal["tier"] = _classify_tier(signal)
 
@@ -1108,275 +861,6 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
 
 
 # ================================================================
-# BOUNCE POINT — Reaction Map alignment per RECURRING
-# Dati: ALIGNED 75% WR vs AGAINST 37.5% (n=16, Oct 10-12)
-# La reaction_map produce zone con expected_reaction (BOUNCE_UP/DOWN).
-# Se la zona piu' vicina al prezzo prevede un rimbalzo CONTRO la
-# direzione del trade, il trade ha probabilita' molto piu' basse.
-# ================================================================
-
-def _check_bounce_point(conn, asset, direction, current_price):
-    """
-    Legge la reaction_map piu' recente e controlla se una zona vicina
-    al prezzo ha expected_reaction coerente con la direzione del trade.
-
-    Ritorna:
-      "ALIGNED"  — zona vicina conferma la direzione (BOUNCE_UP + BUY, BOUNCE_DOWN + SELL)
-      "AGAINST"  — zona vicina contraddice la direzione → SKIP
-      "NEUTRAL"  — nessuna zona vicina o reaction UNKNOWN → procedi
-    """
-    try:
-        row = conn.execute(
-            "SELECT snapshot_json FROM reaction_map_snapshots "
-            "WHERE asset=? ORDER BY timestamp_snapshot DESC LIMIT 1",
-            (asset,)).fetchone()
-    except Exception:
-        return "NEUTRAL"
-
-    if not row:
-        return "NEUTRAL"
-
-    try:
-        rm = __import__("json").loads(row[0])
-    except Exception:
-        return "NEUTRAL"
-
-    zones = rm.get("zones", [])
-    if not zones:
-        return "NEUTRAL"
-
-    # Trova la zona piu' vicina al prezzo corrente
-    best_zone = None
-    best_dist = float("inf")
-    for z in zones:
-        mid = z.get("zone_midpoint", 0)
-        if mid <= 0:
-            continue
-        dist = abs(mid - current_price)
-        if dist < best_dist:
-            best_dist = dist
-            best_zone = z
-
-    if not best_zone:
-        return "NEUTRAL"
-
-    # Proximity check: la zona deve essere entro il 2% del prezzo
-    if current_price > 0 and (best_dist / current_price) > 0.02:
-        return "NEUTRAL"
-
-    exp = best_zone.get("expected_reaction", "UNKNOWN")
-    score = best_zone.get("confluence_score", 0)
-
-    # Soglia minima: solo zone con score sufficiente contano
-    if score < 30:
-        return "NEUTRAL"
-
-    if exp == "UNKNOWN":
-        return "NEUTRAL"
-
-    if (direction == "BUY" and exp == "BOUNCE_UP") or \
-       (direction == "SELL" and exp == "BOUNCE_DOWN"):
-        return "ALIGNED"
-    else:
-        return "AGAINST"
-
-
-def _bounce_point_sl_tp(conn, asset, direction, entry, sl_current, risk_current):
-    """
-    v2.0 — Zone strutturali: il trade context determina l'interpretazione.
-
-    Le zone della Reaction Map sono livelli strutturali dove il prezzo
-    ha alta probabilita' di reagire (validato: 77-97% raggiungimento
-    per zone entro 0.5%). Non ci affidiamo alla predicted reaction
-    (BOUNCE_UP/DOWN) perche' la sua accuracy e' insufficiente (40-64%).
-
-    Logica:
-      - TP → prima zona significativa nella direzione del trade.
-             BUY: prima zona sopra entry (resistenza strutturale).
-             SELL: prima zona sotto entry (supporto strutturale).
-             Qualsiasi zona con score sufficiente e' un potenziale ostacolo.
-             TP al bordo vicino della zona (dove il prezzo incontra resistenza).
-      - SL → oltre la prima zona significativa dietro l'entry.
-             BUY: oltre la zona piu' vicina sotto entry (se rotta = invalidazione).
-             SELL: oltre la zona piu' vicina sopra entry (se rotta = invalidazione).
-             Se lo SL strutturale supera il risk massimo → trade scartato (None).
-
-    Filtro distanza: zone oltre MAX_DIST_PCT vengono ignorate (irraggiungibili).
-
-    Returns: dict {"tp": float|None, "sl": float|None, "tp_zone": dict|None,
-                   "sl_zone": dict|None, "tp_label": str, "sl_label": str}
-    """
-    result = {"tp": None, "sl": None, "tp_zone": None, "sl_zone": None,
-              "tp_label": "", "sl_label": ""}
-
-    try:
-        row = conn.execute(
-            "SELECT snapshot_json FROM reaction_map_snapshots "
-            "WHERE asset=? ORDER BY timestamp_snapshot DESC LIMIT 1",
-            (asset,)).fetchone()
-    except Exception:
-        return result
-
-    if not row:
-        return result
-
-    try:
-        rm = __import__("json").loads(row[0])
-    except Exception:
-        return result
-
-    zones = rm.get("zones", [])
-    if not zones:
-        return result
-
-    # ── Parametri ──
-    MIN_TP_SCORE = 15     # zona deve avere un minimo di confluenza
-    MIN_SL_SCORE = 25     # per SL un po' piu' alta (deve reggere)
-    MAX_TP_RR = 5.0       # cap TP: non oltre 5R
-    MAX_SL_MULT = 1.5     # SL non oltre 1.5x il risk corrente
-    MAX_DIST_PCT = 0.03   # ignora zone oltre 3% di distanza (BTC)
-    if asset == "XAU_USD":
-        MAX_DIST_PCT = 0.02  # XAU: zone oltre 2% irraggiungibili
-
-    # ── Filtra zone per distanza operativa ──
-    operative_zones = []
-    for z in zones:
-        mid = z.get("zone_midpoint", 0)
-        score = z.get("confluence_score", 0)
-        if mid <= 0 or score < min(MIN_TP_SCORE, MIN_SL_SCORE):
-            continue
-        dist_pct = abs(mid - entry) / entry if entry > 0 else 0
-        if dist_pct > MAX_DIST_PCT:
-            continue
-        operative_zones.append(z)
-
-    if not operative_zones:
-        return result
-
-    # ── TP: prima zona nella direzione del trade ──
-    # BUY → prima zona sopra entry = resistenza/ostacolo
-    # SELL → prima zona sotto entry = supporto/ostacolo
-    tp_zone = None
-    tp_dist = float("inf")
-    for z in operative_zones:
-        score = z.get("confluence_score", 0)
-        if score < MIN_TP_SCORE:
-            continue
-        mid = z.get("zone_midpoint", 0)
-
-        if direction == "BUY" and mid > entry:
-            # TP al bordo vicino della zona (zone_low = dove il prezzo incontra prima resistenza)
-            target = z.get("zone_low", mid)
-            d = target - entry
-            if d >= risk_current and d / risk_current <= MAX_TP_RR and d < tp_dist:
-                tp_dist = d
-                tp_zone = z
-        elif direction == "SELL" and mid < entry:
-            # TP al bordo vicino della zona (zone_high = dove il prezzo incontra prima supporto)
-            target = z.get("zone_high", mid)
-            d = entry - target
-            if d >= risk_current and d / risk_current <= MAX_TP_RR and d < tp_dist:
-                tp_dist = d
-                tp_zone = z
-
-    # ── Fallback TP: zona ricorrente forte vicina (0.5R–1.0R) ──
-    # Se non c'e' TP a >=1R, una zona dove il mercato va sempre
-    # e' meglio di niente — cattura profitto che altrimenti diventa loss.
-    if not tp_zone:
-        MIN_RR_RECURRING = 0.5
-        MIN_VISITS_FALLBACK = 15
-        fb_dist = float("inf")
-        for z in operative_zones:
-            if z.get("confluence_score", 0) < MIN_TP_SCORE:
-                continue
-            if not z.get("has_recurring") or z.get("rz_visits", 0) < MIN_VISITS_FALLBACK:
-                continue
-            mid = z.get("zone_midpoint", 0)
-            if direction == "BUY" and mid > entry:
-                target = z.get("zone_low", mid)
-                d = target - entry
-                rr = d / risk_current if risk_current > 0 else 0
-                if rr >= MIN_RR_RECURRING and rr < 1.0 and d < fb_dist:
-                    fb_dist = d
-                    tp_zone = z
-            elif direction == "SELL" and mid < entry:
-                target = z.get("zone_high", mid)
-                d = entry - target
-                rr = d / risk_current if risk_current > 0 else 0
-                if rr >= MIN_RR_RECURRING and rr < 1.0 and d < fb_dist:
-                    fb_dist = d
-                    tp_zone = z
-        if tp_zone:
-            tp_dist = fb_dist
-            logger.info("OTE-LAB [%s %s]: TP fallback recurring zone "
-                        "(visits=%d, RR=%.2f)",
-                        asset, direction, tp_zone.get("rz_visits", 0),
-                        fb_dist / risk_current if risk_current > 0 else 0)
-
-    if tp_zone:
-        if direction == "BUY":
-            result["tp"] = tp_zone["zone_low"]   # bordo inferiore della zona sopra
-        else:
-            result["tp"] = tp_zone["zone_high"]   # bordo superiore della zona sotto
-        result["tp_zone"] = tp_zone
-        score = tp_zone["confluence_score"]
-        strength = tp_zone.get("reaction_strength", "?")
-        sources = tp_zone.get("sources", [])
-        n_sources = len(sources)
-        is_fallback = tp_dist < risk_current  # RR < 1.0 = fallback
-        fb_tag = "FB_" if is_fallback else ""
-        result["tp_label"] = f"RZ_{fb_tag}{strength}_{score:.0f}_x{n_sources}"
-        logger.info("OTE-LAB [%s %s]: TP structural zone → %.2f "
-                    "(score=%.0f, %s, %d sources, dist=%.2f%s)",
-                    asset, direction, result["tp"], score, strength,
-                    n_sources, tp_dist,
-                    " [FALLBACK recurring]" if is_fallback else "")
-
-    # ── SL: oltre la prima zona dietro l'entry (invalidazione strutturale) ──
-    # BUY → zona piu' vicina sotto entry. Se rotta → struttura invalida
-    # SELL → zona piu' vicina sopra entry. Se rotta → struttura invalida
-    sl_zone = None
-    sl_dist = float("inf")
-    max_sl_reach = risk_current * MAX_SL_MULT
-
-    for z in operative_zones:
-        score = z.get("confluence_score", 0)
-        if score < MIN_SL_SCORE:
-            continue
-
-        if direction == "BUY":
-            edge = z.get("zone_low", 0)    # bordo esterno: se rotto, game over
-            if 0 < edge < entry:
-                d = entry - edge
-                if d <= max_sl_reach and d < sl_dist:
-                    sl_dist = d
-                    sl_zone = z
-        else:
-            edge = z.get("zone_high", 0)   # bordo esterno: se rotto, game over
-            if edge > entry:
-                d = edge - entry
-                if d <= max_sl_reach and d < sl_dist:
-                    sl_dist = d
-                    sl_zone = z
-
-    if sl_zone:
-        buffer = 2.0 if asset == "XAU_USD" else 30.0
-        if direction == "BUY":
-            result["sl"] = sl_zone["zone_low"] - buffer
-        else:
-            result["sl"] = sl_zone["zone_high"] + buffer
-        result["sl_zone"] = sl_zone
-        score = sl_zone["confluence_score"]
-        strength = sl_zone.get("reaction_strength", "?")
-        result["sl_label"] = f"RZ_{strength}_{score:.0f}"
-        logger.info("OTE-LAB [%s %s]: SL structural zone → %.2f "
-                    "(score=%.0f, %s, beyond zone edge)",
-                    asset, direction, result["sl"], score, strength)
-
-    return result
-
-
-# ================================================================
 # RECURRING_ZONE — zone con 5+ visite storiche H4+H1
 # Simulazione su 753 trade: WR 56.4%, avgR +0.270, sumR +194.1
 # ================================================================
@@ -1403,21 +887,10 @@ def _calc_accumulation_hours(conn, asset, zone_price, bucket_size):
 RECURRING_PROXIMITY = {"XAU_USD": 15.0, "BTC_USDT": 200.0}
 MIN_ZONE_VISITS = 5
 
-def _find_recurring_zones(conn, asset, current_price, proximity_filter=True):
-    """Trova zone ricorrenti dove il prezzo ha reagito piu' volte.
-
-    Scansiona swing points su H4 (da lh_swing_zones), H1 (da candles_cache)
-    e M15 (da v3_candles_cache). I pesi sono: H4×3, H1×1, M15×0.5.
-
-    Args:
-        proximity_filter: Se True applica il filtro di prossimita' (per
-            segnali RECURRING). Se False restituisce tutte le zone qualificate
-            (per integrazione nella Reaction Map).
-    """
+def _find_recurring_zones(conn, asset, current_price):
     from collections import Counter
     bucket_size = 10.0 if asset == "XAU_USD" else 500.0
 
-    # ── H4 swings (da lh_swing_zones) ───────────────────────
     h4_buckets = Counter()
     h4_types = {}
     try:
@@ -1429,7 +902,6 @@ def _find_recurring_zones(conn, asset, current_price, proximity_filter=True):
     except Exception:
         pass
 
-    # ── H1 swings (calcolati on-the-fly) ────────────────────
     h1_buckets = Counter()
     h1_types = {}
     try:
@@ -1449,44 +921,19 @@ def _find_recurring_zones(conn, asset, current_price, proximity_filter=True):
     except Exception:
         pass
 
-    # ── M15 swings (da v3_candles_cache) ────────────────────
-    m15_buckets = Counter()
-    m15_types = {}
-    try:
-        cur = conn.execute("SELECT high, low FROM v3_candles_cache WHERE asset=? AND timeframe='15m' ORDER BY timestamp", (asset,))
-        candles_m15 = cur.fetchall()
-        lb = 3
-        for i in range(lb, len(candles_m15)-lb):
-            h, l = candles_m15[i]
-            if all(h >= candles_m15[j][0] for j in range(i-lb,i)) and all(h >= candles_m15[j][0] for j in range(i+1,i+lb+1)):
-                b = round(h / bucket_size) * bucket_size
-                m15_buckets[b] += 1
-                m15_types[b] = "HIGH"
-            if all(l <= candles_m15[j][1] for j in range(i-lb,i)) and all(l <= candles_m15[j][1] for j in range(i+1,i+lb+1)):
-                b = round(l / bucket_size) * bucket_size
-                m15_buckets[b] += 1
-                m15_types[b] = "LOW"
-    except Exception:
-        pass
-
-    # ── Combina e filtra ────────────────────────────────────
-    all_buckets = set(h4_buckets.keys()) | set(h1_buckets.keys()) | set(m15_buckets.keys())
     proximity = RECURRING_PROXIMITY.get(asset, 15.0)
     zones = []
-    for b in all_buckets:
+    for b in set(h4_buckets.keys()) | set(h1_buckets.keys()):
         v4 = h4_buckets.get(b, 0)
         v1 = h1_buckets.get(b, 0)
-        vm = m15_buckets.get(b, 0)
-        total_visits = v4 + v1 + vm
-        if total_visits < MIN_ZONE_VISITS:
+        if v4 + v1 < MIN_ZONE_VISITS:
             continue
-        if proximity_filter and abs(current_price - b) > proximity:
+        if abs(current_price - b) > proximity:
             continue
-        lt = h4_types.get(b) or h1_types.get(b) or m15_types.get(b)
+        lt = h4_types.get(b) or h1_types.get(b)
         zones.append({
-            "bucket_price": b, "visits": total_visits,
-            "visits_h4": v4, "visits_h1": v1, "visits_m15": vm,
-            "score": v4*3 + v1 + vm*0.5,
+            "bucket_price": b, "visits": v4+v1, "visits_h4": v4, "visits_h1": v1,
+            "score": v4*3 + v1,
             "expected_direction": "SELL" if lt == "HIGH" else "BUY",
             "last_swing_type": lt,
         })
@@ -1534,19 +981,12 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
             (asset, direction)).fetchone():
             continue
 
-        # ── Cooldown 2h cross-direction (validato 09/10) ──────────────
-        # Backtest su 82 RECURRING: 82→57 segnali, Exp +0.107→+0.296R
-        # Bootstrap CI>0 (99.5%), permutation p=0.001, walk-forward stabile.
-        # Logica: se QUALSIASI RECURRING sullo stesso asset e' stato
-        # generato nelle ultime 2h (qualsiasi direzione), skip.
-        # Elimina il ping-pong counter-trend (BUY→SELL→BUY in poche ore).
-        cutoff_2h = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        # Cooldown 4h per zona specifica (stessa direzione)
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
         if conn.execute(
-            "SELECT 1 FROM ote_lab_signals WHERE asset=? "
+            "SELECT 1 FROM ote_lab_signals WHERE asset=? AND direction=? "
             "AND zone_ref LIKE 'RECURRING_%' AND timestamp_setup > ?",
-            (asset, cutoff_2h)).fetchone():
-            logger.info("OTE-LAB [%s %s]: SKIP cooldown 2h (RECURRING recente)",
-                        asset, direction)
+            (asset, direction, cutoff)).fetchone():
             continue
 
         # ── Anti-whipsaw (verificato 01/10) ──
@@ -1554,46 +994,22 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
         # fascia 4170-4180 in 3 ore: mercato laterale che stoppa in
         # entrambe le direzioni. Se ho preso un SL in QUALSIASI direzione
         # in questa fascia nelle ultime 4h, non rientro affatto.
-        cutoff_4h = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
         zone_bucket = zone["bucket_price"]
         whipsaw = conn.execute(
             "SELECT 1 FROM ote_lab_signals WHERE asset=? "
             "AND zone_ref LIKE 'RECURRING_%' AND final_outcome='SL_HIT' "
             "AND zone_price_bucket=? AND timestamp_closed > ?",
-            (asset, zone_bucket, cutoff_4h)).fetchone() if False else None
+            (asset, zone_bucket, cutoff)).fetchone() if False else None
         # Nota: zone_price_bucket non e' in questo schema, uso zone_ref
         bucket_str = f"_{zone_bucket:.0f}"
         whipsaw = conn.execute(
             "SELECT 1 FROM ote_lab_signals WHERE asset=? "
             "AND zone_ref LIKE ? AND final_outcome='SL_HIT' "
             "AND timestamp_closed > ?",
-            (asset, f"RECURRING_%{bucket_str}", cutoff_4h)).fetchone()
+            (asset, f"RECURRING_%{bucket_str}", cutoff)).fetchone()
         if whipsaw:
             logger.info("OTE-LAB [%s %s]: SKIP anti-whipsaw zona %.0f (SL recente)",
                         asset, direction, zone_bucket)
-            continue
-
-        # ── v1.3: Bounce Point filter (reaction map) ─────────────────
-        # Dati: ALIGNED (trade direction = bounce direction) → 75% WR
-        #        AGAINST (trade vs bounce opposti) → 37.5% WR
-        # Se la zona di confluenza piu' vicina prevede un rimbalzo
-        # CONTRO la direzione del trade, il trade ha probabilita'
-        # molto piu' basse di successo → SKIP.
-        # Se non ci sono zone vicine o reaction=UNKNOWN → procedi.
-        bounce_ok = _check_bounce_point(conn, asset, direction, current_price)
-        if bounce_ok == "AGAINST":
-            logger.info("OTE-LAB [%s %s]: SKIP bounce point AGAINST (RM zona opposta)",
-                        asset, direction)
-            continue
-
-        # ── v1.2: Filtro accumulation 12-24h ─────────────────────────
-        # Dati: accum 12-24h → WR 25% (HIGH), 12.5% (LOW), -1.4R totale
-        # Probabilmente range esaurito dopo lunga accumulazione
-        bucket_size_acc = 10.0 if asset == "XAU_USD" else 500.0
-        accum_h = _calc_accumulation_hours(conn, asset, zone["bucket_price"], bucket_size_acc)
-        if 12 <= accum_h < 24:
-            logger.info("OTE-LAB [%s %s]: SKIP RECURRING accum=%dh (12-24h dead zone)",
-                        asset, direction, accum_h)
             continue
 
         # Conferma M5
@@ -1619,21 +1035,20 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
         bucket_size = 10.0 if asset == "XAU_USD" else 500.0
         half = bucket_size / 2
 
-        # ══════════════════════════════════════════════════════════
-        # v1.4 — Bounce Point SL/TP: il mercato racconta una storia
-        # Il prezzo si muove da una zona di reazione alla prossima.
-        # SL e TP devono essere posizionati dove il mercato reagisce.
-        # ══════════════════════════════════════════════════════════
-
-        # --- SL: prima calcolo il base (Wyckoff o fisso), poi bounce point ---
+        # ── Wyckoff SL: se c'e' stato uno sweep recente, uso
+        # il suo estremo + buffer come SL (piu' preciso).
+        # Se non c'e' stato sweep, fallback allo SL fisso. ──
         sweep_sl = None
         if df_m5 is not None and len(df_m5) >= 6:
             zone_low = zone["bucket_price"] - half
             zone_high = zone["bucket_price"] + half
+            # Buffer: XAU 2pt, BTC 30pt (un filo oltre lo sweep)
             buffer = 2.0 if asset == "XAU_USD" else 30.0
+
             for _, c in df_m5.iloc[-12:].iterrows():
                 cl, ch, clo = float(c["close"]), float(c["high"]), float(c["low"])
                 if direction == "BUY" and clo < zone_low and cl > zone_low:
+                    # Sweep sotto la zona + reclaim: SL sotto il minimo + buffer
                     sweep_sl = clo - buffer
                 elif direction == "SELL" and ch > zone_high and cl < zone_high:
                     sweep_sl = ch + buffer
@@ -1641,6 +1056,7 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
         if sweep_sl is not None:
             sl = sweep_sl
             risk = abs(entry - sl)
+            # Floor/cap
             if asset == "XAU_USD":
                 if risk < 5.0:
                     sl = entry - 5.0 if direction == "BUY" else entry + 5.0
@@ -1648,59 +1064,34 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
                 elif risk > 25.0:
                     sl = entry - 25.0 if direction == "BUY" else entry + 25.0
                     risk = 25.0
-            sl_method = "WYCKOFF"
+            logger.info("OTE-LAB [%s %s]: Wyckoff SL=%.2f (sweep+buffer)", asset, direction, sl)
         else:
+            # Fallback: SL fisso (come prima)
             if asset == "XAU_USD":
                 sl_dist = min(max(half + 5, 8.0), 25.0)
             else:
                 sl_dist = half + 50
             sl = entry - sl_dist if direction == "BUY" else entry + sl_dist
             risk = abs(entry - sl)
-            sl_method = "FIXED"
 
         if risk <= 0: continue
 
-        # --- Bounce Point SL/TP: posiziona dove il mercato reagisce ---
-        bp = _bounce_point_sl_tp(conn, asset, direction, entry, sl, risk)
-
-        # SL bounce point: se c'e' una zona protettiva vicina, usala
-        if bp["sl"] is not None:
-            new_risk = abs(entry - bp["sl"])
-            if new_risk > 0:
-                sl = bp["sl"]
-                risk = new_risk
-                sl_method = f"BP_{bp['sl_label']}"
-                logger.info("OTE-LAB [%s %s]: SL → bounce point %.2f (%s)",
-                            asset, direction, sl, sl_method)
-
-        # TP bounce point: il prossimo target dove il mercato reagira'
+        # Target: reaction zone o RR 2.0 (con cap a MAX_RR2)
+        rz = _find_rz_target(conn, asset, direction, entry, risk)
         rz_used = False
-        if bp["tp"] is not None:
-            tp = bp["tp"]
-            rr2 = round(abs(tp - entry) / risk, 3)
+        if rz:
+            rr2 = rz["rr"]
             if rr2 > MAX_RR2:
                 rr2 = MAX_RR2
                 tp = entry + MAX_RR2*risk if direction == "BUY" else entry - MAX_RR2*risk
-            target_label = bp["tp_label"]
-            rz_used = True
-            logger.info("OTE-LAB [%s %s]: TP → bounce point %.2f (RR=%.2f, %s)",
-                        asset, direction, tp, rr2, target_label)
-        else:
-            # Fallback: vecchia logica reaction zone generica
-            rz = _find_rz_target(conn, asset, direction, entry, risk)
-            if rz:
-                rr2 = rz["rr"]
-                if rr2 > MAX_RR2:
-                    rr2 = MAX_RR2
-                    tp = entry + MAX_RR2*risk if direction == "BUY" else entry - MAX_RR2*risk
-                else:
-                    tp = rz["price"]
-                target_label = rz["label"]
-                rz_used = True
             else:
-                tp = entry + risk*2 if direction == "BUY" else entry - risk*2
-                rr2 = 2.0
-                target_label = "FALLBACK_2R"
+                tp = rz["price"]
+            target_label = rz["label"]
+            rz_used = True
+        else:
+            tp = entry + risk*2 if direction == "BUY" else entry - risk*2
+            rr2 = 2.0
+            target_label = "FALLBACK_2R"
 
         # Gap minimo TP1→TP2: se troppo vicini, porta TP2 ad almeno TP1+1R
         if rr2 < 1.0 + MIN_TP_GAP_R:
@@ -1710,17 +1101,6 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
 
         if rr2 < 1.2: continue
         tp1 = entry + risk if direction == "BUY" else entry - risk
-
-        # ── v1.6: M15 pivots SHADOW per RECURRING ──
-        rec_m15_tp, rec_m15_sl = None, None
-        try:
-            rec_m15_tp, rec_m15_sl = _calc_shadow_m15_pivots(
-                df_m15, direction, entry, sl, tp, risk)
-            if rec_m15_tp or rec_m15_sl:
-                logger.info("OTE-LAB [%s %s]: SHADOW M15 REC tp=%.2f sl=%.2f",
-                            asset, direction, rec_m15_tp or 0, rec_m15_sl or 0)
-        except Exception as e:
-            logger.debug("OTE-LAB [%s %s]: shadow M15 REC error: %s", asset, direction, e)
 
         now = datetime.now(timezone.utc)
         sig = {
@@ -1738,8 +1118,6 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
             "tier": "RECURRING",
             "accumulation_hours": _calc_accumulation_hours(
                 conn, asset, zone["bucket_price"], bucket_size),
-            "m15_pivot_tp": round(rec_m15_tp, 5) if rec_m15_tp else None,
-            "m15_pivot_sl": round(rec_m15_sl, 5) if rec_m15_sl else None,
         }
 
         try:
@@ -1775,23 +1153,8 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
                        f"⚠️ LAB — solo raccolta dati")
                 telegram_bot.send_message(tk, ch, msg)
 
-            # Invio JSON strutturato su ntfy per EA MT5
-            ntfy_topic = config.get("NTFY_TOPIC", "")
-            if ntfy_topic:
-                import json as _json
-                payload = _json.dumps({
-                    "signal_id": str(sid),
-                    "strategy_name": "OTE-LAB",
-                    "asset": asset,
-                    "direction": direction,
-                    "entry": round(entry, 5),
-                    "stop_loss": round(sl, 5),
-                    "tp1": round(tp1, 5),
-                    "tp2": round(tp, 5),
-                    "tier": "RECURRING",
-                    "expiry_hours": 8,
-                })
-                ntfy_bot.send_message(ntfy_topic, f"OTE-LAB RECURRING {asset} {direction}", payload)
+            # Invia anche la RECURRING_ZONE all'EA come JSON strutturato.
+            _notify_ntfy_entry(sig, config)
         except Exception as e:
             logger.warning("OTE-LAB recurring notify: %s", e)
 
