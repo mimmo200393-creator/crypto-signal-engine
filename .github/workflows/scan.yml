@@ -91,6 +91,8 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NMC_BRIDGE_URL: ${{ secrets.NMC_BRIDGE_URL }}
+          NMC_BRIDGE_TOKEN: ${{ secrets.NMC_BRIDGE_TOKEN }}
         run: python3 lh_scanner_runner.py
 
       - name: TT Scanner (BTC_USDT + XAU_USD)
@@ -125,6 +127,8 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NMC_BRIDGE_URL: ${{ secrets.NMC_BRIDGE_URL }}
+          NMC_BRIDGE_TOKEN: ${{ secrets.NMC_BRIDGE_TOKEN }}
         run: python3 edge_lab_runner.py
 
       - name: OTE Scanner (BTC_USDT + XAU_USD)
@@ -132,6 +136,8 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NMC_BRIDGE_URL: ${{ secrets.NMC_BRIDGE_URL }}
+          NMC_BRIDGE_TOKEN: ${{ secrets.NMC_BRIDGE_TOKEN }}
         run: python3 ote_scanner_runner.py
 
       - name: Market Radar V1 (BTC_USDT + XAU_USD)
