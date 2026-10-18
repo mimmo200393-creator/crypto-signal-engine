@@ -18,9 +18,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import time
-import urllib.request
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -40,47 +37,6 @@ from strategies.liquidity_hunter import (
 )
 
 logger = logging.getLogger("lh.runner")
-
-
-def _send_bridge_signal(payload: dict):
-    """Forward an actual LH trade signal to the MT5 bridge, without changing strategy logic."""
-    bridge_url = os.getenv("NMC_BRIDGE_URL", "").strip()
-    bridge_token = os.getenv("NMC_BRIDGE_TOKEN", "").strip()
-    if not bridge_url or not bridge_token:
-        return
-
-    if payload.get("action") == "MODIFY_SL":
-        logger.info("LH bridge: MODIFY_SL ignored by receiver contract")
-        return
-
-    asset = payload.get("asset")
-    if asset not in ("BTC_USDT", "BTCUSDT", "XAU_USD", "XAUUSD"):
-        logger.info("LH bridge: asset %s non supportato, segnale non inoltrato", asset)
-        return
-
-    required = ("signal_id", "strategy_name", "asset", "direction", "entry", "stop_loss")
-    missing = [key for key in required if payload.get(key) is None]
-    if missing:
-        logger.warning("LH bridge: segnale incompleto, campi mancanti: %s", ", ".join(missing))
-        return
-
-    body = dict(payload)
-    body["time"] = int(time.time())
-    request = urllib.request.Request(
-        bridge_url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {bridge_token}",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=5) as response:
-            logger.info("LH bridge: HTTP %s per signal_id=%s", response.status, body.get("signal_id"))
-    except Exception as exc:
-        logger.warning("LH bridge: invio fallito per signal_id=%s: %s", body.get("signal_id"), exc)
-
 
 LH_ASSETS      = ["BTC_USDT", "XAU_USD"]
 LH_TIMEFRAMES  = {"H4": "4h", "H1": "1h", "M30": "30m", "M15": "15m", "M5": "5m", "D1": "1D"}
@@ -878,6 +834,52 @@ def _notify_zone(asset: str, zone: dict, config: dict):
         logger.warning("LH _notify_zone: %s", e)
 
 
+def _send_bridge_signal(payload: dict) -> None:
+    """Inoltra al bridge VPS il JSON del segnale, senza bloccare scanner/ntfy."""
+    import os
+    import time
+    from urllib.request import Request, urlopen
+
+    bridge_url = os.environ.get("NMC_BRIDGE_URL", "").strip()
+    bridge_token = os.environ.get("NMC_BRIDGE_TOKEN", "").strip()
+    if not bridge_url or not bridge_token:
+        return
+
+    if payload.get("action") == "MODIFY_SL":
+        return
+
+    if payload.get("asset") not in {"BTC_USDT", "BTCUSDT", "XAU_USD", "XAUUSD"}:
+        logger.info("LH Bridge: asset non mappato su EA, non inoltrato: %s", payload.get("asset"))
+        return
+
+    required = ("signal_id", "strategy_name", "asset", "direction", "entry", "stop_loss")
+    if any(payload.get(key) is None for key in required):
+        logger.warning("LH Bridge: segnale incompleto, non inoltrato (id=%s)", payload.get("signal_id"))
+        return
+
+    bridge_payload = dict(payload)
+    bridge_payload["time"] = int(time.time())
+    body = json.dumps(bridge_payload, separators=(",", ":")).encode("utf-8")
+    request = Request(
+        bridge_url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + bridge_token,
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            if response.status not in (200, 202):
+                logger.warning("LH Bridge: risposta HTTP inattesa %s", response.status)
+            else:
+                logger.info("LH Bridge: segnale inoltrato [%s] %s %s",
+                            payload.get("strategy_name"), payload.get("asset"), payload.get("signal_id"))
+    except Exception as exc:
+        logger.warning("LH Bridge: invio fallito (non blocca scanner/ntfy): %s", exc)
+
+
 def _notify(signal: dict, config: dict):
     try:
         from notifications import telegram_bot, ntfy_bot
@@ -934,8 +936,8 @@ def _notify(signal: dict, config: dict):
 
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
-        # Payload condiviso: invio al bridge EA e, se configurato, a ntfy.
-        # I campi e il comportamento ntfy originali restano invariati.
+        # Stesso JSON di prima: invio aggiuntivo al bridge VPS e poi, se
+        # configurato, invio ntfy invariato.
         atr_val = signal.get("atr_m15", 0) or 0
         be_dist = round(0.3 * atr_val, 2) if atr_val > 0 else 0
         payload_dict = {
