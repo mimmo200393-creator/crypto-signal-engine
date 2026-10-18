@@ -19,7 +19,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import time
 import uuid
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 
 from storage import db as core_db
@@ -439,6 +443,43 @@ def _notify_stop_move(sp: dict, config: dict):
         logger.warning("TRB _notify_stop_move: errore: %s", e)
 
 
+def _send_bridge_signal(payload: dict) -> None:
+    """Inoltra al VPS il JSON del segnale senza interferire con Telegram/ntfy."""
+    bridge_url = os.getenv("NMC_BRIDGE_URL", "").strip()
+    bridge_token = os.getenv("NMC_BRIDGE_TOKEN", "").strip()
+    if not bridge_url or not bridge_token:
+        return
+
+    # Il ricevitore VPS non gestisce PAXG_USDT; non convertirlo in XAU_USD.
+    if payload.get("asset") not in ("BTC_USDT", "BTCUSDT", "XAU_USD", "XAUUSD"):
+        logger.info("TRB bridge: asset non supportato, skip (%s).", payload.get("asset"))
+        return
+
+    required = ("signal_id", "strategy_name", "asset", "direction", "entry", "stop_loss")
+    if any(payload.get(key) in (None, "") for key in required):
+        logger.warning("TRB bridge: payload incompleto, segnale non inoltrato.")
+        return
+
+    bridge_payload = dict(payload)
+    bridge_payload["time"] = int(time.time())
+    body = json.dumps(bridge_payload, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(
+        bridge_url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + bridge_token,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            logger.info("TRB bridge: segnale inoltrato (HTTP %s).", response.status)
+    except Exception as e:
+        # Il bridge e' aggiuntivo: un errore non deve bloccare ntfy/Telegram.
+        logger.warning("TRB bridge: invio fallito (non-blocking): %s", e)
+
+
 def _notify(signal: dict, config: dict):
     """Invia notifiche Telegram e ntfy. Solo MEDIUM, HIGH, PREMIUM."""
     try:
@@ -480,20 +521,23 @@ def _notify(signal: dict, config: dict):
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
 
-        # ── JSON per EA MT5 (solo JSON, leggibile va su Telegram) ──
+        # Payload originale per ntfy: stessi campi e stessi valori.
+        # Il bridge VPS riceve una copia dello stesso JSON, in modo indipendente da ntfy.
+        payload_dict = {
+            "signal_id": signal.get("signal_id", ""),
+            "strategy_name": "TRB",
+            "asset": asset,
+            "direction": direction,
+            "entry": signal["entry"],
+            "stop_loss": signal["stop_loss"],
+            "tp1": signal.get("tp1"),
+            "tp2": signal.get("tp2"),
+            "expiry_hours": 24,
+        }
+        _send_bridge_signal(payload_dict)
+
         if ntfy_topic:
-            import json as _json
-            payload = _json.dumps({
-                "signal_id": signal.get("signal_id", ""),
-                "strategy_name": "TRB",
-                "asset": asset,
-                "direction": direction,
-                "entry": signal["entry"],
-                "stop_loss": signal["stop_loss"],
-                "tp1": signal.get("tp1"),
-                "tp2": signal.get("tp2"),
-                "expiry_hours": 24,
-            })
+            payload = json.dumps(payload_dict)
             ntfy_bot.send_message(ntfy_topic, f"TRB {asset} {direction}", payload)
 
     except Exception as e:
