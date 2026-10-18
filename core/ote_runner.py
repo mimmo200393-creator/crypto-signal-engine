@@ -435,17 +435,61 @@ def _find_rz_target(conn, asset, direction, entry, risk):
 
 
 # ================================================================
-# Notifiche — Telegram + JSON ntfy per EA MT5
+# Bridge VPS — terzo canale, senza modificare Telegram o ntfy
+# ================================================================
+def _send_bridge_signal(payload: dict) -> None:
+    """Invia al bridge VPS lo stesso JSON usato da ntfy; non blocca lo scanner."""
+    import os
+    import time
+    from urllib.request import Request, urlopen
+
+    bridge_url = os.environ.get("NMC_BRIDGE_URL", "").strip()
+    bridge_token = os.environ.get("NMC_BRIDGE_TOKEN", "").strip()
+    if not bridge_url or not bridge_token:
+        return
+
+    if payload.get("action") == "MODIFY_SL":
+        return
+    if payload.get("asset") not in {"BTC_USDT", "BTCUSDT", "XAU_USD", "XAUUSD"}:
+        logger.info("Bridge: asset non mappato su EA, non inoltrato: %s", payload.get("asset"))
+        return
+
+    required = ("signal_id", "strategy_name", "asset", "direction", "entry", "stop_loss")
+    if any(payload.get(key) is None for key in required):
+        logger.warning("Bridge: segnale incompleto, non inoltrato (id=%s)", payload.get("signal_id"))
+        return
+
+    bridge_payload = dict(payload)
+    bridge_payload["time"] = int(time.time())
+    body = json.dumps(bridge_payload, separators=(",", ":")).encode("utf-8")
+    request = Request(
+        bridge_url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + bridge_token,
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            if response.status in (200, 202):
+                logger.info("Bridge: segnale inoltrato [%s] %s %s",
+                            payload.get("strategy_name"), payload.get("asset"), payload.get("signal_id"))
+            else:
+                logger.warning("Bridge: risposta HTTP inattesa %s", response.status)
+    except Exception as exc:
+        logger.warning("Bridge: invio fallito (ntfy/Telegram restano attivi): %s", exc)
+
+
+# ================================================================
+# Notifiche — Telegram + JSON ntfy per EA MT5 + Bridge VPS
 # ================================================================
 
 def _notify_ntfy_entry(signal, config):
     """Invia il segnale OTE-LAB in JSON strutturato all'EA MT5 via ntfy."""
     try:
-        from notifications import ntfy_bot
-
         ntfy_topic = config.get("NTFY_TOPIC", "")
-        if not ntfy_topic:
-            return
 
         payload_dict = {
             "signal_id": signal.get("signal_id", str(uuid.uuid4())),
@@ -461,11 +505,17 @@ def _notify_ntfy_entry(signal, config):
             "timestamp_setup": signal.get("timestamp_setup"),
             "tier": signal.get("tier", "NORMALE"),
         }
-        payload = json.dumps(payload_dict, separators=(",", ":"))
-        title = f"OTE-LAB {signal['asset']} {signal['direction']}"
-        ntfy_bot.send_message(ntfy_topic, title, payload)
-        logger.info("OTE-LAB: JSON ntfy inviato per %s %s (id=%s)",
-                    signal["asset"], signal["direction"], payload_dict["signal_id"])
+        # Terzo canale: inoltra lo stesso JSON al VPS. Non modifica il payload ntfy.
+        _send_bridge_signal(payload_dict)
+
+        # ntfy rimane identico e indipendente dal bridge.
+        if ntfy_topic:
+            from notifications import ntfy_bot
+            payload = json.dumps(payload_dict, separators=(",", ":"))
+            title = f"OTE-LAB {signal['asset']} {signal['direction']}"
+            ntfy_bot.send_message(ntfy_topic, title, payload)
+            logger.info("OTE-LAB: JSON ntfy inviato per %s %s (id=%s)",
+                        signal["asset"], signal["direction"], payload_dict["signal_id"])
     except Exception as e:
         logger.warning("OTE-LAB ntfy JSON: %s", e)
 
