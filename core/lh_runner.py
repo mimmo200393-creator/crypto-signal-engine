@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import time
+import urllib.request
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -37,6 +40,47 @@ from strategies.liquidity_hunter import (
 )
 
 logger = logging.getLogger("lh.runner")
+
+
+def _send_bridge_signal(payload: dict):
+    """Forward an actual LH trade signal to the MT5 bridge, without changing strategy logic."""
+    bridge_url = os.getenv("NMC_BRIDGE_URL", "").strip()
+    bridge_token = os.getenv("NMC_BRIDGE_TOKEN", "").strip()
+    if not bridge_url or not bridge_token:
+        return
+
+    if payload.get("action") == "MODIFY_SL":
+        logger.info("LH bridge: MODIFY_SL ignored by receiver contract")
+        return
+
+    asset = payload.get("asset")
+    if asset not in ("BTC_USDT", "BTCUSDT", "XAU_USD", "XAUUSD"):
+        logger.info("LH bridge: asset %s non supportato, segnale non inoltrato", asset)
+        return
+
+    required = ("signal_id", "strategy_name", "asset", "direction", "entry", "stop_loss")
+    missing = [key for key in required if payload.get(key) is None]
+    if missing:
+        logger.warning("LH bridge: segnale incompleto, campi mancanti: %s", ", ".join(missing))
+        return
+
+    body = dict(payload)
+    body["time"] = int(time.time())
+    request = urllib.request.Request(
+        bridge_url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {bridge_token}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            logger.info("LH bridge: HTTP %s per signal_id=%s", response.status, body.get("signal_id"))
+    except Exception as exc:
+        logger.warning("LH bridge: invio fallito per signal_id=%s: %s", body.get("signal_id"), exc)
+
 
 LH_ASSETS      = ["BTC_USDT", "XAU_USD"]
 LH_TIMEFRAMES  = {"H4": "4h", "H1": "1h", "M30": "30m", "M15": "15m", "M5": "5m", "D1": "1D"}
@@ -890,26 +934,25 @@ def _notify(signal: dict, config: dict):
 
         if bot_token and chat_id:
             telegram_bot.send_message(bot_token, chat_id, text)
-        # Invio JSON strutturato su ntfy per EA MT5
+        # Payload condiviso: invio al bridge EA e, se configurato, a ntfy.
+        # I campi e il comportamento ntfy originali restano invariati.
+        atr_val = signal.get("atr_m15", 0) or 0
+        be_dist = round(0.3 * atr_val, 2) if atr_val > 0 else 0
+        payload_dict = {
+            "signal_id": signal.get("signal_id", str(uuid.uuid4())),
+            "strategy_name": "LH",
+            "asset": asset,
+            "direction": direction,
+            "entry": signal["entry"],
+            "stop_loss": signal["stop_loss"],
+            "tp": signal["tp"],
+            "rr": round(signal.get("rr", 0), 2),
+            "quality_label": signal.get("quality_label", "MEDIUM"),
+            "expiry_hours": 8,
+            "be_activate_dist": be_dist,
+        }
+        _send_bridge_signal(payload_dict)
         if ntfy_topic:
-            # v1.29: EA calcola tutto autonomamente.
-            # be_activate_dist = 0.3 * ATR_M15 (unico param che l'EA
-            # non puo calcolare da solo — ATR viene dal runner Python).
-            atr_val = signal.get("atr_m15", 0) or 0
-            be_dist = round(0.3 * atr_val, 2) if atr_val > 0 else 0
-            payload_dict = {
-                "signal_id": signal.get("signal_id", str(uuid.uuid4())),
-                "strategy_name": "LH",
-                "asset": asset,
-                "direction": direction,
-                "entry": signal["entry"],
-                "stop_loss": signal["stop_loss"],
-                "tp": signal["tp"],
-                "rr": round(signal.get("rr", 0), 2),
-                "quality_label": signal.get("quality_label", "MEDIUM"),
-                "expiry_hours": 8,
-                "be_activate_dist": be_dist,
-            }
             payload = json.dumps(payload_dict)
             ntfy_bot.send_message(
                 ntfy_topic,
