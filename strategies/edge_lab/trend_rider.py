@@ -36,6 +36,17 @@ ATR_PULLBACK_MULT = 0.5
 SWING_LOOKBACK    = 2
 MIN_SL_ATR_MULT   = 1.5   # SL minimo = 1.5x ATR M15
 
+# SL_LIQUIDITY_BUFFER_ATR_MULT — margine oltre il livello di liquidita' esatto.
+# _find_swing_sl() ritorna lo swing low/high preciso: e' proprio il pool di
+# liquidita' piu' probabile da spazzare via (sweep) prima di una reazione.
+# Senza margine lo SL coincide col punto che il prezzo visita piu' spesso
+# prima di invertire — l'obiettivo e' PRENDERE quella liquidita', non ESSERE
+# quella liquidita'. Il buffer sposta lo SL appena oltre il livello.
+# v1: ipotesi iniziale 0.15x ATR M15 — ragionevole ma non ancora validata su
+# dati reali; da verificare con backtest/walk-forward prima di considerarlo
+# un miglioramento definitivo (principio 8/9 del progetto).
+SL_LIQUIDITY_BUFFER_ATR_MULT = 0.15
+
 
 # ============================================================
 # Indicatori
@@ -686,6 +697,15 @@ def generate_trb_signal(
     sl = _find_swing_sl(df_m15, direction, last_idx, lookback=15)
     if sl is None:
         return reject("NO_SWING_SL")
+
+    # Margine oltre il livello di liquidita' esatto (vedi SL_LIQUIDITY_BUFFER_ATR_MULT):
+    # non vogliamo che lo SL coincida col punto che il prezzo e' piu' probabile
+    # che visiti — vogliamo essere dall'altra parte quando lo visita.
+    if atr_m15 > 0:
+        sl_buffer = SL_LIQUIDITY_BUFFER_ATR_MULT * atr_m15
+        sl = (sl - sl_buffer) if direction == "BUY" else (sl + sl_buffer)
+        diag["sl_liquidity_buffer"] = sl_buffer
+
     if direction == "BUY"  and sl >= entry:
         return reject(f"SL_INVALID_BUY (sl={sl:.4f} >= entry={entry:.4f})")
     if direction == "SELL" and sl <= entry:
