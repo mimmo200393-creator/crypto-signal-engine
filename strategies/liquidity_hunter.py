@@ -796,8 +796,18 @@ def _score_restart_zone(zone_high: float, zone_low: float, displacement_atr: flo
     # Sovrapposizione con un Order Block registrato (qualunque stato
     # tranne INVALIDATED/EXPIRED -- anche un OB gia' testato conferma
     # che li' e' successo qualcosa di strutturalmente rilevante)
+    #
+    # FIX 23/10/2026 -- coerenza di direzione: prima si sommava il bonus a
+    # qualunque OB sovrapposto, anche di segno OPPOSTO alla zona (un OB
+    # BEARISH poteva dare punti a una Restart Zone BUY). Un OB opposto non
+    # e' confluenza, e' semplicemente un altro evento strutturale che e'
+    # successo nello stesso punto di prezzo -- non conferma la zona, la
+    # contraddice. Stesso schema di coerenza gia' usato correttamente per
+    # gli swing storici (v3.12) qui sotto.
     for ob in (mie_context.get("mie_order_block_order_blocks") or []):
         if ob.get("status") in ("INVALIDATED", "EXPIRED"):
+            continue
+        if ob.get("direction") != zone_kind:
             continue
         obh, obl = ob.get("zone_high"), ob.get("zone_low")
         if obh is None or obl is None:
@@ -832,7 +842,22 @@ def _score_restart_zone(zone_high: float, zone_low: float, displacement_atr: flo
 
     # Sovrapposizione con una zona Reaction Map (che fonde gia' FVG,
     # Liquidity, Structure -- conferma incrociata indipendente dall'OB)
+    #
+    # FIX 23/10/2026 -- stessa coerenza di direzione del blocco Order Block
+    # sopra: una reaction zone di segno opposto non e' una conferma.
+    # ATTENZIONE (corretto in double-check): la zona finale prodotta da
+    # core/reaction_map.py::_fuse_group() NON ha mai un campo "direction"
+    # -- quello esiste solo sulle candidate PRIMA della fusione (righe
+    # 86/105/127/148/171 di reaction_map.py). Il campo che sopravvive nella
+    # zona finale, quella che arriva qui via mie_reaction_map_zones, e'
+    # "expected_reaction" ("BOUNCE_UP"/"BOUNCE_DOWN"/"UNKNOWN"). Un primo
+    # tentativo di questo fix usava rz.get("direction") -- sempre None su
+    # dati reali, quindi il bonus non sarebbe MAI piu' scattato. Verificato
+    # su uno snapshot_json reale XAU prima di correggere.
+    want_reaction = "BOUNCE_UP" if zone_kind == "BULLISH" else "BOUNCE_DOWN"
     for rz in (mie_context.get("mie_reaction_map_zones") or []):
+        if rz.get("expected_reaction") != want_reaction:
+            continue
         rzh, rzl = rz.get("zone_high"), rz.get("zone_low")
         if rzh is None or rzl is None:
             continue
@@ -885,6 +910,39 @@ def _score_restart_zone(zone_high: float, zone_low: float, displacement_atr: flo
         if best_swing_bonus > 0:
             score += best_swing_bonus
             factors.append(best_swing_label)
+
+    # Confluenza con Equal High/Low (v4.1, 23/10/2026) -- cluster di 2+
+    # swing storici quasi identici (stessa tolleranza e stesso detector gia'
+    # usato per il TP in _find_next_swing_target: _detect_equal_levels_from_
+    # swings). Un Equal Level e' un pool di liquidita' piu' "vero" di un
+    # singolo swing isolato: piu' partecipanti hanno lo stop li', non uno
+    # solo. Finora questo detector veniva usato SOLO per scegliere il target
+    # di uscita -- mai per valutare se la zona di ENTRATA sta davvero su un
+    # pool di liquidita'. Stessa coerenza di direzione del blocco swing sopra:
+    # zona BUY -> serve un EQUAL LOW (sell-stop sotto), zona SELL -> un
+    # EQUAL HIGH (buy-stop sopra).
+    #
+    # SHADOW ONLY (23/10/2026): a differenza del fix di coerenza di
+    # direzione sopra (OB/Reaction Map), questo e' punteggio NUOVO, mai
+    # esistito sul lato entry -- nessun dato storico dice se +15 e' il
+    # peso giusto o se questo fattore discrimina davvero vincitori da
+    # perdenti. Per questo NON si somma a `score` (nessun trade reale
+    # cambia tier/RR minimo a causa sua): si registra solo in `factors`
+    # con prefisso SHADOW_, cosi' da qui in avanti i dati per deciderlo
+    # si accumulano (una volta risolta la persistenza di confluence_
+    # factors, vedi lh_db.insert_lh_signal) senza toccare nessuna
+    # decisione di trading reale nel frattempo.
+    if swing_zones:
+        want_type = "LOW" if zone_kind == "BULLISH" else "HIGH"
+        for eq in _detect_equal_levels_from_swings(swing_zones):
+            if eq.get("swing_type") != want_type:
+                continue
+            eq_price = eq.get("price")
+            if eq_price is None:
+                continue
+            if zone_low <= eq_price <= zone_high:
+                factors.append(f"SHADOW_EQUAL_{want_type}")
+                break
 
     if not refined:
         score *= 0.9  # zona non raffinata (M5 assente): lieve penalita'

@@ -384,7 +384,14 @@ def insert_lh_signal(conn: sqlite3.Connection, signal: dict) -> str:
             signal.get("tp1"), signal.get("tp1_label"),
             signal.get("tp2"), signal.get("tp2_label"),
             signal.get("tp3"), signal.get("tp3_label"),
-            signal.get("confluence_factors"),
+            # FIX 23/10/2026 -- bug di persistenza: generate_lh_signal()
+            # (strategies/liquidity_hunter.py) scrive la lista di conferme
+            # in signal["confirmations"], MAI in signal["confluence_factors"]
+            # -- la chiave che questa INSERT leggeva. Risultato verificato:
+            # 0 su 460 segnali RESTART_ZONE avevano mai questo campo
+            # valorizzato nel DB. Qui si legge la chiave giusta e si
+            # serializza in JSON (la colonna e' TEXT).
+            json.dumps(signal.get("confirmations") or signal.get("confluence_factors") or []),
             # LH v3.1 — un ordine PENDENTE non e' un trade aperto: diventa
             # FILLED solo quando il prezzo raggiunge l'entry. Senza questa
             # distinzione il monitor calcolerebbe MAE/MFE e colpi di TP/SL
