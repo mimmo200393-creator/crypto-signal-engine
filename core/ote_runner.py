@@ -1023,6 +1023,36 @@ def _count_h1_against(conn, asset, direction):
     return count
 
 
+def _count_h1_aligned(conn, asset, direction):
+    """
+    Conta candele H1 consecutive (dal più recente) con body ALLINEATO
+    alla direzione del segnale.
+
+    Validato 25/10 su 126 RECURRING XAU:
+    - h1_aligned=0: n=62, WR=47%, R=-18.5 (gruppo più tossico)
+    - h1_aligned=1: n=28, WR=75%, R=+3.5 (gruppo migliore)
+    Usato nel filtro XAU insieme a h1_12h e volatilità.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT open, close FROM candles_cache "
+            "WHERE asset=? AND timeframe='1h' ORDER BY timestamp DESC LIMIT 12",
+            (asset,)
+        ).fetchall()
+    except Exception:
+        return 0
+    if len(rows) < 3:
+        return 0
+    count = 0
+    for o, c in rows:
+        body = float(c) - float(o)
+        if (direction == "BUY" and body > 0) or (direction == "SELL" and body < 0):
+            count += 1
+        else:
+            break
+    return count
+
+
 def _count_h1_ag6(conn, asset, direction):
     """
     Conta quante delle ultime 6 candele H1 hanno body OPPOSTO
@@ -1076,6 +1106,24 @@ def _calc_h1_12h_trend(conn, asset, direction):
         return None
     pct = (newest_close - oldest_open) / oldest_open * 100
     return -pct if direction == "SELL" else pct
+
+
+def _calc_h1_volatility(conn, asset):
+    """
+    Volatilità media H1 (high-low) delle ultime 6 candele.
+    Soglia >= 9 usata nel filtro XAU RECURRING INVERT.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT high, low FROM candles_cache "
+            "WHERE asset=? AND timeframe='1h' ORDER BY timestamp DESC LIMIT 6",
+            (asset,)
+        ).fetchall()
+    except Exception:
+        return 0.0
+    if len(rows) < 3:
+        return 0.0
+    return sum(float(h) - float(l) for h, l in rows) / len(rows)
 
 
 def _check_m5_reaction(df_m5, direction):
@@ -1202,6 +1250,37 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
                             asset, h1_ag6, zone_prior, h1_12h,
                             old_dir, direction, zone["bucket_price"])
 
+        # ── XAU RECURRING Quality + Trend Filter (verificato 25/10) ──
+        # Strategia ibrida a 3 livelli validata su 126 RECURRING XAU:
+        # 1) SKIP QS 50-59: 11 trade, WR=18%, R=-8.6, Fisher p=0.008
+        # 2) INVERT quando h1_aligned=0 AND h1_12h<-0.2% AND vol_h1>=9:
+        #    20 trade, INVERT reale 61% WR (12 TP1, 7 SL)
+        # Baseline R=-15.2 → Filtrato R=+11.9, WinPres=72/74
+        # Permutation p<0.001, robusto su entrambe le metà temporali
+        xau_inverted = False
+        if asset == "XAU_USD" and not h1_inverted and not ti_inverted:
+            qs = zone["score"]
+            # Livello 1: SKIP QS 50-59 (tossico indipendente)
+            if 50 <= qs < 60:
+                logger.info(
+                    "OTE-LAB [%s %s]: SKIP XAU QS-toxic (qs=%d) zona %.0f",
+                    asset, direction, qs, zone["bucket_price"])
+                continue
+            # Livello 2: INVERT quando tutto è contro
+            h1_al = _count_h1_aligned(conn, asset, direction)
+            if h1_al == 0:
+                h1_12h = _calc_h1_12h_trend(conn, asset, direction)
+                h1_vol = _calc_h1_volatility(conn, asset)
+                if h1_12h is not None and h1_12h < -0.2 and h1_vol >= 9:
+                    old_dir = direction
+                    direction = "BUY" if direction == "SELL" else "SELL"
+                    xau_inverted = True
+                    logger.info(
+                        "OTE-LAB [%s]: ⚡ XAU INVERSION "
+                        "(al=%d h12=%.2f%% vol=%.1f) %s → %s zona %.0f",
+                        asset, h1_al, h1_12h, h1_vol,
+                        old_dir, direction, zone["bucket_price"])
+
         # H4 trend (disattivato, verificato 30/09)
         if LAB_STRICT_H4 and df_h4 is not None and len(df_h4) >= 21:
             closes = df_h4["close"].astype(float).values
@@ -1294,7 +1373,7 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
             "entry": round(entry, 5), "stop_loss": round(sl, 5),
             "tp1": round(tp1, 5), "tp2": round(tp, 5),
             "risk": round(risk, 5), "rr1": 1.0, "rr2": round(rr2, 3),
-            "entry_zone_type": f"RECURRING_{zone['last_swing_type']}_INVERTED" if (h1_inverted or ti_inverted) else f"RECURRING_{zone['last_swing_type']}",
+            "entry_zone_type": f"RECURRING_{zone['last_swing_type']}_INVERTED" if (h1_inverted or ti_inverted or xau_inverted) else f"RECURRING_{zone['last_swing_type']}",
             "zone_ref": f"RECURRING_{zone['last_swing_type']}_{zone['bucket_price']:.0f}",
             "liquidity_target": target_label,
             "rz_target_used": rz_used, "rz_target_label": target_label if rz_used else None,
@@ -1323,7 +1402,7 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
             ch = config.get("TELEGRAM_CHAT_ID", "")
             if tk and ch:
                 emoji = "🟢" if direction == "BUY" else "🔴"
-                inv_tag = " ⚡ INVERTED" if h1_inverted else ""
+                inv_tag = " ⚡ INVERTED" if (h1_inverted or xau_inverted) else ""
                 msg = (f"{emoji} *OTE-LAB 🏦 RECURRING ZONE{inv_tag}*\n\n"
                        f"*{asset.replace('_',' ')}* — {direction}\n"
                        f"Zona: {zone['bucket_price']:.0f} "
