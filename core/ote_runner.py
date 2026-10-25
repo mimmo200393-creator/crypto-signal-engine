@@ -1023,6 +1023,61 @@ def _count_h1_against(conn, asset, direction):
     return count
 
 
+def _count_h1_ag6(conn, asset, direction):
+    """
+    Conta quante delle ultime 6 candele H1 hanno body OPPOSTO
+    alla direzione del segnale (NON necessariamente consecutive).
+
+    Usato dal Trend Invalidation Filter (verificato 25/10):
+    ag6>=4 + zone_prior=0 + h1_12h>-0.5% identifica zone RECURRING
+    con trend originale invalidato. n=4, 0W/4L, p_perm=0.005.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT open, close FROM candles_cache "
+            "WHERE asset=? AND timeframe='1h' ORDER BY timestamp DESC LIMIT 6",
+            (asset,)
+        ).fetchall()
+    except Exception:
+        return 0
+    if len(rows) < 3:
+        return 0
+    count = 0
+    for o, c in rows:
+        body = float(c) - float(o)
+        if (direction == "SELL" and body > 0) or (direction == "BUY" and body < 0):
+            count += 1
+    return count
+
+
+def _calc_h1_12h_trend(conn, asset, direction):
+    """
+    Trend H1 delle ultime 12 ore, normalizzato alla direzione del segnale.
+    Positivo = trend allineato al segnale, negativo = trend contrario.
+
+    Usato dal Trend Invalidation Filter: quando > -0.5% su zone mai
+    testate con ag6>=4, il trend originale della zona e' invalidato.
+    Quando <= -0.5% (forte counter-trend), la zona funziona come
+    classico reversal e viene protetta.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT open, close FROM candles_cache "
+            "WHERE asset=? AND timeframe='1h' ORDER BY timestamp DESC LIMIT 12",
+            (asset,)
+        ).fetchall()
+    except Exception:
+        return None
+    if len(rows) < 12:
+        return None
+    newest_close = float(rows[0][1])
+    oldest_open = float(rows[11][0])
+    if oldest_open <= 0:
+        return None
+    pct = (newest_close - oldest_open) / oldest_open * 100
+    return -pct if direction == "SELL" else pct
+
+
 def _check_m5_reaction(df_m5, direction):
     """
     Conferma M5: candela con body >50% nella direzione nelle ultime 3.
@@ -1118,6 +1173,35 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
                             asset, direction, h1_run, zone["bucket_price"])
                 continue
 
+        # ── Trend Invalidation Filter (verificato 25/10) ──
+        # Zone RECURRING mai testate (zone_prior=0) con forte momentum H1
+        # contrario (ag6>=4) e trend 12h non fortemente counter-trend (>-0.5%)
+        # hanno il trend originale invalidato → INVERTI direzione.
+        # BTC: n=4, 0W/4L, Fisher p=0.006, Permutation p=0.005
+        # Threshold -0.5% robusto: gap 0.67pp tra worst win (-0.92%) e best loss (-0.25%)
+        # Protegge 2 win con forte counter-trend (h1_12h <= -0.5%)
+        ti_inverted = False
+        if asset == "BTC_USDT" and not h1_inverted:
+            h1_ag6 = _count_h1_ag6(conn, asset, direction)
+            if h1_ag6 >= 4:
+                zone_ref_str = f"RECURRING_{zone['last_swing_type']}_{zone['bucket_price']:.0f}"
+                zone_prior = conn.execute(
+                    "SELECT COUNT(*) FROM ote_lab_signals "
+                    "WHERE asset=? AND zone_ref=? AND entry_zone_type LIKE 'RECURRING%%'",
+                    (asset, zone_ref_str)
+                ).fetchone()[0]
+                if zone_prior == 0:
+                    h1_12h = _calc_h1_12h_trend(conn, asset, direction)
+                    if h1_12h is not None and h1_12h > -0.5:
+                        old_dir = direction
+                        direction = "BUY" if direction == "SELL" else "SELL"
+                        ti_inverted = True
+                        logger.info(
+                            "OTE-LAB [%s]: ⚡ TREND INVALIDATION "
+                            "(ag6=%d zp=%d h1_12h=%.2f%%) %s → %s zona %.0f",
+                            asset, h1_ag6, zone_prior, h1_12h,
+                            old_dir, direction, zone["bucket_price"])
+
         # H4 trend (disattivato, verificato 30/09)
         if LAB_STRICT_H4 and df_h4 is not None and len(df_h4) >= 21:
             closes = df_h4["close"].astype(float).values
@@ -1210,7 +1294,7 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
             "entry": round(entry, 5), "stop_loss": round(sl, 5),
             "tp1": round(tp1, 5), "tp2": round(tp, 5),
             "risk": round(risk, 5), "rr1": 1.0, "rr2": round(rr2, 3),
-            "entry_zone_type": f"RECURRING_{zone['last_swing_type']}_INVERTED" if h1_inverted else f"RECURRING_{zone['last_swing_type']}",
+            "entry_zone_type": f"RECURRING_{zone['last_swing_type']}_INVERTED" if (h1_inverted or ti_inverted) else f"RECURRING_{zone['last_swing_type']}",
             "zone_ref": f"RECURRING_{zone['last_swing_type']}_{zone['bucket_price']:.0f}",
             "liquidity_target": target_label,
             "rz_target_used": rz_used, "rz_target_label": target_label if rz_used else None,
