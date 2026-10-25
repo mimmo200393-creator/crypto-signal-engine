@@ -991,6 +991,38 @@ def _find_recurring_zones(conn, asset, current_price):
     return zones
 
 
+def _count_h1_against(conn, asset, direction):
+    """
+    Conta candele H1 consecutive (dal piu' recente) con body OPPOSTO
+    alla direzione del segnale. Usa candles_cache (storico completo H1).
+
+    Validato 25/10: su 157 RECURRING BTC:
+    - h1_run >= 6: 4 trade, 0% WR, avg_R=-0.75 (p_adj=0.036)
+    - h1_run >= 5: 7 trade, 29% WR, avg_R=-0.37 (p_adj=0.036)
+    Inversione backtestata su H1: 5/7 win, +5.12R vs orig -2.60R.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT open, close FROM candles_cache "
+            "WHERE asset=? AND timeframe='1h' ORDER BY timestamp DESC LIMIT 6",
+            (asset,)
+        ).fetchall()
+    except Exception:
+        return 0
+
+    if len(rows) < 3:
+        return 0
+
+    count = 0
+    for o, c in rows:  # DESC order: most recent first
+        body = float(c) - float(o)
+        if (direction == "SELL" and body > 0) or (direction == "BUY" and body < 0):
+            count += 1
+        else:
+            break
+    return count
+
+
 def _check_m5_reaction(df_m5, direction):
     """
     Conferma M5: candela con body >50% nella direzione nelle ultime 3.
@@ -1066,6 +1098,25 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
         df_m5 = v3_db.get_v3_candles_df(conn, asset, "5m", limit=20)
         if not _check_m5_reaction(df_m5, direction):
             continue
+
+        # ── H1 Trend Contradiction (verificato 25/10) ──
+        # Quando le ultime N candele H1 consecutive hanno body OPPOSTO
+        # alla direzione del segnale, la zona e' stata "smentita" dal trend H1.
+        # BTC h1_run >= 6: 0% WR su 4 trade (p_adj=0.036) → INVERTI direzione
+        # BTC h1_run == 5: expectancy negativa (p_adj=0.036) → SKIP
+        h1_inverted = False
+        if asset == "BTC_USDT":
+            h1_run = _count_h1_against(conn, asset, direction)
+            if h1_run >= 6:
+                old_dir = direction
+                direction = "BUY" if direction == "SELL" else "SELL"
+                h1_inverted = True
+                logger.info("OTE-LAB [%s]: ⚡ H1 INVERSION (run=%d) %s → %s zona %.0f",
+                            asset, h1_run, old_dir, direction, zone["bucket_price"])
+            elif h1_run >= 5:
+                logger.info("OTE-LAB [%s %s]: SKIP H1 contradiction (run=%d) zona %.0f",
+                            asset, direction, h1_run, zone["bucket_price"])
+                continue
 
         # H4 trend (disattivato, verificato 30/09)
         if LAB_STRICT_H4 and df_h4 is not None and len(df_h4) >= 21:
@@ -1159,7 +1210,7 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
             "entry": round(entry, 5), "stop_loss": round(sl, 5),
             "tp1": round(tp1, 5), "tp2": round(tp, 5),
             "risk": round(risk, 5), "rr1": 1.0, "rr2": round(rr2, 3),
-            "entry_zone_type": f"RECURRING_{zone['last_swing_type']}",
+            "entry_zone_type": f"RECURRING_{zone['last_swing_type']}_INVERTED" if h1_inverted else f"RECURRING_{zone['last_swing_type']}",
             "zone_ref": f"RECURRING_{zone['last_swing_type']}_{zone['bucket_price']:.0f}",
             "liquidity_target": target_label,
             "rz_target_used": rz_used, "rz_target_label": target_label if rz_used else None,
@@ -1188,7 +1239,8 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
             ch = config.get("TELEGRAM_CHAT_ID", "")
             if tk and ch:
                 emoji = "🟢" if direction == "BUY" else "🔴"
-                msg = (f"{emoji} *OTE-LAB 🏦 RECURRING ZONE*\n\n"
+                inv_tag = " ⚡ INVERTED" if h1_inverted else ""
+                msg = (f"{emoji} *OTE-LAB 🏦 RECURRING ZONE{inv_tag}*\n\n"
                        f"*{asset.replace('_',' ')}* — {direction}\n"
                        f"Zona: {zone['bucket_price']:.0f} "
                        f"(H4: {zone['visits_h4']}x | H1: {zone['visits_h1']}x)\n\n"
