@@ -623,6 +623,66 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
         )
         return
 
+    # ══════════════════════════════════════════════════════════
+    # ── XAU LH: SKIP Saturday + alta volatilità H1 (>14)
+    # ══════════════════════════════════════════════════════════
+    # Validato su 319 trade RESTART_ZONE (sessioni note):
+    #   Baseline: n=319, WR=45.8%, R=+84.1
+    #   Filtrato: n=276, WR=50.4%, R=+101.5 (+17.4R)
+    #   Skipped:  n=43,  WR=16.3%, R=-17.4
+    #   Permutation p=0.0000, Bootstrap 95% CI [+65.7,+137.8]R
+    #   Shadow data raccolto per futura valutazione INVERT.
+    if asset == "XAU_USD":
+        _lh_skip_reason = None
+
+        # Regola 1: Saturday (0% WR storico, tutti SL)
+        if now.weekday() == 5:
+            _lh_skip_reason = "SATURDAY"
+
+        # Regola 2: H1 volatilità troppo alta (>14)
+        if _lh_skip_reason is None:
+            try:
+                _h1_rows = conn.execute(
+                    "SELECT high, low FROM candles_cache "
+                    "WHERE asset=? AND timeframe='1h' "
+                    "ORDER BY timestamp DESC LIMIT 6",
+                    (asset,)
+                ).fetchall()
+                if len(_h1_rows) >= 3:
+                    _h1_vol = sum(
+                        float(r[0]) - float(r[1]) for r in _h1_rows
+                    ) / len(_h1_rows)
+                    if _h1_vol > 14:
+                        _lh_skip_reason = f"H1_VOL_HIGH({_h1_vol:.1f})"
+                else:
+                    _h1_vol = 0.0
+            except Exception:
+                _h1_vol = 0.0
+
+        if _lh_skip_reason:
+            logger.info(
+                "LH [%s %s]: SKIP %s — shadow logged "
+                "(entry=%.2f sl=%.2f tp=%.2f rr=%.2f)",
+                asset, direction, _lh_skip_reason,
+                signal.get("entry", 0), signal.get("stop_loss", 0),
+                signal.get("tp", 0), signal.get("rr", 0),
+            )
+            try:
+                signal["setup_state"] = "SHADOW_SKIP"
+                signal["order_status"] = _lh_skip_reason
+                signal["final_outcome"] = "SKIPPED"
+                lh_db.insert_lh_signal(conn, signal)
+                logger.info(
+                    "LH [%s %s]: shadow signal saved (reason=%s)",
+                    asset, direction, _lh_skip_reason,
+                )
+            except Exception as e:
+                logger.warning(
+                    "LH [%s]: shadow log fallito (non-blocking): %s",
+                    asset, e,
+                )
+            return
+
     # Label: M5+M15 body alignment (raccolta dati, non filtro)
     # Verificato su 48 trade recenti: M5+M15 aligned WR 59% +0.67R
     # vs non-aligned WR 17% -0.54R. Campione piccolo (n=17), quindi
