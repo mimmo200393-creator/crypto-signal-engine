@@ -447,6 +447,36 @@ def has_open_lh_signal(
     return row is not None
 
 
+def has_nearby_lh_signal(
+    conn: sqlite3.Connection,
+    asset: str,
+    direction: str,
+    entry_price: float,
+    proximity_points: float,
+    hours: int = 6,
+) -> bool:
+    """
+    Dedup per prossimità di entry: stesso asset + direzione + entry entro
+    proximity_points, nelle ultime N ore, con stato WATCHING (LIMIT pendente)
+    o OPEN (già fillato).
+    Copre il buco dove swept_level_label cambia tra cicli ma la zona è la stessa.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    row = conn.execute(
+        """
+        SELECT 1 FROM lh_signals
+        WHERE asset=? AND direction=?
+        AND ABS(entry - ?) <= ?
+        AND timestamp_setup >= ?
+        AND (final_outcome = 'OPEN'
+             OR setup_state = 'WATCHING')
+        LIMIT 1
+        """,
+        (asset, direction, entry_price, proximity_points, cutoff),
+    ).fetchone()
+    return row is not None
+
+
 def monitor_pending_lh_signals(
     conn: sqlite3.Connection,
     asset: str,

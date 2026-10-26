@@ -541,6 +541,22 @@ def _run_for_asset(conn, asset: str, config: dict, now: datetime):
 
     entry = signal.get("entry", 0)
     sl = signal.get("stop_loss", 0)
+
+    # ── Dedup prossimità entry (fix duplicati 26/10) ──────────
+    # Se esiste già un segnale WATCHING (LIMIT pendente) o OPEN con
+    # entry entro N punti nelle ultime 6 ore → stessa zona, skip.
+    # Soglia: XAU=5pt (~0.5 ATR M15), BTC=150pt (~0.5 ATR M15)
+    _PROXIMITY = {"XAU_USD": 5.0, "BTC_USDT": 150.0}
+    _prox = _PROXIMITY.get(asset, 5.0)
+    if entry and lh_db.has_nearby_lh_signal(
+        conn, asset, direction, entry, _prox, hours=6
+    ):
+        logger.info(
+            "LH [%s %s]: DEDUP_PROXIMITY entry=%.2f (±%.1fpt, 6h), skip.",
+            asset, direction, entry, _prox,
+        )
+        return
+
     if entry and sl:
         risk_abs = abs(entry - sl)
         atr_m15 = mie_context.get("mie_volatility_atr_m15", 0) or 0
