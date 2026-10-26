@@ -798,15 +798,24 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
                     if in_zone and is_reaction:
                         new_entry = float(c["close"])
                         new_sl = min(float(c["low"]), zone_low) - rng * 0.2
-                        # Floor/cap XAU
                         new_risk = abs(new_entry - new_sl)
+                        # Floor: almeno 1.0x ATR (evita SL irrealistici su BTC)
+                        atr_val = signal.get("atr_m15", 0)
+                        atr_floor = atr_val * 1.0 if atr_val > 0 else 0
                         if asset == "XAU_USD":
-                            if new_risk < 8.0:
-                                new_sl = new_entry - 8.0
-                                new_risk = 8.0
-                            elif new_risk > MAX_RISK_XAU:
-                                new_sl = new_entry - MAX_RISK_XAU
-                                new_risk = MAX_RISK_XAU
+                            atr_floor = max(atr_floor, 8.0)
+                        if atr_floor > 0 and new_risk < atr_floor:
+                            new_sl = new_entry - atr_floor
+                            new_risk = atr_floor
+                            logger.info("OTE-LAB [%s %s]: SL floor applied %.1f → %.1f (1.0x ATR)",
+                                       asset, direction, abs(new_entry - (min(float(c["low"]), zone_low) - rng * 0.2)), atr_floor)
+                        # Cap: non superare il risk strutturale originale
+                        if new_risk > orig_risk and orig_risk > 0:
+                            new_sl = new_entry - orig_risk
+                            new_risk = orig_risk
+                        if asset in ("XAU_USD", "PAXG_USDT") and new_risk > MAX_RISK_XAU:
+                            new_sl = new_entry - MAX_RISK_XAU
+                            new_risk = MAX_RISK_XAU
                         if new_risk > 0:
                             rr2_val = signal.get("rr2") or 2.0
                             signal["entry"] = round(new_entry, 5)
@@ -827,13 +836,23 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
                         new_entry = float(c["close"])
                         new_sl = max(float(c["high"]), zone_high) + rng * 0.2
                         new_risk = abs(new_entry - new_sl)
+                        # Floor: almeno 1.0x ATR (evita SL irrealistici su BTC)
+                        atr_val = signal.get("atr_m15", 0)
+                        atr_floor = atr_val * 1.0 if atr_val > 0 else 0
                         if asset == "XAU_USD":
-                            if new_risk < 8.0:
-                                new_sl = new_entry + 8.0
-                                new_risk = 8.0
-                            elif new_risk > MAX_RISK_XAU:
-                                new_sl = new_entry + MAX_RISK_XAU
-                                new_risk = MAX_RISK_XAU
+                            atr_floor = max(atr_floor, 8.0)
+                        if atr_floor > 0 and new_risk < atr_floor:
+                            new_sl = new_entry + atr_floor
+                            new_risk = atr_floor
+                            logger.info("OTE-LAB [%s %s]: SL floor applied %.1f → %.1f (1.0x ATR)",
+                                       asset, direction, abs(new_entry - (max(float(c["high"]), zone_high) + rng * 0.2)), atr_floor)
+                        # Cap: non superare il risk strutturale originale
+                        if new_risk > orig_risk and orig_risk > 0:
+                            new_sl = new_entry + orig_risk
+                            new_risk = orig_risk
+                        if asset in ("XAU_USD", "PAXG_USDT") and new_risk > MAX_RISK_XAU:
+                            new_sl = new_entry + MAX_RISK_XAU
+                            new_risk = MAX_RISK_XAU
                         if new_risk > 0:
                             rr2_val = signal.get("rr2") or 2.0
                             signal["entry"] = round(new_entry, 5)
