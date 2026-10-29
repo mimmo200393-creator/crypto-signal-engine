@@ -178,6 +178,35 @@ def _init_schema(conn):
     conn.commit()
 
 
+def _is_exact_duplicate(conn, sig: dict) -> bool:
+    """True only when the same final setup was already stored in the last 24h."""
+    asset, direction = sig.get("asset"), sig.get("direction")
+    if not asset or not direction or sig.get("entry") is None or sig.get("stop_loss") is None:
+        return False
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    rows = conn.execute(
+        "SELECT zone_ref, entry_zone_type, entry, stop_loss, tp1, tp2 FROM ote_lab_signals "
+        "WHERE asset=? AND direction=? AND timestamp_setup>=? ORDER BY timestamp_setup DESC LIMIT 200",
+        (asset, direction, cutoff)).fetchall()
+    ref, typ = str(sig.get("zone_ref") or ""), str(sig.get("entry_zone_type") or "")
+    risk = abs(float(sig.get("risk") or 0))
+    tol = max(risk * 0.02, 0.00001)
+    vals = [sig.get(k) for k in ("entry", "stop_loss", "tp1", "tp2")]
+    for old_ref, old_typ, *old_vals in rows:
+        if str(old_ref or "") != ref or str(old_typ or "") != typ:
+            continue
+        match = True
+        for a, b in zip(vals, old_vals):
+            if a is None or b is None:
+                match = (a is None and b is None)
+            else:
+                try: match = abs(float(a)-float(b)) <= tol
+                except (TypeError, ValueError): match = False
+            if not match: break
+        if match: return True
+    return False
+
+
 def _insert_signal(conn, sig: dict) -> str:
     sid = str(uuid.uuid4())
     sig["signal_id"] = sid
@@ -684,14 +713,6 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
         if existing:
             continue
 
-        # Cooldown 4h
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
-        recent = conn.execute(
-            "SELECT 1 FROM ote_lab_signals WHERE asset=? AND direction=? "
-            "AND timestamp_setup > ?", (asset, direction, cutoff)).fetchone()
-        if recent:
-            continue
-
         # Genera segnale (identico a TRB)
         try:
             result = generate_trb_signal(market_ctx, df_h4, df_h1, df_m15, direction)
@@ -899,6 +920,13 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
 
         # ── Classifica tier (tracking puro) ──
         signal["tier"] = _classify_tier(signal)
+
+        # Dedup finale dopo inversione e livelli entry/SL/TP definitivi.
+        # Blocca esclusivamente lo stesso fingerprint, non altri segnali BUY/SELL.
+        if _is_exact_duplicate(conn, signal):
+            logger.info("OTE-LAB [%s %s]: DUPLICATE exact setup skipped (zone=%s)",
+                       asset, direction, signal.get("zone_ref") or signal.get("entry_zone_type"))
+            continue
 
         # ── Inserisci segnale ──
         signal["timestamp_setup"] = now.isoformat()
@@ -1312,6 +1340,33 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
                 h4 = "BULLISH" if move > 0.5 else ("BEARISH" if move < -0.5 else "NEUTRAL")
                 if direction == "BUY" and h4 == "BEARISH": continue
                 if direction == "SELL" and h4 == "BULLISH": continue
+
+        # ── FINAL DIRECTION DEDUP (after all inversion rules) ──
+        # Prevents two zones with opposite original directions from both
+        # becoming the same final direction after H1/TI/XAU inversion.
+        final_open = conn.execute(
+            "SELECT 1 FROM ote_lab_signals WHERE asset=? AND direction=? "
+            "AND final_outcome='OPEN' AND entry_zone_type LIKE 'RECURRING%%' LIMIT 1",
+            (asset, direction)
+        ).fetchone()
+        if final_open:
+            logger.info("OTE-LAB [%s %s]: SKIP final-direction duplicate after inversion (open)",
+                        asset, direction)
+            continue
+
+        # Zone-specific cooldown, applied to the FINAL direction. Unlike a
+        # blanket asset/direction cooldown, this only blocks this exact zone.
+        final_zone_ref = f"RECURRING_{zone['last_swing_type']}_{zone['bucket_price']:.0f}"
+        final_cutoff = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
+        final_recent = conn.execute(
+            "SELECT 1 FROM ote_lab_signals WHERE asset=? AND direction=? AND zone_ref=? "
+            "AND entry_zone_type LIKE 'RECURRING%%' AND timestamp_setup>? LIMIT 1",
+            (asset, direction, final_zone_ref, final_cutoff)
+        ).fetchone()
+        if final_recent:
+            logger.info("OTE-LAB [%s %s]: SKIP final-direction duplicate (same zone cooldown)",
+                        asset, direction)
+            continue
 
         # Entry/SL/TP
         entry = current_price
