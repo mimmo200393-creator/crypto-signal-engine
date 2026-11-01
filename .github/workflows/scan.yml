@@ -173,7 +173,7 @@ jobs:
                     docs/unified_dashboard.html \
                     docs/analytics_dashboard.html \
                     docs/engine_edge_dashboard.html \
-                    docs/radar_lab_dashboard.html
+                    docs/radar_lab_dashboard.html \
                     docs/ai_trading_journal_dashboard_generated.html
 
             git commit -m "Scanner + Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
