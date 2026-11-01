@@ -100,5 +100,5 @@ def main():
         "manifest": str((args.out / "manifest.json").resolve()),
     }, indent=2))
 
-if __ __name__ == "__main__":
+if __name__ == "__main__":
     main()
