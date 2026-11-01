@@ -29,7 +29,7 @@ from typing import Any
 DB_PATH = Path(os.environ.get("DB_PATH", "data/signals.db"))
 LEDGER_PATH = Path(os.environ.get("LEDGER_DB_PATH", "data/decision_ledger.db"))
 TEMPLATE_PATH = Path(os.environ.get("AI_JOURNAL_TEMPLATE", "docs/ai_trading_journal_template.html"))
-OUT_PATH = Path(os.environ.get("AI_JOURNAL_OUT", "docs/ai_trading_journal_dashboard.html"))
+OUT_PATH = Path(os.environ.get("AI_JOURNAL_OUT", "docs/ai_trading_journal_dashboard_generated.html"))
 
 # Strategy inventory used by this journal. OTE consists of two separate source tables.
 STRATEGY_TABLES = {
@@ -134,7 +134,7 @@ def update_template(template: str, data: dict[str, Any]) -> str:
     generated = datetime.fromisoformat(data["generated_at_utc"].replace("Z", "+00:00"))
     date_label = generated.strftime("%d %b %Y")
     template = re.sub(
-        r'<span class="chip">Baseline · [^<]*</span>',
+        r'<span class="chip">(Baseline|Snapshot) · [^<]*</span>',
         f'<span class="chip">Snapshot · {html.escape(date_label)}</span>', template, count=1
     )
 
@@ -162,7 +162,7 @@ def update_template(template: str, data: dict[str, Any]) -> str:
         template, n = pattern.subn(replacement, template, count=1)
         if n and label == "OTE" and detail:
             # Use the existing OTE sublabel; the generator keeps it truthful.
-            template = re.sub(r'OTE<small>[^<]*</small>', "OTE" + detail, template, count=1)
+            template = re.sub(r'(OTE<small>)[^<]*(</small>)', rf'\\g<1>{html.escape(strat.get("OTE", {}).get("count", 0) and ("OTE signals + OTE-LAB") or "OTE signals") }\\g<2>', template, count=1)
 
     # Snapshot status and audit text are generated from actual data inventory only.
     source_status = "Available" if data["source_status"]["signals_db"] == "available" else "Missing"
