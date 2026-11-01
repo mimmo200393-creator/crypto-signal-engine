@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 DB = Path(os.getenv("DB_PATH", "data/signals.db"))
 LEDGER = Path(os.getenv("LEDGER_DB_PATH", "data/decision_ledger.db"))
 TEMPLATE = Path(os.getenv("AI_JOURNAL_TEMPLATE", "docs/ai_trading_journal_template.html"))
-OUT = Path(os.getenv("AI_JOURNAL_OUT", "docs/ai_trading_journal_dashboard.html"))
+OUT = Path(os.getenv("AI_JOURNAL_OUT", "docs/ai_trading_journal_dashboard_generated.html"))
 
 SOURCES = {
     "OTE-LAB": ("ote_lab_signals", "timestamp_setup"),
@@ -38,7 +38,21 @@ def table_exists(con, table):
 def first(row, *keys):
     return next((row.get(k) for k in keys if row.get(k) is not None), None)
 
-def collect_table(con, table, date_col):
+def parse_datetime(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+def collect_table(con, table, date_col, cutoff):
     if not table_exists(con, table):
         return {"available": False, "count": 0, "columns": [], "rows": [], "error": "table_missing"}
     columns = [r["name"] for r in con.execute(f'PRAGMA table_info("{table}")')]
@@ -47,7 +61,14 @@ def collect_table(con, table, date_col):
     except sqlite3.Error as exc:
         return {"available": True, "count": 0, "columns": columns, "rows": [], "error": str(exc)}
     normalized = []
+    undated_retained = 0
     for row in rows:
+        stamp = first(row, date_col, "created_at", "timestamp", "signal_created_at", "timestamp_setup")
+        parsed = parse_datetime(stamp)
+        if parsed is not None and parsed < cutoff:
+            continue
+        if parsed is None:
+            undated_retained += 1
         normalized.append({
             "source": table,
             "id": first(row, "signal_id", "id", "candidate_id"),
@@ -68,11 +89,14 @@ def collect_table(con, table, date_col):
             "quality": first(row, "quality_label", "quality_score"),
             "raw": row,
         })
-    return {"available": True, "count": len(rows), "columns": columns, "rows": normalized}
+    return {"available": True, "count": len(normalized), "source_count": len(rows),
+            "undated_retained": undated_retained, "columns": columns, "rows": normalized}
 
 def main():
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=30)
     data = {
-        "generated_utc": datetime.now(timezone.utc).isoformat(),
+        "generated_utc": now.isoformat(),
         "source_db": str(DB), "ledger_db": str(LEDGER),
         "strategies": {}, "total": 0, "ledger_rows": 0,
         "included_strategies": list(SOURCES),
@@ -85,7 +109,7 @@ def main():
     if con:
         try:
             for name, (table, date_col) in SOURCES.items():
-                item = collect_table(con, table, date_col)
+                item = collect_table(con, table, date_col, cutoff)
                 data["strategies"][name] = item
                 data["total"] += item["count"]
         finally:
