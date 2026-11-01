@@ -1,3 +1,4 @@
+
 name: Crypto Signal Engine — Scan
 
 on:
@@ -26,11 +27,8 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          # fetch-depth ridotto da 0 (storia completa) a 1.
-          # Causa del checkout lento (~2m49s): la storia git contiene
-          # migliaia di versioni dei .db committati ad ogni scan.
-          # fetch-depth: 1 scarica solo l'ultimo stato.
-          # Se il "git pull --rebase" in fondo fallisce, alza a 20.
+          # Scarica solo l'ultimo commit.
+          # Se git pull --rebase fallisce, valutare fetch-depth: 20.
           fetch-depth: 1
 
       - name: Setup Python
@@ -52,7 +50,7 @@ jobs:
           TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
         run: python3 candles_runner.py
 
-      - name: Daily Brief (08:00 UTC)
+      - name: Daily Brief (04:00 UTC)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -114,14 +112,8 @@ jobs:
             python3 lh_digest_runner.py
           fi
 
-      # ── RIATTIVATO il 24/08: questo step probabilmente genera
-      # ANCHE TRB (config.yaml: "Edge Lab (OTE-SC) + Trend Rider —
-      # condividono il market context"). Disattivarlo per il vecchio
-      # OTE-SC il 21/08 ha spento TRB per errore, senza saperlo --
-      # market_context_snapshots e' rimasta vuota da allora e TRB
-      # silenzioso per 3 giorni. OTE-SC tornera' a mandare notifiche
-      # (rumore, non dannoso) insieme a TRB -- da verificare con
-      # core/edge_lab_runner.py se si possono separare i due.
+      # Edge Lab e TRB condividono il market context.
+      # Non disattivare questo runner senza verificare l'impatto su TRB.
       - name: Institutional Edge Lab — OTE-SC (BTC_USDT + PAXG_USDT)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -155,27 +147,36 @@ jobs:
           git config user.name "signal-engine-bot"
           git config user.email "actions@github.com"
 
-          # Sprint 0: il Decision Ledger (data/decision_ledger.db) persiste
-          # con lo stesso meccanismo di signals.db.
+          # DB persistenti
           git add data/signals.db data/decision_ledger.db
 
           DB_CHANGED=false
           git diff --staged --quiet || DB_CHANGED=true
 
           if [ "$DB_CHANGED" = "true" ]; then
+
+            # Dashboard esistenti
             python3 generate_unified_dashboard.py
             python3 generate_analytics_dashboard.py
             python3 generate_engine_edge_dashboard.py
             python3 generate_radar_lab_dashboard.py
 
+            # AI Trading Journal
+            python3 generate_ai_dashboard.py
+
+            # Aggiunge DB e dashboard generate
             git add data/signals.db data/decision_ledger.db \
                     docs/unified_dashboard.html \
                     docs/analytics_dashboard.html \
                     docs/engine_edge_dashboard.html \
-                    docs/radar_lab_dashboard.html
+                    docs/radar_lab_dashboard.html \
+                    docs/ai_trading_journal.html
 
             git commit -m "Scanner + Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            git pull --rebase origin main && git push
+
+            git pull --rebase origin main
+            git push
+
           else
             echo "DB non cambiato, nessun commit"
           fi
