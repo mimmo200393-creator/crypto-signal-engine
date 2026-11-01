@@ -1,0 +1,774 @@
+<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI Trading Journal</title><style>
+:root{--bg:#0b1018;--panel:#131c27;--line:#263443;--txt:#e8eef6;--muted:#91a0b3;--mint:#69dfbd;--blue:#86b8ff;--amber:#efc477;--red:#ef6b6b;--green:#69dfbd;--purple:#b794f6}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font:14px/1.6 system-ui,-apple-system,sans-serif}
+.app{display:grid;grid-template-columns:220px 1fr;min-height:100vh}
+aside{padding:24px 14px;border-right:1px solid var(--line);background:#0d141e;display:flex;flex-direction:column;gap:25px;position:sticky;top:0;height:100vh;overflow-y:auto}
+.brand{display:flex;gap:10px;align-items:center;padding:0 9px}
+.logo{background:linear-gradient(135deg,#69dfbd,#86b8ff);color:#08121a;font-weight:900;padding:10px;border-radius:11px}
+.brand b{display:block}.brand small{color:var(--muted);font-size:10px}
+.label{font-size:10px;color:#6f8095;letter-spacing:.12em;text-transform:uppercase;padding:0 10px;margin-bottom:6px}
+nav{display:grid;gap:4px}
+.nav{padding:10px;border-radius:9px;color:#9eacbe;text-decoration:none;font-weight:600;cursor:pointer;font-size:13px}
+.nav.active,.nav:hover{background:#1a2938;color:#eff8ff}
+.nav.active{box-shadow:inset 2px 0 var(--mint)}
+.safe{margin-top:auto;border:1px solid var(--line);border-radius:12px;padding:12px;color:var(--mint);font-size:11px}
+.safe p{color:var(--muted);margin:6px 0 0;font-size:10px}
+main{padding:26px clamp(15px,3vw,38px);max-width:1500px;width:100%;margin:auto}
+.head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:22px}
+.muted{color:var(--muted)}
+h1{font-size:27px;letter-spacing:-.04em}
+h2{font-size:18px;margin:0 0 12px;letter-spacing:-.02em}
+h3{font-size:14px;margin:0 0 8px;color:var(--blue)}
+.eyebrow{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted)}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);border-radius:9px;padding:8px 10px;color:#b7c4d3;font-size:10px;background:#101823}
+.chip.green{color:var(--mint)}.chip.amber{color:var(--amber)}
+
+/* Hero */
+.hero{background:linear-gradient(110deg,#142a31,#152132);border:1px solid #2a4149;border-radius:16px;padding:20px 22px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:18px}
+.hero h2{font-size:20px}.hero p{color:#a2b3c4;font-size:12px;max-width:650px}
+.tag{color:var(--mint);font-size:10px;font-weight:800;letter-spacing:.1em}
+
+/* Metrics row */
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:14px}
+.metric{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:15px}
+.metric .cap{font-size:10px;color:var(--muted);display:flex;justify-content:space-between}
+.metric strong{display:block;font-size:24px;margin:10px 0 3px;letter-spacing:-.04em}
+.metric small{color:var(--muted);font-size:10px}
+.pos{color:var(--green)}.neg{color:var(--red)}.warn{color:var(--amber)}
+
+/* Panels */
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-bottom:14px}
+.panelhead{padding:15px 17px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.panelhead b{font-size:13px}.panelhead small{font-size:10px;color:var(--muted)}
+.body{padding:16px}
+
+/* Grid layouts */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+
+/* KPI cards per strategy */
+.strat-kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px}
+.strat-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;border-top:3px solid var(--blue)}
+.strat-card.tt{border-top-color:#86b8ff}
+.strat-card.ote{border-top-color:#b794f6}
+.strat-card.trb{border-top-color:#69dfbd}
+.strat-card.lh{border-top-color:#efc477}
+.strat-card.v41{border-top-color:#ef6b6b}
+.strat-card h3{margin:0 0 10px;font-size:13px;font-weight:700}
+.strat-card .kpi-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.strat-card .kv{display:flex;flex-direction:column}
+.strat-card .kv span{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.strat-card .kv b{font-size:16px;margin-top:2px}
+
+/* Breakdown bars */
+.breakdown-row{display:grid;grid-template-columns:90px 1fr 50px;gap:10px;align-items:center;font-size:12px;padding:6px 0;border-bottom:1px solid #1a2535}
+.breakdown-row:last-child{border:0}
+.bar{height:5px;background:#1a2535;border-radius:6px;overflow:hidden}
+.bar i{display:block;height:100%;border-radius:6px}
+.bar-blue i{background:var(--blue)}
+.bar-green i{background:var(--green)}
+.bar-red i{background:var(--red)}
+.bar-amber i{background:var(--amber)}
+
+/* Daily summary table */
+.daily-table{width:100%;border-collapse:collapse;font-size:12px}
+.daily-table th{text-align:left;padding:8px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--line)}
+.daily-table td{padding:8px;border-bottom:1px solid #1a2535;white-space:nowrap}
+.daily-table tr:hover{background:#151f2e}
+
+/* Trade table */
+.trade-table{width:100%;border-collapse:collapse;font-size:12px}
+.trade-table th{text-align:left;padding:8px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel)}
+.trade-table td{padding:8px;border-bottom:1px solid #1a2535;white-space:nowrap}
+.trade-table tr:hover{background:#151f2e}
+.scrollbox{max-height:500px;overflow-y:auto}
+
+/* Badges */
+.badge{font-size:10px;font-weight:700;padding:3px 8px;border-radius:6px;display:inline-block}
+.b-win{background:#1a3a2a;color:var(--green)}
+.b-loss{background:#3a1a1a;color:var(--red)}
+.b-neutral{background:#2a2a1a;color:var(--amber)}
+.b-buy{background:#1a2a3a;color:var(--blue)}
+.b-sell{background:#3a1a2a;color:#f084a0}
+.b-high{background:#1a3a2a;color:var(--green)}
+.b-med{background:#2a2a1a;color:var(--amber)}
+.b-low{background:#2a1a1a;color:var(--red)}
+
+/* Mini cards */
+.mini{background:#0e1620;border:1px solid #243343;border-radius:10px;padding:12px}
+.mini span{display:block;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em}
+.mini b{display:block;margin-top:5px;font-size:14px}
+
+/* Sections */
+.section{display:none}.section.active{display:block}
+
+/* Journal form */
+.noteform{display:grid;gap:10px}
+.noteform label{font-size:10px;color:var(--muted);display:grid;gap:5px}
+.noteform input,.noteform textarea,.noteform select{background:#0c141e;border:1px solid #293747;border-radius:9px;color:var(--txt);padding:10px;font:12px system-ui;width:100%}
+.noteform textarea{min-height:65px;resize:vertical}
+.noteform button{background:var(--mint);color:#07140f;border:0;border-radius:9px;padding:10px 13px;font-weight:800;cursor:pointer}
+.noteitem{border:1px solid #273746;background:#0e1620;border-radius:10px;padding:11px;margin-top:9px}
+.noteitem header{display:flex;justify-content:space-between;font-size:10px;color:var(--mint)}
+.noteitem p{font-size:11px;margin:6px 0 0;white-space:pre-wrap;color:#cbd6e2}
+
+/* Source status */
+.source{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid #22303e;padding:10px 0;font-size:11px}
+.source:last-child{border:0}
+.status{color:var(--mint);font-weight:700}
+.status.pending{color:var(--amber)}
+
+/* Date filter bar */
+.filter-bar{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 17px;margin-bottom:14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.filter-bar label{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.filter-bar input[type="date"]{background:#0c141e;border:1px solid #293747;border-radius:8px;color:var(--txt);padding:6px 10px;font:12px system-ui}
+.flt-btn{background:transparent;border:1px solid var(--line);border-radius:8px;color:var(--muted);padding:6px 14px;font-size:11px;cursor:pointer;font-weight:600;transition:all .15s}
+.flt-btn:hover{background:#1a2938;color:var(--txt);border-color:#4a6a7a}
+.flt-btn.active{background:#1a2938;color:var(--mint);border-color:var(--mint)}
+.flt-sep{width:1px;height:22px;background:var(--line);margin:0 4px}
+.filter-bar .filter-info{margin-left:auto;font-size:10px;color:var(--muted)}
+.exp-badge{background:#2a1a2a;color:#b794f6;font-size:9px;font-weight:700;padding:2px 7px;border-radius:5px;margin-left:6px;vertical-align:middle}
+
+/* Footer */
+.foot{font-size:9px;color:#66778a;display:flex;justify-content:space-between;margin-top:18px}
+
+/* Responsive */
+@media(max-width:900px){.app{grid-template-columns:62px 1fr}aside{padding:18px 7px}.brandtext,.label,.nav span,.safe{display:none}.brand{justify-content:center}.nav{text-align:center;padding:12px 3px}.metrics{grid-template-columns:repeat(2,1fr)}.grid2,.grid3{grid-template-columns:1fr}.strat-kpi{grid-template-columns:1fr 1fr}}
+@media(max-width:600px){.app{display:block}aside{display:none}main{padding:18px 12px}.head{flex-direction:column;align-items:flex-start}h1{font-size:23px}.hero{flex-direction:column;align-items:flex-start}.metrics{gap:8px}.strat-kpi{grid-template-columns:1fr}.foot{flex-direction:column}}
+</style></head><body><div class="app">
+
+<!-- ═══ Sidebar ═══ -->
+<aside>
+  <div class="brand"><div class="logo">AI</div><div class="brandtext"><b>Trading Agent</b><small>Analysis workspace</small></div></div>
+  <div>
+    <div class="label">Workspace</div>
+    <nav>
+      <a class="nav active" data-section="overview">◫ <span>Overview</span></a>
+      <a class="nav" data-section="strategies">⌁ <span>Strategy KPIs</span></a>
+      <a class="nav" data-section="daily">◷ <span>Daily Summary</span></a>
+      <a class="nav" data-section="losers">✕ <span>Loss Analysis</span></a>
+      <a class="nav" data-section="winners">✓ <span>Win Analysis</span></a>
+      <a class="nav" data-section="breakdowns">▤ <span>Breakdowns</span></a>
+      <a class="nav" data-section="signals">▦ <span>Signal Inventory</span></a>
+      <a class="nav" data-section="ledger">⊞ <span>Decision Ledger</span></a>
+      <a class="nav" data-section="notes">✎ <span>Journal Notes</span></a>
+    </nav>
+  </div>
+  <div class="safe">● READ-ONLY<p>Dashboard di analisi. Non invia ordini e non modifica EA o repository.</p></div>
+</aside>
+
+<!-- ═══ Main Content ═══ -->
+<main>
+
+<!-- ── Header ── -->
+<div class="head">
+  <div>
+    <div class="eyebrow">AI Trading Agent / Analysis Dashboard</div>
+    <h1>AI Trading Journal</h1>
+    <div class="muted" style="font-size:11px">Research · Analysis · Pattern Discovery</div>
+  </div>
+  <div class="chips">
+    <span class="chip" id="chipGenerated">snapshot loading…</span>
+    <span class="chip green">● Read-only</span>
+  </div>
+</div>
+
+<!-- ── Date Filter Bar ── -->
+<div class="filter-bar" id="filterBar">
+  <button class="flt-btn" data-days="1">Today</button>
+  <button class="flt-btn" data-days="7">7d</button>
+  <button class="flt-btn" data-days="30">30d</button>
+  <button class="flt-btn" data-days="90">90d</button>
+  <button class="flt-btn active" data-days="0">All</button>
+  <div class="flt-sep"></div>
+  <label>From <input type="date" id="filterFrom"></label>
+  <label>To <input type="date" id="filterTo"></label>
+  <span class="filter-info" id="filterInfo">Showing all data</span>
+</div>
+
+<!-- ═══ SECTION: Overview ═══ -->
+<div class="section active" id="sec-overview">
+  <section class="hero"><div>
+    <div class="tag">AI TRADING AGENT</div>
+    <h2>Capire il trading. Una giornata alla volta.</h2>
+    <p>Storico segnali, risultati, analisi giornaliera, pattern nei vincenti e perdenti, breakdown per asset/sessione/qualità. Dati dal signal engine, non da MT5.</p>
+  </div><div class="chips"><span class="chip">5 strategies</span><span class="chip">Full trade history</span></div></section>
+
+  <!-- Top-level metrics -->
+  <section class="metrics" id="topMetrics"></section>
+
+  <!-- Strategy KPI cards -->
+  <section class="strat-kpi" id="stratKpiCards"></section>
+
+  <!-- Quick daily preview -->
+  <div class="panel">
+    <div class="panelhead"><b>Last 7 Days</b><small>Daily R performance</small></div>
+    <div class="body"><div class="scrollbox" style="max-height:300px"><table class="daily-table" id="recentDaily"><thead><tr>
+      <th>Date</th><th>Trades</th><th>W</th><th>L</th><th>Win%</th><th>Total R</th><th>Best</th><th>Worst</th>
+    </tr></thead><tbody></tbody></table></div></div>
+  </div>
+</div>
+
+<!-- ═══ SECTION: Strategy KPIs ═══ -->
+<div class="section" id="sec-strategies">
+  <h2>Strategy Performance</h2>
+  <p class="muted" style="font-size:12px;margin-bottom:14px">KPIs calcolati con la stessa logica della unified dashboard. Epoch: LH dal 24/08, TT dal 27/08.</p>
+  <section class="strat-kpi" id="stratKpiDetail"></section>
+
+  <!-- Strategy breakdown bars -->
+  <div class="grid2" id="stratBreakdowns"></div>
+</div>
+
+<!-- ═══ SECTION: Daily Summary ═══ -->
+<div class="section" id="sec-daily">
+  <h2>Daily Summary</h2>
+  <p class="muted" style="font-size:12px;margin-bottom:14px">Risultati giorno per giorno, migliore e peggiore strategia, asset attivi.</p>
+  <div class="panel">
+    <div class="panelhead"><b>Daily Performance Log</b><small id="dailyCount">—</small></div>
+    <div class="body"><div class="scrollbox" style="max-height:600px"><table class="daily-table" id="fullDaily"><thead><tr>
+      <th>Date</th><th>Trades</th><th>Wins</th><th>Losses</th><th>Win%</th><th>Total R</th><th>Best Strategy</th><th>Worst Strategy</th><th>Assets</th>
+    </tr></thead><tbody></tbody></table></div></div>
+  </div>
+</div>
+
+<!-- ═══ SECTION: Loss Analysis ═══ -->
+<div class="section" id="sec-losers">
+  <h2>Loss Analysis</h2>
+  <p class="muted" style="font-size:12px;margin-bottom:14px">Dove perdiamo, perché, e quali trade potevano essere evitati.</p>
+
+  <section class="metrics" id="lossMetrics"></section>
+
+  <div class="grid2">
+    <div class="panel">
+      <div class="panelhead"><b>Losses by Session</b></div>
+      <div class="body" id="lossBySession"></div>
+    </div>
+    <div class="panel">
+      <div class="panelhead"><b>Losses by Quality</b></div>
+      <div class="body" id="lossByQuality"></div>
+    </div>
+  </div>
+  <div class="grid2">
+    <div class="panel">
+      <div class="panelhead"><b>Losses by Strategy</b></div>
+      <div class="body" id="lossByStrategy"></div>
+    </div>
+    <div class="panel">
+      <div class="panelhead"><b>Losses by Asset</b></div>
+      <div class="body" id="lossByAsset"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panelhead"><b>Worst Losing Trades</b><small>Top 20 by R lost</small></div>
+    <div class="body"><div class="scrollbox"><table class="trade-table" id="worstLosses"><thead><tr>
+      <th>Date</th><th>Strategy</th><th>Asset</th><th>R</th><th>MAE</th><th>MFE</th><th>Session</th><th>Quality</th>
+    </tr></thead><tbody></tbody></table></div></div>
+  </div>
+</div>
+
+<!-- ═══ SECTION: Win Analysis ═══ -->
+<div class="section" id="sec-winners">
+  <h2>Win Analysis</h2>
+  <p class="muted" style="font-size:12px;margin-bottom:14px">Quanto profitto catturiamo, quanto lasciamo sul mercato, dove vinciamo di più.</p>
+
+  <section class="metrics" id="winMetrics"></section>
+
+  <div class="grid2">
+    <div class="panel">
+      <div class="panelhead"><b>Wins by Session</b></div>
+      <div class="body" id="winBySession"></div>
+    </div>
+    <div class="panel">
+      <div class="panelhead"><b>Wins by Strategy</b></div>
+      <div class="body" id="winByStrategy"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panelhead"><b>Profit Left on Table</b><small>Top 20 — MFE vs actual R captured</small></div>
+    <div class="body"><div class="scrollbox"><table class="trade-table" id="profitLeft"><thead><tr>
+      <th>Strategy</th><th>Asset</th><th>Captured R</th><th>MFE R</th><th>Left on Table R</th>
+    </tr></thead><tbody></tbody></table></div></div>
+  </div>
+
+  <div class="panel">
+    <div class="panelhead"><b>Best Winning Trades</b><small>Top 20 by R</small></div>
+    <div class="body"><div class="scrollbox"><table class="trade-table" id="bestWins"><thead><tr>
+      <th>Date</th><th>Strategy</th><th>Asset</th><th>R</th><th>MFE</th><th>Session</th><th>Quality</th>
+    </tr></thead><tbody></tbody></table></div></div>
+  </div>
+</div>
+
+<!-- ═══ SECTION: Breakdowns ═══ -->
+<div class="section" id="sec-breakdowns">
+  <h2>Performance Breakdowns</h2>
+  <p class="muted" style="font-size:12px;margin-bottom:14px">Win rate, expectancy e R totali segmentati per asset, sessione, qualità e direzione.</p>
+  <div class="grid2" id="breakdownPanels"></div>
+</div>
+
+<!-- ═══ SECTION: Signal Inventory ═══ -->
+<div class="section" id="sec-signals">
+  <h2>Signal Inventory (30 days)</h2>
+  <p class="muted" style="font-size:12px;margin-bottom:14px">Tutti i segnali degli ultimi 30 giorni da tutte le 5 strategie.</p>
+  <section class="metrics" id="signalCounts"></section>
+  <div class="panel">
+    <div class="panelhead"><b>All Signals</b><small id="signalTotal">—</small></div>
+    <div class="body"><div class="scrollbox" style="max-height:600px"><table class="trade-table" id="signalTable"><thead><tr>
+      <th>Strategy</th><th>Asset</th><th>Dir</th><th>Outcome</th><th>Setup</th><th>Entry</th><th>SL</th><th>TP</th><th>MAE</th><th>MFE</th><th>R</th><th>Quality</th>
+    </tr></thead><tbody></tbody></table></div></div>
+  </div>
+</div>
+
+<!-- ═══ SECTION: Decision Ledger ═══ -->
+<div class="section" id="sec-ledger">
+  <h2>Decision Ledger</h2>
+  <p class="muted" style="font-size:12px;margin-bottom:14px">Panoramica del decision ledger: executed vs rejected, top rejection gates, outcome distribution.</p>
+  <section class="metrics" id="ledgerMetrics"></section>
+  <div class="grid2">
+    <div class="panel">
+      <div class="panelhead"><b>Executed vs Rejected by Strategy</b></div>
+      <div class="body" id="ledgerByStrategy"></div>
+    </div>
+    <div class="panel">
+      <div class="panelhead"><b>Top Rejection Gates</b></div>
+      <div class="body" id="ledgerGates"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SECTION: Journal Notes ═══ -->
+<div class="section" id="sec-notes">
+  <h2>Daily Journal & AI Observations</h2>
+  <p class="muted" style="font-size:12px;margin-bottom:14px">Note salvate nel browser, esportabili come JSON.</p>
+  <div class="grid2">
+    <div>
+      <div class="mini" style="margin-bottom:10px"><span>Journal Entries</span><b id="noteCount">0 saved</b></div>
+      <form class="noteform" id="noteForm">
+        <label>Date<input id="noteDate" type="date" required></label>
+        <label>Strategy<select id="noteStrategy"><option>All strategies</option><option>TT</option><option>OTE-LAB</option><option>TRB</option><option>LH</option><option>V41P1</option></select></label>
+        <label>Entry type<select id="noteCategory"><option>Daily Summary</option><option>Market Context</option><option>Signal / Outcome</option><option>AI Observation</option><option>Hypothesis to test</option><option>Data issue</option><option>Next Check</option></select></label>
+        <label>Observation<textarea id="noteText" placeholder="Fatti osservati, non conclusioni non verificate…" required maxlength="5000"></textarea></label>
+        <label>Evidence / IDs<textarea id="noteEvidence" placeholder="Signal ID, decision ID, asset, timeframe…" maxlength="2000"></textarea></label>
+        <button type="submit">＋ Save journal entry</button>
+      </form>
+      <div class="chips" style="margin-top:12px">
+        <button class="chip" type="button" id="exportNotes">Export JSON</button>
+        <label class="chip" style="cursor:pointer">Import JSON<input id="importNotes" type="file" accept="application/json" style="display:none"></label>
+        <button class="chip" type="button" id="clearNotes">Clear</button>
+      </div>
+    </div>
+    <div id="notesList"></div>
+  </div>
+</div>
+
+<div class="foot"><span>AI Trading Agent · Research only · no trading actions</span><span>Read-only snapshot · journal saved locally</span></div>
+
+</main></div>
+
+<!-- AI_JOURNAL_PAYLOAD -->
+
+<script>
+/* ── Navigation ── */
+document.querySelectorAll('.nav[data-section]').forEach(a=>{
+  a.addEventListener('click',()=>{
+    document.querySelectorAll('.nav').forEach(n=>n.classList.remove('active'));
+    a.classList.add('active');
+    document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+    const sec=document.getElementById('sec-'+a.dataset.section);
+    if(sec)sec.classList.add('active');
+  });
+});
+
+/* ── Helpers ── */
+const esc=x=>String(x??'—').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fp=v=>{if(v==null)return'—';v=+v;return v>1000?v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):v.toFixed(4)};
+const rBadge=r=>{r=+r;return`<span class="badge ${r>0?'b-win':r<0?'b-loss':'b-neutral'}">${r>0?'+':''}${r.toFixed(2)}R</span>`};
+const outBadge=o=>{const w=['TP','TP1_HIT','TP2_HIT','TRAIL_HIT','TRAIL','STAGE2_HIT'];const l=['SL','SL_HIT'];return`<span class="badge ${w.includes(o)?'b-win':l.includes(o)?'b-loss':'b-neutral'}">${esc(o)}</span>`};
+const qlBadge=q=>`<span class="badge ${{HIGH:'b-high',PREMIUM:'b-high',MEDIUM:'b-med',LOW:'b-low'}[q]||'b-neutral'}">${esc(q)}</span>`;
+const pct=v=>v!=null?v.toFixed(1)+'%':'—';
+const fmtDate=s=>s?s.slice(0,10):'—';
+
+function breakdownBars(container,data,color){
+  if(!data||!Object.keys(data).length){container.innerHTML='<p class="muted" style="font-size:11px">No data</p>';return}
+  const max=Math.max(...Object.values(data).map(v=>typeof v==='object'?v.n:v));
+  let html='';
+  const entries=Object.entries(data).sort((a,b)=>(typeof b[1]==='object'?b[1].n:b[1])-(typeof a[1]==='object'?a[1].n:a[1]));
+  for(const[k,v]of entries){
+    const n=typeof v==='object'?v.n:v;
+    const extra=typeof v==='object'?` · ${pct(v.win_rate)} WR · ${(v.exp_r||0)>0?'+':''}${(v.exp_r||0).toFixed(2)}R`:'';
+    const w=Math.round(n/max*100);
+    html+=`<div class="breakdown-row"><b>${esc(k)}</b><div><div class="bar bar-${color}"><i style="width:${w}%"></i></div></div><div style="text-align:right;font-size:11px">${n}${extra}</div></div>`;
+  }
+  container.innerHTML=html;
+}
+
+/* ── Journal (localStorage) ── */
+const JKEY='aiTradingJournalNotes_v2';
+function jRead(){try{return JSON.parse(localStorage.getItem(JKEY)||'[]')}catch(e){return[]}}
+function jRender(){
+  const notes=jRead().sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  document.getElementById('noteCount').textContent=notes.length+' entr'+(notes.length===1?'y':'ies')+' saved';
+  const list=document.getElementById('notesList');
+  list.innerHTML=notes.map((n,i)=>`<article class="noteitem"><header><span>${esc(n.date)} · ${esc(n.strategy)} · ${esc(n.category)}</span><button data-del="${i}" style="border:0;background:none;color:#8494a8;cursor:pointer">×</button></header><p>${esc(n.text)}${n.evidence?`\n\nEvidence: ${esc(n.evidence)}`:''}</p></article>`).join('');
+  list.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{let a=jRead().sort((x,y)=>String(y.date).localeCompare(String(x.date)));a.splice(+b.dataset.del,1);localStorage.setItem(JKEY,JSON.stringify(a));jRender()});
+}
+const noteForm=document.getElementById('noteForm');
+noteForm.addEventListener('submit',e=>{e.preventDefault();const t=document.getElementById('noteText').value.trim();if(!t)return;const a=jRead();a.push({date:document.getElementById('noteDate').value,strategy:document.getElementById('noteStrategy').value,category:document.getElementById('noteCategory').value,text:t,evidence:document.getElementById('noteEvidence').value.trim(),created:new Date().toISOString()});localStorage.setItem(JKEY,JSON.stringify(a));document.getElementById('noteText').value='';document.getElementById('noteEvidence').value='';jRender()});
+document.getElementById('exportNotes').onclick=()=>{const b=new Blob([JSON.stringify(jRead(),null,2)],{type:'application/json'}),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download='ai-trading-journal-notes.json';a.click();URL.revokeObjectURL(u)};
+document.getElementById('importNotes').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);if(!Array.isArray(d))throw 0;localStorage.setItem(JKEY,JSON.stringify([...jRead(),...d]));jRender();e.target.value=''}catch{alert('JSON non valido')}};r.readAsText(f)};
+document.getElementById('clearNotes').onclick=()=>{if(confirm('Clear all journal entries?')){localStorage.removeItem(JKEY);jRender()}};
+try{document.getElementById('noteDate').value=new Date().toISOString().slice(0,10)}catch(e){}
+jRender();
+
+/* ── Payload rendering with date filter ── */
+(function(){
+  const el=document.getElementById('ai-journal-payload');
+  if(!el)return;
+  let D;try{D=JSON.parse(el.textContent)}catch(e){return}
+
+  document.getElementById('chipGenerated').textContent='Generated '+fmtDate(D.generated_utc)+' · read-only';
+
+  const allTrades=D.trades||[];
+  const allDaily=D.daily_summary||[];
+  const colors={TT:'tt','OTE-LAB':'ote',TRB:'trb',LH:'lh',V41P1:'v41'};
+  const WIN_OUTCOMES=['TP','TP1_HIT','TP2_HIT','TRAIL_HIT','TRAIL','STAGE2_HIT'];
+  const LOSS_OUTCOMES=['SL','SL_HIT'];
+
+  /* ── Date filter wiring ── */
+  const fFrom=document.getElementById('filterFrom');
+  const fTo=document.getElementById('filterTo');
+  const fInfo=document.getElementById('filterInfo');
+
+  function setPreset(days,btn){
+    document.querySelectorAll('.flt-btn').forEach(b=>b.classList.remove('active'));
+    if(btn)btn.classList.add('active');
+    if(days===0){
+      fFrom.value='';fTo.value='';
+    }else{
+      const now=new Date();
+      const to=now.toISOString().slice(0,10);
+      fTo.value=to;
+      if(days===1){
+        fFrom.value=to;
+      }else{
+        const from=new Date(now);from.setDate(from.getDate()-(days-1));
+        fFrom.value=from.toISOString().slice(0,10);
+      }
+    }
+    render();
+  }
+
+  document.querySelectorAll('.flt-btn').forEach(btn=>{
+    btn.addEventListener('click',()=>setPreset(+btn.dataset.days,btn));
+  });
+
+  /* Smart: changing date inputs applies immediately and deselects preset */
+  fFrom.addEventListener('change',()=>{
+    document.querySelectorAll('.flt-btn').forEach(b=>b.classList.remove('active'));
+    render();
+  });
+  fTo.addEventListener('change',()=>{
+    document.querySelectorAll('.flt-btn').forEach(b=>b.classList.remove('active'));
+    render();
+  });
+
+  function filterByDate(items,dateKey){
+    const from=fFrom.value;const to=fTo.value;
+    if(!from&&!to)return items;
+    return items.filter(t=>{
+      const d=(t[dateKey]||'').slice(0,10);
+      if(!d)return false;
+      if(from&&d<from)return false;
+      if(to&&d>to)return false;
+      return true;
+    });
+  }
+
+  /* ── Compute KPIs from filtered trades ── */
+  function computeKpis(trades){
+    const byStrat={};
+    for(const t of trades){
+      const s=t.strategy||'?';
+      if(!byStrat[s])byStrat[s]={n:0,wins:0,losses:0,open:0,total_r:0};
+      const k=byStrat[s];
+      if(t.is_open){k.open++;continue}
+      k.n++;
+      if(t.is_win)k.wins++;
+      if(t.is_loss)k.losses++;
+      k.total_r+=(t.result_r||0);
+    }
+    for(const k of Object.values(byStrat)){
+      k.win_rate=k.n>0?k.wins/k.n*100:0;
+      k.exp_r=k.n>0?k.total_r/k.n:0;
+    }
+    return byStrat;
+  }
+
+  function computeBreakdowns(trades){
+    const dims=['asset','session','quality','direction','strategy'];
+    const result={};
+    for(const dim of dims){
+      const map={};
+      for(const t of trades){
+        if(t.is_open)continue;
+        const key=t[dim]||'?';
+        if(!map[key])map[key]={n:0,wins:0,total_r:0};
+        map[key].n++;
+        if(t.is_win)map[key].wins++;
+        map[key].total_r+=(t.result_r||0);
+      }
+      for(const v of Object.values(map)){
+        v.win_rate=v.n>0?v.wins/v.n*100:0;
+        v.exp_r=v.n>0?v.total_r/v.n:0;
+      }
+      result['by_'+dim]=map;
+    }
+    return result;
+  }
+
+  function computeDaily(trades){
+    const byDay={};
+    for(const t of trades){
+      if(t.is_open)continue;
+      const day=t.date;if(!day)continue;
+      if(!byDay[day])byDay[day]={date:day,trades:0,wins:0,losses:0,total_r:0,assets:new Set(),byStrat:{}};
+      const dy=byDay[day];
+      dy.trades++;
+      if(t.is_win)dy.wins++;
+      if(t.is_loss)dy.losses++;
+      dy.total_r+=(t.result_r||0);
+      if(t.asset)dy.assets.add(t.asset);
+      const s=t.strategy||'?';
+      if(!dy.byStrat[s])dy.byStrat[s]=0;
+      dy.byStrat[s]+=(t.result_r||0);
+    }
+    return Object.values(byDay).sort((a,b)=>b.date.localeCompare(a.date)).map(dy=>{
+      dy.win_rate=dy.trades>0?dy.wins/dy.trades*100:0;
+      dy.assets=[...dy.assets];
+      const sorted=Object.entries(dy.byStrat).sort((a,b)=>b[1]-a[1]);
+      dy.best_strategy=sorted[0]?sorted[0][0]:'—';
+      dy.best_strategy_r=sorted[0]?sorted[0][1]:0;
+      dy.worst_strategy=sorted.length?sorted[sorted.length-1][0]:'—';
+      dy.worst_strategy_r=sorted.length?sorted[sorted.length-1][1]:0;
+      return dy;
+    });
+  }
+
+  function computeLosing(trades){
+    const losers=trades.filter(t=>!t.is_open&&t.is_loss);
+    const count=losers.length;
+    const maes=losers.map(t=>t.mae).filter(v=>v!=null);
+    const avg_mae=maes.length?maes.reduce((s,v)=>s+Math.abs(+v),0)/maes.length:0;
+    const wentGreen=losers.filter(t=>t.mfe!=null&&+t.mfe>0);
+    const dims=['session','quality','strategy','asset'];
+    const result={count,avg_mae:avg_mae.toFixed(2),went_green_before_sl:wentGreen.length,went_green_pct:count>0?wentGreen.length/count*100:0};
+    for(const dim of dims){
+      const map={};
+      for(const t of losers){const k=t[dim]||'?';map[k]=(map[k]||0)+1}
+      result['by_'+dim]=map;
+    }
+    result.worst_losses=losers.sort((a,b)=>(a.result_r||0)-(b.result_r||0)).slice(0,20);
+    return result;
+  }
+
+  function computeWinning(trades){
+    const winners=trades.filter(t=>!t.is_open&&t.is_win);
+    const count=winners.length;
+    const rs=winners.map(t=>t.result_r||0);
+    const avg_r=count>0?rs.reduce((s,v)=>s+v,0)/count:0;
+    const captures=winners.filter(t=>t.mfe!=null&&+t.mfe>0&&t.result_r>0).map(t=>t.result_r/(+t.mfe||1)*100);
+    const avg_mfe_capture_pct=captures.length?captures.reduce((s,v)=>s+v,0)/captures.length:0;
+    const dims=['session','strategy'];
+    const result={count,avg_r,avg_mfe_capture_pct};
+    for(const dim of dims){
+      const map={};
+      for(const t of winners){const k=t[dim]||'?';map[k]=(map[k]||0)+1}
+      result['by_'+dim]=map;
+    }
+    result.best_wins=winners.sort((a,b)=>(b.result_r||0)-(a.result_r||0)).slice(0,20);
+    return result;
+  }
+
+  /* ── Main render function ── */
+  function render(){
+    const ft=filterByDate(allTrades,'date');
+    const fd=filterByDate(allDaily,'date');
+    const from=fFrom.value;const to=fTo.value;
+    fInfo.textContent=(!from&&!to)?'Showing all data':`${from||'start'} → ${to||'now'} · ${ft.filter(t=>!t.is_open).length} trades`;
+
+    const kpis=computeKpis(ft);
+    const breakdowns=computeBreakdowns(ft);
+    const daily=fd.length?fd:computeDaily(ft);
+    const la=computeLosing(ft);
+    const wa=computeWinning(ft);
+
+    /* ── Overview metrics ── */
+    const totalTrades=Object.values(kpis).reduce((s,k)=>s+(k.n||0),0);
+    const totalOpen=Object.values(kpis).reduce((s,k)=>s+(k.open||0),0);
+    const totalR=Object.values(kpis).reduce((s,k)=>s+(k.total_r||0),0);
+    const totalWins=Object.values(kpis).reduce((s,k)=>s+(k.wins||0),0);
+    const overallWR=totalTrades>0?(totalWins/totalTrades*100).toFixed(1):0;
+    const overallExp=totalTrades>0?(totalR/totalTrades).toFixed(2):0;
+    document.getElementById('topMetrics').innerHTML=[
+      ['Total Trades','⌁',totalTrades,'Closed in range'],
+      ['Open Now','◷',totalOpen,'Active signals'],
+      ['Win Rate','✓',overallWR+'%','Overall',+overallWR>=40?'pos':+overallWR<25?'neg':'warn'],
+      ['Expectancy','⊕',(+overallExp>0?'+':'')+overallExp+'R','Per trade',+overallExp>0?'pos':'neg'],
+      ['Total R','Σ',(+totalR>0?'+':'')+totalR.toFixed(1)+'R','Cumulative',+totalR>0?'pos':'neg'],
+      ['Ledger','▤',(D.ledger?.total_rows||0).toLocaleString(),'Decision rows'],
+    ].map(([cap,icon,val,sub,cls])=>`<div class="metric"><div class="cap">${cap} <span>${icon}</span></div><strong class="${cls||''}">${val}</strong><small>${sub}</small></div>`).join('');
+
+    /* ── Strategy KPI cards ── */
+    function stratCards(container){
+      container.innerHTML=Object.entries(kpis).map(([name,k])=>`
+        <div class="strat-card ${colors[name]||''}">
+          <h3>${esc(name)}${name==='V41P1'?'<span class="exp-badge">EXPERIMENTAL</span>':''}</h3>
+          <div class="kpi-grid">
+            <div class="kv"><span>Closed</span><b>${k.n}</b></div>
+            <div class="kv"><span>Open</span><b>${k.open}</b></div>
+            <div class="kv"><span>Win Rate</span><b class="${k.win_rate>=40?'pos':k.win_rate<25?'neg':'warn'}">${pct(k.win_rate)}</b></div>
+            <div class="kv"><span>Expectancy</span><b class="${k.exp_r>0?'pos':'neg'}">${k.exp_r>0?'+':''}${(k.exp_r||0).toFixed(2)}R</b></div>
+            <div class="kv"><span>Total R</span><b class="${k.total_r>0?'pos':'neg'}">${k.total_r>0?'+':''}${(k.total_r||0).toFixed(1)}R</b></div>
+            <div class="kv"><span>Wins / Losses</span><b>${k.wins||0} / ${k.losses||0}</b></div>
+          </div>
+        </div>`).join('');
+    }
+    stratCards(document.getElementById('stratKpiCards'));
+    stratCards(document.getElementById('stratKpiDetail'));
+
+    /* Strategy breakdown bars */
+    const sb=document.getElementById('stratBreakdowns');
+    if(breakdowns.by_strategy){
+      sb.innerHTML=`
+        <div class="panel"><div class="panelhead"><b>Win Rate by Strategy</b></div><div class="body" id="sbWR"></div></div>
+        <div class="panel"><div class="panelhead"><b>Expectancy by Strategy</b></div><div class="body" id="sbExp"></div></div>`;
+      breakdownBars(document.getElementById('sbWR'),breakdowns.by_strategy,'blue');
+      breakdownBars(document.getElementById('sbExp'),breakdowns.by_strategy,'green');
+    }
+
+    /* ── Daily Summary ── */
+    document.getElementById('dailyCount').textContent=daily.length+' days';
+
+    const recent7=daily.slice(0,7);
+    document.querySelector('#recentDaily tbody').innerHTML=recent7.map(dy=>`<tr>
+      <td>${dy.date}</td><td>${dy.trades}</td><td class="pos">${dy.wins}</td><td class="neg">${dy.losses}</td>
+      <td>${pct(dy.win_rate)}</td><td>${rBadge(dy.total_r)}</td>
+      <td>${esc(dy.best_strategy)} ${rBadge(dy.best_strategy_r)}</td>
+      <td>${esc(dy.worst_strategy)} ${rBadge(dy.worst_strategy_r)}</td>
+    </tr>`).join('');
+
+    document.querySelector('#fullDaily tbody').innerHTML=daily.map(dy=>`<tr>
+      <td>${dy.date}</td><td>${dy.trades}</td><td class="pos">${dy.wins}</td><td class="neg">${dy.losses}</td>
+      <td>${pct(dy.win_rate)}</td><td>${rBadge(dy.total_r)}</td>
+      <td>${esc(dy.best_strategy)} ${rBadge(dy.best_strategy_r)}</td>
+      <td>${esc(dy.worst_strategy)} ${rBadge(dy.worst_strategy_r)}</td>
+      <td>${(dy.assets||[]).join(', ')}</td>
+    </tr>`).join('');
+
+    /* ── Loss Analysis ── */
+    document.getElementById('lossMetrics').innerHTML=[
+      ['Total Losses','✕',la.count||0,'SL/SL_HIT trades'],
+      ['Avg MAE','↓',la.avg_mae||0,'Average adverse excursion'],
+      ['Went Green','↑↓',(la.went_green_before_sl||0)+' ('+pct(la.went_green_pct)+')','Had MFE>0 before SL'],
+    ].map(([c,i,v,s])=>`<div class="metric"><div class="cap">${c} <span>${i}</span></div><strong class="neg">${v}</strong><small>${s}</small></div>`).join('');
+
+    breakdownBars(document.getElementById('lossBySession'),la.by_session,'red');
+    breakdownBars(document.getElementById('lossByQuality'),la.by_quality,'amber');
+    breakdownBars(document.getElementById('lossByStrategy'),la.by_strategy,'red');
+    breakdownBars(document.getElementById('lossByAsset'),la.by_asset,'amber');
+
+    document.querySelector('#worstLosses tbody').innerHTML=(la.worst_losses||[]).map(t=>`<tr>
+      <td>${t.date||'—'}</td><td>${esc(t.strategy)}</td><td>${esc(t.asset)}</td>
+      <td>${rBadge(t.result_r)}</td><td>${t.mae??'—'}</td><td>${t.mfe??'—'}</td>
+      <td>${esc(t.session)}</td><td>${qlBadge(t.quality)}</td>
+    </tr>`).join('');
+
+    /* ── Win Analysis ── */
+    document.getElementById('winMetrics').innerHTML=[
+      ['Total Wins','✓',wa.count||0,'Winning trades'],
+      ['Avg R Won','⊕',(wa.avg_r||0).toFixed(2)+'R','Average R per win'],
+      ['MFE Capture','◈',pct(wa.avg_mfe_capture_pct),'% of MFE captured'],
+    ].map(([c,i,v,s])=>`<div class="metric"><div class="cap">${c} <span>${i}</span></div><strong class="pos">${v}</strong><small>${s}</small></div>`).join('');
+
+    breakdownBars(document.getElementById('winBySession'),wa.by_session,'green');
+    breakdownBars(document.getElementById('winByStrategy'),wa.by_strategy,'green');
+
+    /* Profit left on table — compute from filtered trades */
+    const profitLeft=ft.filter(t=>!t.is_open&&t.is_win&&t.mfe!=null&&t.result_r!=null&&+t.mfe>t.result_r)
+      .map(t=>({strategy:t.strategy,asset:t.asset,result_r:t.result_r,mfe_r:+t.mfe,left_r:+t.mfe-t.result_r}))
+      .sort((a,b)=>b.left_r-a.left_r).slice(0,20);
+    document.querySelector('#profitLeft tbody').innerHTML=profitLeft.map(t=>`<tr>
+      <td>${esc(t.strategy)}</td><td>${esc(t.asset)}</td>
+      <td>${rBadge(t.result_r)}</td><td class="pos">+${t.mfe_r.toFixed(2)}R</td>
+      <td class="neg">${t.left_r.toFixed(2)}R left</td>
+    </tr>`).join('');
+
+    document.querySelector('#bestWins tbody').innerHTML=(wa.best_wins||[]).map(t=>`<tr>
+      <td>${t.date||'—'}</td><td>${esc(t.strategy)}</td><td>${esc(t.asset)}</td>
+      <td>${rBadge(t.result_r)}</td><td>${t.mfe??'—'}</td>
+      <td>${esc(t.session)}</td><td>${qlBadge(t.quality)}</td>
+    </tr>`).join('');
+
+    /* ── Breakdowns ── */
+    const bp=document.getElementById('breakdownPanels');
+    const bdNames={by_asset:'By Asset',by_session:'By Session',by_quality:'By Quality',by_direction:'By Direction'};
+    const bdColors={by_asset:'blue',by_session:'green',by_quality:'amber',by_direction:'blue'};
+    bp.innerHTML=Object.entries(bdNames).map(([key,title])=>`
+      <div class="panel"><div class="panelhead"><b>${title}</b></div><div class="body" id="bd-${key}"></div></div>
+    `).join('');
+    for(const[key]of Object.entries(bdNames)){
+      breakdownBars(document.getElementById('bd-'+key),breakdowns[key],bdColors[key]);
+    }
+
+    /* ── Signal Inventory (always full, not filtered — it's a 30d inventory) ── */
+    const si=D.signal_inventory||{};
+    const sc=document.getElementById('signalCounts');
+    sc.innerHTML=Object.entries(si).map(([name,s])=>`<div class="metric"><div class="cap">${name}</div><strong>${s.count||0}</strong><small>${s.available?'connected':'missing'}</small></div>`).join('');
+    document.getElementById('signalTotal').textContent=(D.total_30d||0)+' signals (30d)';
+    let sigRows='';
+    for(const[name,s]of Object.entries(si)){
+      for(const r of(s.rows||[])){
+        sigRows+=`<tr>
+          <td>${esc(name)}</td><td>${esc(r.asset)}</td><td>${esc(r.direction)}</td>
+          <td>${outBadge(r.outcome)}</td><td>${fmtDate(r.setup_at)}</td>
+          <td>${fp(r.entry)}</td><td>${fp(r.sl)}</td><td>${fp(r.tp)}</td>
+          <td>${r.mae??'—'}</td><td>${r.mfe??'—'}</td><td>${r.result_r!=null?rBadge(r.result_r):'—'}</td>
+          <td>${qlBadge(r.quality)}</td>
+        </tr>`;
+      }
+    }
+    document.querySelector('#signalTable tbody').innerHTML=sigRows;
+
+    /* ── Decision Ledger (always full — aggregated server-side) ── */
+    const lg=D.ledger||{};
+    const lMetrics=document.getElementById('ledgerMetrics');
+    if(lg.available){
+      lMetrics.innerHTML=[
+        ['Total Rows','▤',(lg.total_rows||0).toLocaleString(),'All decisions recorded'],
+        ['Date Range','◷',`${lg.date_range?.from||'?'} → ${lg.date_range?.to||'?'}`,'Coverage'],
+      ].map(([c,i,v,s])=>`<div class="metric"><div class="cap">${c} <span>${i}</span></div><strong>${v}</strong><small>${s}</small></div>`).join('');
+      const lbs=document.getElementById('ledgerByStrategy');
+      let lhtml='';
+      for(const[strat,types]of Object.entries(lg.by_strategy||{})){
+        const ex=types.EXECUTED||0;const rej=types.REJECTED||0;const total=ex+rej;
+        const rejPct=total>0?(rej/total*100).toFixed(1):0;
+        lhtml+=`<div class="breakdown-row"><b>${esc(strat)}</b><div>
+          <div style="font-size:10px;color:var(--muted)">Exec: ${ex} · Rej: ${rej.toLocaleString()} (${rejPct}%)</div>
+          <div class="bar bar-blue"><i style="width:${total>0?Math.round(ex/total*100):0}%"></i></div>
+        </div><div style="text-align:right;font-size:11px">${total.toLocaleString()}</div></div>`;
+      }
+      lbs.innerHTML=lhtml;
+      breakdownBars(document.getElementById('ledgerGates'),lg.top_reject_gates,'amber');
+    }else{
+      lMetrics.innerHTML='<div class="metric"><div class="cap">Status</div><strong class="warn">Not connected</strong><small>Decision ledger DB not found</small></div>';
+    }
+  }
+
+  /* Initial render */
+  render();
+})();
+</script>
+</body></html>
