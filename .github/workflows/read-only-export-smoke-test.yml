@@ -1,0 +1,69 @@
+name: Read-only trading export smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exporter-smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout isolated exporter branch
+        uses: actions/checkout@v4
+        with:
+          ref: ai/read-only-exporter
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Create disposable SQLite fixtures
+        run: |
+          python - <<'PY'
+          import sqlite3
+          for name, table, rows in [
+              ("signals_test.db", "signals", [(1, "BTCUSDT", "BUY"), (2, "XAUUSD", "SELL")]),
+              ("ledger_test.db", "decision_ledger", [(1, "TRB", "WIN"), (2, "LH", "LOSS")]),
+          ]:
+              con = sqlite3.connect(name)
+              con.execute(f"CREATE TABLE {table} (id INTEGER, strategy TEXT, outcome TEXT)")
+              con.executemany(f"INSERT INTO {table} VALUES (?, ?, ?)", rows)
+              con.commit()
+              con.close()
+          PY
+
+      - name: Run exporter against disposable fixtures
+        run: |
+          python tools/readonly_export/export_trading_data_full.py \
+            --signals-db signals_test.db \
+            --ledger-db ledger_test.db \
+            --out export_smoke_test
+
+      - name: Validate export manifest and compressed table files
+        run: |
+          python - <<'PY'
+          import gzip, json
+          from pathlib import Path
+          out = Path("export_smoke_test")
+          manifest = json.loads((out / "manifest.json").read_text())
+          tables = [t for db in manifest["source_databases"] for t in db["tables"].values()]
+          assert len(tables) == 2, f"Expected 2 tables, got {len(tables)}"
+          assert sum(t["row_count"] for t in tables) == 4
+          for item in tables:
+              path = out / item["file"]
+              assert path.exists() and path.stat().st_size > 0
+              with gzip.open(path, "rt", encoding="utf-8") as f:
+                  payload = json.load(f)
+              assert payload["row_count"] == item["row_count"]
+          print(f"PASS: {len(tables)} tables, 4 rows; gzip JSON validated.")
+          PY
+
+      - name: Upload smoke-test export artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: read-only-export-smoke-test
+          path: export_smoke_test/
+          retention-days: 3
