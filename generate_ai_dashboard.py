@@ -659,6 +659,224 @@ def collect_ledger_summary(con):
         return {"available": False, "error": str(e)}
 
 
+# ── Exit Lab: Simplified exit simulation using MAE/MFE ──
+
+# Dollar per point (lot sizes from EA config)
+DPP_MAP = {
+    "BTC_USDT": 0.03,
+    "PAXG_USDT": 0.03,
+    "XAU_USD": 1.00,
+}
+
+# EA v1.35 Progressive Profit Ladder: (peak_dollars, lock_dollars)
+PROFIT_LADDER = [
+    (3.50, 1.00), (4.00, 2.00), (5.00, 3.00), (6.00, 3.50),
+    (7.00, 4.00), (8.00, 5.00), (9.00, 6.00), (10.00, 7.00),
+    (12.00, 9.00), (15.00, 12.00), (18.00, 15.00), (21.00, 18.00),
+]
+MONETARY_SL = 5.50
+
+
+def _ladder_lock(mfe_dollars):
+    """Find the highest profit ladder lock level for a given MFE in dollars."""
+    lock = None
+    for peak, lk in PROFIT_LADDER:
+        if mfe_dollars >= peak:
+            lock = lk
+    return lock
+
+
+def _sim_monetary_ladder(mfe_r, mae_r, mfe_dollars, mae_dollars,
+                         risk_points, dpp, original_r):
+    """Config A: Monetary SL $5.50 + Progressive Profit Ladder."""
+    lock = _ladder_lock(mfe_dollars)
+
+    if lock is not None and lock > 0:
+        # Ladder triggered — profit secured at lock level
+        sim_dollars = lock
+        sim_r = sim_dollars / (risk_points * dpp) if (risk_points * dpp) > 0 else 0
+        exit_type = "LADDER"
+    elif mae_dollars >= MONETARY_SL:
+        # Monetary stop hit before any ladder level
+        sim_dollars = -MONETARY_SL
+        sim_r = sim_dollars / (risk_points * dpp) if (risk_points * dpp) > 0 else -1.0
+        exit_type = "MONETARY_SL"
+    else:
+        # Neither triggered — original outcome stands
+        sim_dollars = original_r * risk_points * dpp
+        sim_r = original_r
+        exit_type = "ORIGINAL"
+
+    return {
+        "sim_r": round(sim_r, 3),
+        "sim_dollars": round(sim_dollars, 2),
+        "exit_type": exit_type,
+        "delta_r": round(sim_r - original_r, 3),
+        "ladder_lock": lock,
+    }
+
+
+def _sim_be_trail(mfe_r, mae_r, risk_points, dpp,
+                  be_activate, trail_distance, original_r):
+    """Config B/C: Break-even activation + trailing stop."""
+    if mfe_r >= be_activate:
+        # BE activated, trail from MFE peak
+        trail_exit_r = max(0, mfe_r - trail_distance)
+        # For losers: the trade would have been saved
+        # For winners: might exit earlier than TP
+        sim_r = round(trail_exit_r, 3)
+        exit_type = "TRAIL" if trail_exit_r > 0 else "BE"
+    else:
+        # MFE never reached BE threshold → original SL hit
+        sim_r = original_r
+        exit_type = "ORIGINAL"
+
+    sim_dollars = sim_r * risk_points * dpp
+    return {
+        "sim_r": round(sim_r, 3),
+        "sim_dollars": round(sim_dollars, 2),
+        "exit_type": exit_type,
+        "delta_r": round(sim_r - original_r, 3),
+    }
+
+
+def simulate_exit_lab(trades):
+    """Run 3 exit strategy simulations on all closed trades with MAE/MFE."""
+    configs_meta = {
+        "A": {"name": "Monetary SL + Ladder",
+               "desc": "Fixed $5.50 SL + Progressive Profit Ladder (EA v1.35)"},
+        "B": {"name": "BE 0.4R + Trail 0.3R",
+               "desc": "Break-even at 0.4R, trail 0.3R behind MFE peak (Shadow A)"},
+        "C": {"name": "BE 0.6R + Trail 0.5R",
+               "desc": "Break-even at 0.6R, trail 0.5R behind MFE peak (LH params)"},
+    }
+
+    results = {}
+    for k in configs_meta:
+        results[k] = {"wins": 0, "losses": 0, "be": 0, "total_r": 0.0,
+                       "total_dollars": 0.0, "saved": 0, "reduced": 0,
+                       "trades": []}
+
+    eligible = 0
+    skipped = 0
+
+    for t in trades:
+        entry_val = safe_float(t.get("entry"))
+        sl_val = safe_float(t.get("sl"))
+        mfe_val = t.get("mfe")
+        mae_val = t.get("mae")
+        asset = t.get("asset", "")
+
+        if not entry_val or not sl_val or mfe_val is None or mae_val is None:
+            skipped += 1
+            continue
+
+        risk_pts = abs(entry_val - sl_val)
+        if risk_pts < 0.01:
+            skipped += 1
+            continue
+
+        dpp = DPP_MAP.get(asset, 0.03)
+        mfe_r = abs(float(mfe_val)) / risk_pts
+        mae_r = abs(float(mae_val)) / risk_pts
+        mfe_dollars = abs(float(mfe_val)) * dpp
+        mae_dollars = abs(float(mae_val)) * dpp
+        original_r = safe_float(t.get("result_r"), 0.0)
+        original_win = t.get("is_win", False)
+        original_loss = t.get("is_loss", False)
+
+        eligible += 1
+
+        base = {
+            "id": t.get("id"), "strategy": t.get("strategy"),
+            "asset": asset, "direction": t.get("direction"),
+            "date": t.get("date"), "original_r": original_r,
+            "original_outcome": t.get("outcome"),
+            "mfe_r": round(mfe_r, 2), "mae_r": round(mae_r, 2),
+            "mfe_dollars": round(mfe_dollars, 2),
+            "mae_dollars": round(mae_dollars, 2),
+            "original_win": original_win, "original_loss": original_loss,
+        }
+
+        # Config A
+        sim_a = _sim_monetary_ladder(mfe_r, mae_r, mfe_dollars, mae_dollars,
+                                     risk_pts, dpp, original_r)
+        results["A"]["trades"].append({**base, **sim_a})
+
+        # Config B
+        sim_b = _sim_be_trail(mfe_r, mae_r, risk_pts, dpp,
+                              be_activate=0.4, trail_distance=0.3, original_r=original_r)
+        results["B"]["trades"].append({**base, **sim_b})
+
+        # Config C
+        sim_c = _sim_be_trail(mfe_r, mae_r, risk_pts, dpp,
+                              be_activate=0.6, trail_distance=0.5, original_r=original_r)
+        results["C"]["trades"].append({**base, **sim_c})
+
+    # Compute summaries
+    for k, r in results.items():
+        n = len(r["trades"])
+        r["n"] = n
+        r["config"] = configs_meta[k]
+
+        for tr in r["trades"]:
+            sr = tr["sim_r"]
+            r["total_r"] += sr
+            r["total_dollars"] += tr["sim_dollars"]
+            if sr > 0:
+                r["wins"] += 1
+            elif sr < 0:
+                r["losses"] += 1
+            else:
+                r["be"] += 1
+
+            # Track improvements
+            if tr["original_loss"] and sr >= 0:
+                r["saved"] += 1  # loss converted to BE or win
+            if tr["original_loss"] and sr > tr["original_r"]:
+                r["reduced"] += 1  # loss reduced
+
+        if n > 0:
+            r["win_rate"] = round(r["wins"] / n * 100, 1)
+            r["exp_r"] = round(r["total_r"] / n, 3)
+            r["exp_dollars"] = round(r["total_dollars"] / n, 2)
+        else:
+            r["win_rate"] = r["exp_r"] = r["exp_dollars"] = 0
+
+        r["total_r"] = round(r["total_r"], 2)
+        r["total_dollars"] = round(r["total_dollars"], 2)
+
+        # Keep only top 30 trades by absolute delta (for the detail table)
+        r["trades"].sort(key=lambda x: abs(x.get("delta_r", 0)), reverse=True)
+        r["trades"] = r["trades"][:30]
+
+    # Original baseline for comparison
+    orig_trades = [t for t in trades
+                   if t.get("mfe") is not None and t.get("mae") is not None
+                   and safe_float(t.get("entry")) and safe_float(t.get("sl"))
+                   and abs(safe_float(t.get("entry")) - safe_float(t.get("sl"))) >= 0.01]
+    orig_n = len(orig_trades)
+    orig_wins = sum(1 for t in orig_trades if t.get("is_win"))
+    orig_losses = sum(1 for t in orig_trades if t.get("is_loss"))
+    orig_total_r = sum(safe_float(t.get("result_r"), 0) for t in orig_trades)
+    orig_wr = round(orig_wins / orig_n * 100, 1) if orig_n else 0
+    orig_exp = round(orig_total_r / orig_n, 3) if orig_n else 0
+
+    return {
+        "eligible": eligible,
+        "skipped": skipped,
+        "original": {
+            "n": orig_n, "wins": orig_wins, "losses": orig_losses,
+            "total_r": round(orig_total_r, 2),
+            "win_rate": orig_wr, "exp_r": orig_exp,
+        },
+        "configs": results,
+        "note": "Simplified simulation using MAE/MFE extremes. "
+                "Cannot determine order of MFE vs MAE within a trade. "
+                "Results are indicative, not exact."
+    }
+
+
 # ── Raw signal inventory (kept from original) ──
 
 def collect_raw_signals(con, table, date_col, cutoff):
@@ -758,7 +976,10 @@ def main():
             data["signal_inventory"][name] = collect_raw_signals(con, table, date_col, cutoff_30d)
         data["total_30d"] = sum(s["count"] for s in data["signal_inventory"].values())
 
-        # 10. Trade list (full, for AI agent consumption)
+        # 10. Exit Lab simulation
+        data["exit_lab"] = simulate_exit_lab(all_trades)
+
+        # 11. Trade list (full, for AI agent consumption)
         data["trades"] = all_trades
 
     finally:
