@@ -1207,6 +1207,29 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
     for zone in zones:
         direction = zone["expected_direction"]
 
+        # ── Zone Direction Lock (XAU) — verificato 02/11 ──
+        # Se gli ultimi 2 trade chiusi nella zona avevano la stessa
+        # direzione, il 3° segue quella direzione.
+        # Lo swing H1 non ha più voce se contraddetto 2 volte.
+        # WR stessa dir: 58.6% vs opposta: 50.0% (111 vs 8 trade)
+        if asset == "XAU_USD":
+            bucket_str = f"_{zone['bucket_price']:.0f}"
+            last2 = conn.execute(
+                "SELECT direction FROM ote_lab_signals "
+                "WHERE asset=? AND zone_ref LIKE ? AND final_outcome != 'OPEN' "
+                "ORDER BY timestamp_setup DESC LIMIT 2",
+                (asset, f"RECURRING_%{bucket_str}")
+            ).fetchall()
+            if len(last2) == 2 and last2[0][0] == last2[1][0]:
+                locked_dir = last2[0][0]
+                if direction != locked_dir:
+                    logger.info(
+                        "OTE-LAB [%s]: 🔒 ZONE DIR LOCK zona %.0f: "
+                        "%s → %s (ultimi 2 trade concordi)",
+                        asset, zone["bucket_price"],
+                        direction, locked_dir)
+                    direction = locked_dir
+
         # Dedup: gia' aperto nella stessa direzione
         if conn.execute(
             "SELECT 1 FROM ote_lab_signals WHERE asset=? AND direction=? AND final_outcome='OPEN'",
