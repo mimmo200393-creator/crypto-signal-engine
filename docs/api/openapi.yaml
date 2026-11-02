@@ -1,0 +1,427 @@
+openapi: 3.1.0
+info:
+  title: MIE - Market Intelligence Engine API
+  description: >
+    API di sola lettura per accedere ai dati del Crypto Signal Engine.
+    Dati aggiornati ogni 5 minuti tramite GitHub Actions scanner.
+    Asset: XAU/USD e BTC/USDT. Strategie: OTE-LAB, TT, TRB, LH, V41P1.
+  version: "1.0.0"
+
+servers:
+  - url: https://mimmo200393-creator.github.io/crypto-signal-engine/api
+    description: GitHub Pages — dati statici aggiornati ogni 5 minuti
+
+paths:
+  /meta.json:
+    get:
+      operationId: getMeta
+      summary: Stato del sistema e indice endpoint
+      description: >
+        Ritorna timestamp ultimo aggiornamento, conteggi per tabella
+        e lista degli endpoint disponibili. Chiamare sempre per primo
+        per verificare che i dati siano aggiornati.
+      responses:
+        "200":
+          description: Metadata del sistema
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  last_updated:
+                    type: string
+                    description: ISO 8601 timestamp dell'ultimo export
+                  update_interval_minutes:
+                    type: integer
+                  counts:
+                    type: object
+                    description: Numero di righe per ogni tabella principale
+                  endpoints:
+                    type: array
+                    items:
+                      type: string
+
+  /candles/xau_usd_5m.json:
+    get:
+      operationId: getCandlesXauUsd5m
+      summary: Candele XAU/USD 5 minuti
+      description: Ultime 500 candele OHLCV XAU/USD timeframe 5m
+      responses:
+        "200":
+          description: Candele XAU 5m
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandleResponse"
+
+  /candles/xau_usd_15m.json:
+    get:
+      operationId: getCandlesXauUsd15m
+      summary: Candele XAU/USD 15 minuti
+      responses:
+        "200":
+          description: Candele XAU 15m
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandleResponse"
+
+  /candles/xau_usd_30m.json:
+    get:
+      operationId: getCandlesXauUsd30m
+      summary: Candele XAU/USD 30 minuti
+      responses:
+        "200":
+          description: Candele XAU 30m
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandleResponse"
+
+  /candles/xau_usd_1h.json:
+    get:
+      operationId: getCandlesXauUsd1h
+      summary: Candele XAU/USD 1 ora
+      responses:
+        "200":
+          description: Candele XAU 1H
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandleResponse"
+
+  /candles/xau_usd_4h.json:
+    get:
+      operationId: getCandlesXauUsd4h
+      summary: Candele XAU/USD 4 ore
+      responses:
+        "200":
+          description: Candele XAU 4H
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandleResponse"
+
+  /candles/xau_usd_1d.json:
+    get:
+      operationId: getCandlesXauUsd1d
+      summary: Candele XAU/USD Daily
+      responses:
+        "200":
+          description: Candele XAU 1D
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandleResponse"
+
+  /candles/btc_usdt_5m.json:
+    get:
+      operationId: getCandlesBtcUsdt5m
+      summary: Candele BTC/USDT 5 minuti
+      responses:
+        "200":
+          description: Candele BTC 5m
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandleResponse"
+
+  /candles/btc_usdt_15m.json:
+    get:
+      operationId: getCandlesBtcUsdt15m
+      summary: Candele BTC/USDT 15 minuti
+      responses:
+        "200":
+          description: Candele BTC 15m
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandleResponse"
+
+  /candles/btc_usdt_30m.json:
+    get:
+      operationId: getCandlesBtcUsdt30m
+      summary: Candele BTC/USDT 30 minuti
+      responses:
+        "200":
+          description: Candele BTC 30m
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandleResponse"
+
+  /candles/btc_usdt_1h.json:
+    get:
+      operationId: getCandlesBtcUsdt1h
+      summary: Candele BTC/USDT 1 ora
+      responses:
+        "200":
+          description: Candele BTC 1H
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandleResponse"
+
+  /candles/btc_usdt_4h.json:
+    get:
+      operationId: getCandlesBtcUsdt4h
+      summary: Candele BTC/USDT 4 ore
+      responses:
+        "200":
+          description: Candele BTC 4H
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandleResponse"
+
+  /candles/btc_usdt_1d.json:
+    get:
+      operationId: getCandlesBtcUsdt1d
+      summary: Candele BTC/USDT Daily
+      responses:
+        "200":
+          description: Candele BTC 1D
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandleResponse"
+
+  /signals/ote_lab.json:
+    get:
+      operationId: getSignalsOteLab
+      summary: Segnali strategia OTE-LAB
+      description: >
+        Tutti i segnali OTE-LAB con entry, SL, TP, quality, outcome,
+        MAE, MFE, zone_ref, session, direction, tier.
+      responses:
+        "200":
+          description: Segnali OTE-LAB
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignalResponse"
+
+  /signals/tt.json:
+    get:
+      operationId: getSignalsTt
+      summary: Segnali strategia TT (Trend Trading)
+      description: >
+        Tutti i segnali TT con MTF combination, POI, expansion,
+        liquidity sweep, quality, result, MAE, MFE.
+      responses:
+        "200":
+          description: Segnali TT
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignalResponse"
+
+  /signals/trb.json:
+    get:
+      operationId: getSignalsTrb
+      summary: Segnali strategia TRB (Trend Rider Balanced)
+      responses:
+        "200":
+          description: Segnali TRB
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignalResponse"
+
+  /signals/lh.json:
+    get:
+      operationId: getSignalsLh
+      summary: Segnali strategia LH (Liquidity Hunter)
+      description: >
+        Tutti i segnali LH con sweep details, confluence factors,
+        trigger type, TP multi-level, quality, outcome, MAE, MFE.
+      responses:
+        "200":
+          description: Segnali LH
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignalResponse"
+
+  /signals/v41p1.json:
+    get:
+      operationId: getSignalsV41p1
+      summary: Segnali strategia V41P1
+      description: >
+        Tutti i segnali V41P1 con liquidity source/target,
+        expected move, OTE, DOW theory, momentum, quality, outcome.
+      responses:
+        "200":
+          description: Segnali V41P1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignalResponse"
+
+  /trades/open.json:
+    get:
+      operationId: getTradesOpen
+      summary: Trade attualmente aperti
+      description: >
+        Trade con status OPEN da tutte le strategie.
+        Include strategy_name per identificare la strategia di origine.
+      responses:
+        "200":
+          description: Trade aperti
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count:
+                    type: integer
+                  trades:
+                    type: array
+                    items:
+                      type: object
+
+  /trades/recent.json:
+    get:
+      operationId: getTradesRecent
+      summary: Ultimi 100 trade chiusi
+      description: >
+        Ultimi 100 trade chiusi da tutte le strategie con risultati,
+        MAE, MFE, durata. Include strategy_name.
+      responses:
+        "200":
+          description: Trade recenti chiusi
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count:
+                    type: integer
+                  trades:
+                    type: array
+                    items:
+                      type: object
+
+  /analytics/snapshots_latest.json:
+    get:
+      operationId: getSnapshotsLatest
+      summary: Ultimi snapshot di tutti gli engine
+      description: >
+        Ultimo stato di: structure, volatility, order_block, fvg,
+        liquidity, session_sweep, reaction_map, candlestick,
+        macro, market_state, market_context, v41p1_mfm.
+        Per ogni asset (XAU_USD e BTC_USDT).
+      responses:
+        "200":
+          description: Snapshot più recenti
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  engines:
+                    type: object
+
+  /analytics/zones.json:
+    get:
+      operationId: getZones
+      summary: Zone attive (swing, radar, OB, FVG)
+      description: >
+        Zone attive del mercato: lh_swing_zones, radar_zones,
+        order_blocks e fvg_zones.
+      responses:
+        "200":
+          description: Zone attive
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /analytics/ledger_recent.json:
+    get:
+      operationId: getLedgerRecent
+      summary: Ultime 500 decisioni accept/reject
+      description: >
+        Decision ledger con 70 colonne: stato di ogni engine,
+        confidence, trigger, entry/SL/TP pianificati, outcome,
+        motivo di reject. Utile per analizzare perché i trade
+        vengono accettati o rifiutati.
+      responses:
+        "200":
+          description: Decisioni recenti
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count:
+                    type: integer
+                  decisions:
+                    type: array
+                    items:
+                      type: object
+
+  /settings/config.json:
+    get:
+      operationId: getConfig
+      summary: Configurazione strategie
+      description: >
+        Parametri completi di tutte le strategie: soglie, filtri,
+        timeframe, quality levels, TP/SL settings.
+      responses:
+        "200":
+          description: Configurazione
+          content:
+            application/json:
+              schema:
+                type: object
+
+components:
+  schemas:
+    CandleResponse:
+      type: object
+      properties:
+        asset:
+          type: string
+          description: "Asset (es: XAU_USD, BTC_USDT)"
+        timeframe:
+          type: string
+          description: "Timeframe (es: 5m, 15m, 1h, 4h, 1D)"
+        count:
+          type: integer
+          description: Numero di candele
+        candles:
+          type: array
+          items:
+            type: object
+            properties:
+              timestamp:
+                type: integer
+                description: Unix timestamp in millisecondi
+              open:
+                type: number
+              high:
+                type: number
+              low:
+                type: number
+              close:
+                type: number
+              volume:
+                type: number
+
+    SignalResponse:
+      type: object
+      properties:
+        strategy:
+          type: string
+        total:
+          type: integer
+        signals:
+          type: array
+          items:
+            type: object
+            description: >
+              Ogni segnale contiene campi specifici della strategia.
+              Campi comuni: signal_id, asset, direction, entry,
+              stop_loss, quality_score, quality_label, final_outcome,
+              mae, mfe, bars_open.

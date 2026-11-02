@@ -168,13 +168,15 @@ jobs:
             python3 generate_engine_edge_dashboard.py
             python3 generate_radar_lab_dashboard.py
             python3 generate_ai_dashboard.py
+            python3 core/export_for_gpt.py
 
             git add data/signals.db data/decision_ledger.db \
                     docs/unified_dashboard.html \
                     docs/analytics_dashboard.html \
                     docs/engine_edge_dashboard.html \
                     docs/radar_lab_dashboard.html \
-                    docs/ai_trading_journal_dashboard_generated.html
+                    docs/ai_trading_journal_dashboard_generated.html \
+                    docs/api/
 
             git commit -m "Scanner + Dashboard $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
             git pull --rebase origin main && git push
