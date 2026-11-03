@@ -224,6 +224,24 @@ def _get_adx(df_h1: pd.DataFrame) -> float:
 
 
 # ============================================================
+# M15 Displacement (enrichment — non blocca il segnale)
+# ============================================================
+
+def _get_m15_displacement(df_m15: pd.DataFrame, direction: str, bars: int = 3) -> Optional[bool]:
+    """Net body delle ultime N candele M15. True = aligned, False = counter, None = insufficiente/neutro."""
+    if len(df_m15) < bars:
+        return None
+    last_n = df_m15.iloc[-bars:]
+    net_body = sum(float(last_n.iloc[i]["close"]) - float(last_n.iloc[i]["open"])
+                   for i in range(len(last_n)))
+    if net_body == 0:
+        return None
+    if direction == "BUY":
+        return net_body > 0
+    return net_body < 0
+
+
+# ============================================================
 # Pullback Filter H1
 # ============================================================
 
@@ -627,6 +645,7 @@ def generate_trb_signal(
 
     atr_m15 = float(df_m15.iloc[-1]["atr"]) if "atr" in df_m15.columns else 0.0
     atr_h1  = float(df_h1.iloc[-1]["atr"])  if "atr" in df_h1.columns  else 0.0
+    m15_disp_aligned = _get_m15_displacement(df_m15, direction, bars=3)
 
     # ── GATE: Direzione — H1 EMA + M15 Structure ──────────────
     # v1.1: Non basta più solo la EMA H1 (troppo lenta, causa direzioni
@@ -852,6 +871,7 @@ def generate_trb_signal(
         "flag_trigger_present": diag["flags"]["trigger_present"],
         "flag_volatility_ok":   diag["flags"]["volatility_ok"],
         "flag_sl_widened":      diag["flags"]["sl_widened_to_min_atr"],
+        "flag_m15_disp3_aligned": m15_disp_aligned,
     }
 
     logger.info(

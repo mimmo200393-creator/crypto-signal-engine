@@ -146,7 +146,8 @@ CREATE TABLE IF NOT EXISTS ote_lab_signals (
     rz_target_label     TEXT,
     tp2_original        REAL,
     tier                TEXT,
-    accumulation_hours  INTEGER
+    accumulation_hours  INTEGER,
+    flag_m15_disp3_aligned  BOOLEAN
 );
 """
 
@@ -170,6 +171,13 @@ def _init_schema(conn):
                 conn.execute("ALTER TABLE ote_lab_signals ADD COLUMN accumulation_hours INTEGER")
                 conn.commit()
                 logger.info("OTE-LAB: colonna accumulation_hours aggiunta")
+            except Exception:
+                pass
+        if cols and "flag_m15_disp3_aligned" not in cols:
+            try:
+                conn.execute("ALTER TABLE ote_lab_signals ADD COLUMN flag_m15_disp3_aligned BOOLEAN")
+                conn.commit()
+                logger.info("OTE-LAB: colonna flag_m15_disp3_aligned aggiunta")
             except Exception:
                 pass
     except Exception:
@@ -220,8 +228,9 @@ def _insert_signal(conn, sig: dict) -> str:
             flag_adx_ok, flag_trigger_present, flag_volatility_ok, flag_sl_widened,
             liquidity_target, liquidity_target_price, liquidity_priority,
             quality_score, quality_label, expiry_bars,
-            rz_target_used, rz_target_label, tp2_original, tier, accumulation_hours
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            rz_target_used, rz_target_label, tp2_original, tier, accumulation_hours,
+            flag_m15_disp3_aligned
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         sid, sig["asset"], sig["direction"], sig["timestamp_setup"],
         sig.get("entry"), sig.get("stop_loss"), sig.get("tp1"), sig.get("tp2"),
@@ -238,6 +247,7 @@ def _insert_signal(conn, sig: dict) -> str:
         sig.get("expiry_bars", SIGNAL_EXPIRY_BARS),
         sig.get("rz_target_used", False), sig.get("rz_target_label"),
         sig.get("tp2_original"), sig.get("tier"), sig.get("accumulation_hours"),
+        sig.get("flag_m15_disp3_aligned"),
     ))
     conn.commit()
     return sid
