@@ -29,6 +29,7 @@ from core import indicators, macro
 from core import v3_db
 from core import edge_lab_db
 from core import trend_rider_runner
+from core.ote_runner import _send_bridge_signal
 from strategies.edge_lab.market_context_engine import (
     build_market_context,
     serialize_for_db,
@@ -381,6 +382,29 @@ def _run_for_asset(conn, asset, config, macro_provider, now, market_contexts):
             # _notify_otesc(signal, config)  # <-- DISATTIVATO il 24/08:
             # OTE-SC continua a registrare (riga sopra) ma non manda
             # piu' notifiche di trading. TRB non e' toccato.
+
+            # ── INV: EDGE BUY/LONDON → SELL ──────────────────
+            # 8/8 SL trades, MFE max 10.6pt (outlier), 7/8 ≤ 2.9pt
+            # MAE avg 21.2pt (10-57pt drop)
+            # SL 7pt (copre 7/8), TP 12pt → R:R 1.71
+            if (asset == "XAU_USD"
+                    and direction == "BUY"
+                    and signal.get("session") == "LONDON"):
+                e = signal["entry"]
+                _send_bridge_signal({
+                    "signal_id": signal.get("signal_id", str(uuid.uuid4())),
+                    "strategy_name": "EDGE-INV",
+                    "asset": "XAU_USD",
+                    "direction": "SELL",
+                    "entry": e,
+                    "stop_loss": round(e + 7.0, 2),
+                    "tp": round(e - 12.0, 2),
+                    "tp1": round(e - 12.0, 2),
+                    "tp2": round(e - 12.0, 2),
+                    "timestamp_setup": signal.get("timestamp_setup"),
+                    "tier": "INVERSION",
+                })
+                logger.info("EDGE-INV: SELL entry=%.2f sl=%.2f tp=%.2f", e, e + 7, e - 12)
 
 
 def _notify_otesc(signal: dict, config: dict):

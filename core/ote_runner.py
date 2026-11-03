@@ -532,7 +532,7 @@ def _notify_ntfy_entry(signal, config):
 
         payload_dict = {
             "signal_id": signal.get("signal_id", str(uuid.uuid4())),
-            "strategy_name": "OTE-LAB",
+            "strategy_name": signal.get("strategy_name", "OTE-LAB"),
             "asset": signal["asset"],
             "direction": signal["direction"],
             "entry": signal.get("entry"),
@@ -959,6 +959,29 @@ def _run_for_asset(conn, asset, config, market_ctx, now):
         )
 
         _notify_signal(signal, config)
+
+        # ── INV: OTE BUY/OB/ASIA → SELL ──────────────────────
+        # 6/6 loss storici, MFE max 5.3pt, MAE avg 11.5pt
+        # SL 6pt (> max MFE 5.3), TP 8pt → R:R 1.33
+        if (signal["asset"] == "XAU_USD"
+                and signal["direction"] == "BUY"
+                and signal.get("entry_zone_type") == "order_block"
+                and signal.get("session") == "ASIA"):
+            e = signal["entry"]
+            _send_bridge_signal({
+                "signal_id": str(uuid.uuid4()),
+                "strategy_name": "OTE-INV",
+                "asset": "XAU_USD",
+                "direction": "SELL",
+                "entry": e,
+                "stop_loss": round(e + 6.0, 2),
+                "tp": round(e - 8.0, 2),
+                "tp1": round(e - 8.0, 2),
+                "tp2": round(e - 8.0, 2),
+                "timestamp_setup": signal.get("timestamp_setup"),
+                "tier": "INVERSION",
+            })
+            logger.info("OTE-INV: SELL entry=%.2f sl=%.2f tp=%.2f", e, e + 6, e - 8)
 
     # ── RECURRING_ZONE signals ──
     try:
