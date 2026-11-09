@@ -1353,36 +1353,36 @@ def _generate_recurring_signals(conn, asset, df_h4, df_h1, df_m15, config):
                             asset, h1_ag6, zone_prior, h1_12h,
                             old_dir, direction, zone["bucket_price"])
 
-        # ── XAU RECURRING Quality + Trend Filter (verificato 25/10) ──
-        # Strategia ibrida a 3 livelli validata su 126 RECURRING XAU:
-        # 1) SKIP QS 50-59: 11 trade, WR=18%, R=-8.6, Fisher p=0.008
-        # 2) INVERT quando h1_aligned=0 AND h1_12h<-0.2% AND vol_h1>=9:
-        #    20 trade, INVERT reale 61% WR (12 TP1, 7 SL)
-        # Baseline R=-15.2 → Filtrato R=+11.9, WinPres=72/74
-        # Permutation p<0.001, robusto su entrambe le metà temporali
+        # ── XAU RECURRING Quality Filter (validato 09/11) ──
+        # Livello 1: SKIP QS fuori range 15-49
+        #   QS<15: 17t WR=35% R=-8.2 | QS>=50: 14t WR=23% R=-9.3
+        #   (fix: filtro precedente copriva solo 50-59, QS>=60 passava)
+        # Livello 2: SKIP condizioni che prima causavano INVERT
+        #   INVERTED storici: 21t WR=33% R=-11.0 — tossici
+        # Baseline XAU -24.1R → +3.7R (144t, WR 66.7%)
+        # Sistema totale BTC+XAU: 322t WR 68.3% +65.8R
         xau_inverted = False
-        if asset == "XAU_USD" and not h1_inverted and not ti_inverted:
+        if asset == "XAU_USD":
             qs = zone["score"]
-            # Livello 1: SKIP QS 50-59 (tossico indipendente)
-            if 50 <= qs < 60:
+            # Livello 1: SKIP QS fuori range 15-49
+            if qs < 15 or qs >= 50:
                 logger.info(
-                    "OTE-LAB [%s %s]: SKIP XAU QS-toxic (qs=%d) zona %.0f",
+                    "OTE-LAB [%s %s]: SKIP XAU QS-range (qs=%d, valid=15-49) zona %.0f",
                     asset, direction, qs, zone["bucket_price"])
                 continue
-            # Livello 2: INVERT quando tutto è contro
-            h1_al = _count_h1_aligned(conn, asset, direction)
-            if h1_al == 0:
-                h1_12h = _calc_h1_12h_trend(conn, asset, direction)
-                h1_vol = _calc_h1_volatility(conn, asset)
-                if h1_12h is not None and h1_12h < -0.2 and h1_vol >= 9:
-                    old_dir = direction
-                    direction = "BUY" if direction == "SELL" else "SELL"
-                    xau_inverted = True
-                    logger.info(
-                        "OTE-LAB [%s]: ⚡ XAU INVERSION "
-                        "(al=%d h12=%.2f%% vol=%.1f) %s → %s zona %.0f",
-                        asset, h1_al, h1_12h, h1_vol,
-                        old_dir, direction, zone["bucket_price"])
+            # Livello 2: SKIP quando condizione di inversione si attiva
+            if not h1_inverted and not ti_inverted:
+                h1_al = _count_h1_aligned(conn, asset, direction)
+                if h1_al == 0:
+                    h1_12h = _calc_h1_12h_trend(conn, asset, direction)
+                    h1_vol = _calc_h1_volatility(conn, asset)
+                    if h1_12h is not None and h1_12h < -0.2 and h1_vol >= 9:
+                        logger.info(
+                            "OTE-LAB [%s %s]: SKIP XAU would-invert "
+                            "(al=%d h12=%.2f%% vol=%.1f) zona %.0f",
+                            asset, direction, h1_al, h1_12h, h1_vol,
+                            zone["bucket_price"])
+                        continue
 
         # H4 trend (disattivato, verificato 30/09)
         if LAB_STRICT_H4 and df_h4 is not None and len(df_h4) >= 21:
